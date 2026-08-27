@@ -175,6 +175,94 @@ def test_register_workflow_definitions_preserves_self_review(monkeypatch):
     )
 
 
+def test_register_workflow_definitions_preserves_validation(monkeypatch):
+    """Same gap, same fix, for `validation` -- flagged as latent (dormant
+    only because no phase YAML sets validation: yet) by a comment right
+    next to phase_manager.py's own phase_config.get("validation") read."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from src.sdk.client import HephaestusSDK
+    from src.sdk.models import Phase, ValidationCriteria, WorkflowDefinition
+
+    sdk = HephaestusSDK.__new__(HephaestusSDK)
+    sdk.config = SimpleNamespace(mcp_host="localhost", mcp_port=8300)
+    sdk.definitions = {
+        "autopilot": WorkflowDefinition(
+            id="autopilot",
+            name="Autopilot",
+            phases=[
+                Phase(
+                    id=5, name="development", description="d",
+                    done_definitions=["done"], working_directory=".",
+                    validation=ValidationCriteria(enabled=True, criteria=[{"check": "tests_pass"}]),
+                )
+            ],
+        )
+    }
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return MagicMock(raise_for_status=lambda: None)
+
+    monkeypatch.setattr("src.sdk.client.requests.post", fake_post)
+
+    sdk._register_workflow_definitions()
+
+    phase_dict = captured["payload"]["phases_config"][0]
+    assert phase_dict.get("validation") == {
+        "enabled": True,
+        "criteria": [{"check": "tests_pass"}],
+    }, "validation was dropped by the HTTP registration payload"
+
+
+def test_start_execution_does_not_double_serialize_validation():
+    """A DB-level sibling of the same defect class: phase_manager.py's
+    Phase(...) insert used to wrap validation in serialize_for_text
+    (json.dumps into a string) even though it's a JSON column that
+    SQLAlchemy already serializes on its own -- self_review (the very
+    next field) was correctly NOT wrapped. Dormant only because no phase
+    YAML has set validation: yet; the moment one does, a later
+    phase.validation.get(...) read would hit AttributeError (str has no
+    .get)."""
+    from src.core.database import DatabaseManager, Phase
+    from src.phases.phase_manager import PhaseManager
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        db_manager = DatabaseManager(f"{tmp}/test.db")
+        db_manager.create_tables()
+        phase_manager = PhaseManager(db_manager)
+
+        phase_manager.register_definition(
+            definition_id="validation-test",
+            name="Validation Test",
+            phases_config=[
+                {
+                    "order": 1, "name": "Phase 1", "description": "First",
+                    "done_definitions": [],
+                    "validation": {"enabled": True, "criteria": [{"check": "tests_pass"}]},
+                },
+            ],
+        )
+
+        workflow_id, _ = phase_manager.start_execution(
+            definition_id="validation-test", description="Test",
+        )
+
+        session = phase_manager.db_manager.get_session()
+        try:
+            phase = session.query(Phase).filter_by(workflow_id=workflow_id).first()
+            assert phase.validation == {"enabled": True, "criteria": [{"check": "tests_pass"}]}, (
+                f"validation was stored as {phase.validation!r} -- looks "
+                "double-serialized into a JSON string instead of a dict"
+            )
+        finally:
+            session.close()
+
+
 # ── defect 2: the repair must be recurring, not one-shot ────────────
 
 
