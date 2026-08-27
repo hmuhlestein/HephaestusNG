@@ -280,6 +280,65 @@ def test_pick_next_design_reconstructs_from_source_dir(queue_db, tmp_path):
         assert design.status == "processing"
 
 
+def test_mixed_source_queue_sorts_by_name_not_null_filename_first(queue_db, tmp_path):
+    """Gotchas item 5 / architectural review FIX: a directory-sourced row
+    (filename=NULL) and a file-sourced row at the same ordinal must sort
+    deterministically by name/filename, not with the NULL-filename row
+    always first regardless of name. Picks the design with the
+    alphabetically-earlier filename/name to prove it, not just "any"
+    deterministic order.
+    """
+    from src.autopilot.orchestrator.queue import pick_next_design
+    from src.core.database import AutopilotDesign
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    # Note: a leading digit sorts before a leading letter in plain
+    # lexicographic order (ASCII '9' < 'a') -- name/dir-slug choices below
+    # deliberately avoid that trap so the assertion isolates the NULL-bias
+    # behavior this test targets, not an unrelated digit-vs-letter quirk.
+    feature_dir = _make_feature_dir(repo_path, "zzz-dir-design", has_plan=True)
+    _make_project(queue_db, "proj-sort", repo_path)
+    _make_repo(queue_db, "repo-sort", "proj-sort", "primary", repo_path)
+
+    with queue_db.session_scope() as session:
+        # filename "aaa.md" must sort before the directory-sourced row's
+        # name "zzz-dir-design" -- if the NULL-filename row were still
+        # biased first (the pre-fix bug), this design would be picked
+        # instead regardless of the names.
+        session.add(
+            AutopilotDesign(
+                id="des-file",
+                project_id="proj-sort",
+                filename="aaa.md",
+                file_path=str(tmp_path / "aaa.md"),
+                name="File Design",
+                content_hash="filehash",
+                ordinal=0,
+                status="pending",
+            )
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-dir",
+                project_id="proj-sort",
+                filename=None,
+                file_path=None,
+                source_dir=str(feature_dir),
+                repo_id="repo-sort",
+                name="zzz-dir-design",
+                content_hash="dirhash",
+                ordinal=0,
+                status="pending",
+            )
+        )
+    (tmp_path / "aaa.md").write_text("file design content")
+
+    entry = pick_next_design(tmp_path / "unused_queue", set(), _NullLogger(), project_id="proj-sort")
+    assert entry is not None
+    assert entry.db_id == "des-file"
+
+
 def test_pick_next_design_missing_source_dir_returns_none(queue_db, tmp_path):
     from src.autopilot.orchestrator.queue import pick_next_design
     from src.core.database import AutopilotDesign

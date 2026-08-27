@@ -436,18 +436,27 @@ def pick_next_design(
             # FRESH pick_next_design call to be eligible, not be picked
             # right back up by the pending-fallback query at the bottom of
             # this same call as if it had been queued all along.
-            # AutopilotDesign.name is added as a tertiary sort key: a
-            # directory-sourced row always has filename=NULL (NFR-02), and
+            # A directory-sourced row always has filename=NULL (NFR-02), and
             # SQLite sorts NULL first in ascending order, which would bias
             # every directory-sourced design ahead of any equal-ordinal
-            # file-sourced design without this. name is populated for both
-            # sources, so this restores a deterministic, source-independent
-            # tie-break without changing ordering for any all-file-sourced
-            # queue.
-            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename, AutopilotDesign.name).all()
+            # file-sourced design. Appending AutopilotDesign.name as a bare
+            # THIRD sort key does not fix this -- the tie is already broken
+            # (NULL vs non-NULL) at the SECOND key, so the third key never
+            # gets evaluated; empirically confirmed, a name-only tertiary
+            # key still put the NULL-filename row first regardless of name
+            # (architectural review FIX). coalesce(filename, name) as the
+            # secondary key instead falls through to name only when
+            # filename is NULL, giving a genuinely source-independent,
+            # deterministic tie-break -- and is a complete no-op for any
+            # all-file-sourced queue (filename is never NULL there, so
+            # coalesce always returns it), preserving REQ-10.
+            from sqlalchemy import func as _func
+
+            _tiebreak = _func.coalesce(AutopilotDesign.filename, AutopilotDesign.name)
+            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending", archived_at=None).order_by(AutopilotDesign.ordinal, _tiebreak).all()
 
             design = None
-            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename, AutopilotDesign.name).all()
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active", archived_at=None).order_by(AutopilotDesign.ordinal, _tiebreak).all()
             if active_designs:
                 logger.info(f"pick_next_design: found {len(active_designs)} active design(s), checking for incomplete work before considering pending designs")
                 for candidate in active_designs:
