@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Upload, FileText, Check, FolderOpen, Folder, ArrowLeft, Sparkles, Bug, FolderInput } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
+import SpecKitFeaturePicker from './SpecKitFeaturePicker';
 import toast from 'react-hot-toast';
 
 interface LoadDesignModalProps {
@@ -540,6 +541,28 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                 onChange={handleFileSelect}
                 className="hidden"
               />
+
+              {/* Detected Spec Kit Features (REQ-10) -- lets a user jump
+                  straight to a known specs/<NNN-name>/ feature without
+                  navigating the remote browser folder-by-folder. Renders
+                  nothing when the project has no Spec Kit features. */}
+              {workflowType === 'feature' && projectId && (
+                <div>
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
+                    Or pick a Spec Kit feature
+                  </label>
+                  <SpecKitFeaturePicker
+                    projectId={projectId}
+                    onSelect={(feature) =>
+                      handleSelectSpecFolder({
+                        name: `${feature.number}-${feature.slug}`,
+                        path: `specs/${feature.number}-${feature.slug}`,
+                        type: 'dir',
+                      })
+                    }
+                  />
+                </div>
+              )}
 
               <div className="flex justify-start">
                 <button

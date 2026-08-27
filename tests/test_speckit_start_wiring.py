@@ -119,6 +119,47 @@ class TestResolveAndEnqueueSpeckitFeature:
             assert len(rows) == 1
 
 
+class TestProjectScopedSpeckitFeaturesRoute:
+    """GET /api/autopilot/projects/{project_id}/speckit/features -- the
+    dashboard picker's actual data source (it only has projectId on hand,
+    not a raw project_path)."""
+
+    @pytest.fixture
+    def client(self, tmp_path, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from src.mcp.autopilot import control_routes, router
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        DatabaseManager(str(db_path)).create_tables()
+
+        app = FastAPI()
+        app.include_router(router)
+        monkeypatch.setattr(control_routes, "_get_active_project_id", lambda: None)
+        return TestClient(app)
+
+    def test_lists_features_for_registered_project(self, tmp_path, client):
+        from src.core.database import AutopilotProject, get_db
+
+        _make_feature_dir(tmp_path, "001-x")
+        with get_db() as db:
+            db.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+            db.commit()
+
+        resp = client.get("/api/autopilot/projects/proj-1/speckit/features")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["number"] == "001"
+
+    def test_unknown_project_404s(self, client):
+        resp = client.get("/api/autopilot/projects/does-not-exist/speckit/features")
+        assert resp.status_code == 404
+
+
 class TestSpeckitCheckAndFeaturesRoutes:
     @pytest.fixture
     def client(self, tmp_path, monkeypatch):

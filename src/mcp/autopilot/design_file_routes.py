@@ -501,6 +501,34 @@ async def browse_project_files(project_id: str, path: str = Query("")):
     return BrowseResult(path=rel_path, parent=parent, entries=entries)
 
 
+@router.get("/projects/{project_id}/speckit/features")
+async def list_project_speckit_features(project_id: str):
+    """Dashboard picker's data source (REQ-10), project_id-scoped to match
+    this file's REST convention -- the dashboard only has projectId on
+    hand, not a raw project_path. Thin wrapper around
+    speckit.discover_speckit_features; same shape as
+    control_routes.list_speckit_features."""
+    from src.autopilot.orchestrator.speckit import discover_speckit_features
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        features = discover_speckit_features(db, project_id, proj.base_dir)
+
+    return [
+        {
+            "number": f.number,
+            "slug": f.slug,
+            "repoLabel": f.repo_label,
+            "hasPlan": f.plan_path is not None,
+            "hasTasks": f.tasks_path is not None,
+        }
+        for f in features
+    ]
+
+
 @router.get("/projects/{project_id}/browse/content")
 async def browse_project_file_content(project_id: str, path: str = Query(...)):
     """Read the content of a .md/.txt file under a project's base_dir."""
