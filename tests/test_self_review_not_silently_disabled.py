@@ -122,6 +122,59 @@ def test_sdk_yaml_loader_ignores_a_malformed_self_review(tmp_path):
     assert sdk.phases_map[7].self_review is None
 
 
+# ── defect 3: the HTTP registration step dropped the key too ────────
+
+
+def test_register_workflow_definitions_preserves_self_review(monkeypatch):
+    """A THIRD, later-discovered instance of the exact same defect class:
+    _register_workflow_definitions flattens each SDK Phase into a plain
+    dict to POST to /api/workflow-definitions, and that flattening had no
+    self_review line at all (unlike the analogous ones for outputs,
+    next_steps, cli_tool, etc.) -- so even though the YAML loader (defect
+    1, above) correctly parsed self_review onto the Phase object, it
+    never survived this HTTP registration step. phase_manager.py's
+    Phase(...) insert then read self_review from the resulting DB
+    workflow-definition row and got None for every phase of every
+    per-feature workflow launch, not just development."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from src.sdk.client import HephaestusSDK
+    from src.sdk.models import Phase, WorkflowDefinition
+
+    sdk = HephaestusSDK.__new__(HephaestusSDK)
+    sdk.config = SimpleNamespace(mcp_host="localhost", mcp_port=8300)
+    sdk.definitions = {
+        "autopilot": WorkflowDefinition(
+            id="autopilot",
+            name="Autopilot",
+            phases=[
+                Phase(
+                    id=5, name="development", description="d",
+                    done_definitions=["done"], working_directory=".",
+                    self_review={"enabled": True},
+                )
+            ],
+        )
+    }
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return MagicMock(raise_for_status=lambda: None)
+
+    monkeypatch.setattr("src.sdk.client.requests.post", fake_post)
+
+    sdk._register_workflow_definitions()
+
+    phase_dict = captured["payload"]["phases_config"][0]
+    assert phase_dict.get("self_review") == {"enabled": True}, (
+        "self_review was dropped by the HTTP registration payload, so the "
+        "gate would never fire for any per-feature workflow launch"
+    )
+
+
 # ── defect 2: the repair must be recurring, not one-shot ────────────
 
 

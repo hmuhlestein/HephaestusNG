@@ -526,6 +526,17 @@ class HephaestusSDK:
                     phase_dict["glm_api_token_env"] = phase.glm_api_token_env
                 if getattr(phase, "thinking_level", None):
                     phase_dict["thinking_level"] = phase.thinking_level
+                # Without this, self_review silently never reached the
+                # backend's phases_config JSON, so phase_manager.py's
+                # phase_config.get("self_review") always saw None even
+                # when the phase's own YAML defined self_review: {enabled:
+                # true} -- every per-feature workflow launch (this is the
+                # only place Phase objects get flattened for the HTTP
+                # registration call) silently disabled the self-review
+                # gate for every phase, indistinguishable from it being
+                # deliberately off.
+                if phase.self_review:
+                    phase_dict["self_review"] = phase.self_review
                 phases_config.append(phase_dict)
 
             # Convert WorkflowConfig to dict
