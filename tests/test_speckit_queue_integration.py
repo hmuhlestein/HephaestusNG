@@ -6,8 +6,6 @@ site -- the pieces that must agree on the source_dir/file_path mutual
 exclusivity invariant (NFR-02) for a Spec-Kit design to ever round-trip.
 """
 
-import logging
-
 import pytest
 
 
@@ -68,8 +66,8 @@ class _NullLogger:
 
 def test_detection_unconditional_but_not_queued_when_disabled(queue_db, tmp_path):
     from src.autopilot.orchestrator.queue import scan_design_queue
-    from src.core.speckit_detection import find_speckit_features
     from src.core.database import get_db
+    from src.core.speckit_detection import find_speckit_features
 
     repo_path = tmp_path / "repo"
     repo_path.mkdir()

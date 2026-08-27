@@ -1,7 +1,5 @@
 """Tests for the consolidated worktree-copy helper (REQ-08)."""
 
-from pathlib import Path
-
 import pytest
 
 from src.autopilot.orchestrator.state import DesignEntry

@@ -95,9 +95,9 @@ def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str 
         FileNotFoundError: design_entry.path (file-sourced) or
             design_entry.source_dir (directory-sourced) does not exist.
     """
-    is_directory = design_entry.source_dir is not None
-    source = design_entry.source_dir if is_directory else design_entry.path
-    return _copy_design_content(source, heph_dir, filename, is_directory)
+    if design_entry.source_dir is not None:
+        return _copy_design_content(design_entry.source_dir, heph_dir, filename, is_directory=True)
+    return _copy_design_content(design_entry.path, heph_dir, filename, is_directory=False)
 
 
 def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
