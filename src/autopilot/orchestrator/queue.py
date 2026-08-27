@@ -288,8 +288,14 @@ def scan_design_queue(
     if order_file.exists():
         try:
             saved_order = json.loads(order_file.read_text())
-            # Create lookup by filename
-            by_filename = {d.path.name: d for d in designs}
+            # Create lookup by filename -- Spec Kit entries all share the
+            # basename "spec.md" (path is .../specs/<NNN-name>/spec.md), so
+            # a plain d.path.name key collapses every Spec Kit feature but
+            # the last one in this dict. Key those by their unique feature
+            # dir name instead; design.md-style entries (unaffected by
+            # saved_order, which only ever names real queue-dir filenames)
+            # keep the existing bare-filename key.
+            by_filename = {(d.speckit_feature_dir.name if d.speckit_feature_dir else d.path.name): d for d in designs}
             # Order by saved order, then append any new files not in saved order
             ordered = []
             for fname in saved_order:
