@@ -1316,7 +1316,10 @@ class AutopilotDesign(Base):
 
     id = Column(String, primary_key=True)  # Format: des-{uuid}
     project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
-    filename = Column(String(500), nullable=False)
+    # Nullable: a Spec-Kit directory-sourced design (source_dir set below) has
+    # no single filename. filename/file_path and source_dir are mutually
+    # exclusive per row (NFR-02).
+    filename = Column(String(500), nullable=True)
     name = Column(String(500), nullable=False)
     ordinal = Column(Integer, nullable=False, default=0)
     size_bytes = Column(Integer, nullable=False, default=0)
@@ -1348,6 +1351,16 @@ class AutopilotDesign(Base):
     # "bugfix"). Set at add-time, either from the user's explicit choice or
     # detect_workflow_type()'s heuristic. See docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
     workflow_type = Column(String(20), nullable=False, default="feature")
+
+    # Which ProjectRepo (of a multi-repo project) this design belongs to.
+    # None for single-repo projects' legacy queue path, or a file-sourced
+    # design never repo-scoped to begin with. Resolved via repo_id_for_path
+    # (REQ-01/REQ-06).
+    repo_id = Column(String, ForeignKey("project_repos.id"))
+    # Absolute path to a Spec Kit specs/<NNN>-<name>/ directory. None for
+    # single-file designs. Mutually exclusive with filename/file_path
+    # (REQ-02/NFR-02).
+    source_dir = Column(Text, nullable=True)
 
     # Set when the user archives this design from the queue panel -- hides
     # it from the default design list without touching its file, tasks,
