@@ -157,6 +157,45 @@ def test_find_speckit_features_glob_oserror_isolated_to_one_repo(db_manager, tmp
     assert features[0].repo_id == "repo-frontend"
 
 
+def test_find_speckit_features_mid_iteration_failure_discards_partial_repo_results(db_manager, tmp_path, monkeypatch):
+    """A repo with 2+ features whose glob raises AFTER yielding the first
+    one must contribute ZERO features, not just the first -- true
+    all-or-nothing isolation, not a partial leak."""
+    backend, frontend = _seed_multi_repo_project(db_manager, tmp_path)
+    _make_feature(backend, "001", "checkout-flow")
+    _make_feature(backend, "002", "payments")
+    _make_feature(frontend, "001", "widgets")
+
+    real_glob = Path.glob
+
+    def _flaky_glob(self, pattern):
+        if self == backend / "specs":
+
+            def _gen():
+                results = list(real_glob(self, pattern))
+                yield results[0]
+                raise OSError("disk error mid-scan")
+
+            return _gen()
+        return real_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", _flaky_glob)
+
+    with db_manager.session_scope() as session:
+        features = find_speckit_features(session, "proj-mr")
+    assert len(features) == 1
+    assert features[0].repo_id == "repo-frontend"
+
+
+def test_find_speckit_features_sorts_numerically_across_zero_padding_widths(db_manager, tmp_path):
+    repo_path = _seed_single_repo_project(db_manager, tmp_path)
+    _make_feature(repo_path, "10", "checkout")
+    _make_feature(repo_path, "9", "hotfix")
+    with db_manager.session_scope() as session:
+        features = find_speckit_features(session, "proj-1")
+    assert [f.dir_name for f in features] == ["9-hotfix", "10-checkout"]
+
+
 # --- select_speckit_feature --------------------------------------------------
 
 
@@ -243,6 +282,32 @@ def test_check_readiness_empty_for_fully_ready_feature(db_manager, tmp_path):
     with db_manager.session_scope() as session:
         features = find_speckit_features(session, "proj-1")
     assert check_readiness(features[0]) == []
+
+
+def test_check_readiness_non_utf8_spec_raises_oserror_not_unicode_decode_error(db_manager, tmp_path):
+    """A caller following the documented `Raises: OSError` contract must
+    actually catch every failure mode -- non-UTF-8 content must not
+    surface as an uncaught UnicodeDecodeError."""
+    repo_path = _seed_single_repo_project(db_manager, tmp_path)
+    feature_dir = _make_feature(repo_path, "001", "checkout-flow", plan=True)
+    (feature_dir / "spec.md").write_bytes(b"\xff\xfe not valid utf-8")
+    with db_manager.session_scope() as session:
+        features = find_speckit_features(session, "proj-1")
+    with pytest.raises(OSError):
+        check_readiness(features[0])
+
+
+def test_check_readiness_toctou_deleted_spec_raises_oserror(db_manager, tmp_path):
+    """spec.md deleted between find_speckit_features and check_readiness
+    (concurrent /speckit.* run) must propagate as OSError, not be
+    silently swallowed into a false 'ready' report."""
+    repo_path = _seed_single_repo_project(db_manager, tmp_path)
+    _make_feature(repo_path, "001", "checkout-flow", plan=True)
+    with db_manager.session_scope() as session:
+        features = find_speckit_features(session, "proj-1")
+    (features[0].dir_path / "spec.md").unlink()
+    with pytest.raises(OSError):
+        check_readiness(features[0])
 
 
 if __name__ == "__main__":

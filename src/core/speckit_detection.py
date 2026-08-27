@@ -86,10 +86,14 @@ def find_speckit_features(db: Session, project_id: str) -> List[SpecKitFeature]:
     ERROR ISOLATION: a filesystem error scanning ONE repo is caught and
     logged as a WARNING internally, and that repo is simply skipped for
     this call -- it never aborts the scan of the other repos, and it
-    never raises out of this function for filesystem-level problems.
+    never raises out of this function for filesystem-level problems. This
+    is all-or-nothing per repo: a repo's partial results (e.g. an error
+    raised after some but not all of its features were found) are
+    discarded entirely rather than silently returned as if complete.
     """
     features: List[SpecKitFeature] = []
     for repo in get_project_repos(db, project_id):
+        repo_features: List[SpecKitFeature] = []
         try:
             specs_dir = Path(repo.path) / "specs"
             if not specs_dir.is_dir():
@@ -102,7 +106,7 @@ def find_speckit_features(db: Session, project_id: str) -> List[SpecKitFeature]:
                 number, slug = match.group(1), match.group(2)
                 extra_files = [name for name in _SPEC_KIT_OPTIONAL_FILES if (feature_dir / name).exists()]
                 extra_files += [name for name in _SPEC_KIT_OPTIONAL_DIRS if (feature_dir / name).is_dir()]
-                features.append(
+                repo_features.append(
                     SpecKitFeature(
                         dir_path=feature_dir,
                         number=number,
@@ -118,7 +122,9 @@ def find_speckit_features(db: Session, project_id: str) -> List[SpecKitFeature]:
             logger.warning(f"[SPECKIT-DETECTION] failed scanning repo {repo.label!r} ({repo.path!r}) for Spec Kit features", exc_info=True)
             continue
 
-    features.sort(key=lambda f: (f.repo_label, f.number))
+        features.extend(repo_features)
+
+    features.sort(key=lambda f: (f.repo_label, int(f.number), f.number))
     return features
 
 
@@ -165,14 +171,23 @@ def check_readiness(feature: SpecKitFeature) -> List[ReadinessIssue]:
 
     Raises:
         OSError: spec.md exists per detection but became unreadable
-            between find_speckit_features and this call.
+            between find_speckit_features and this call -- including
+            spec.md having been replaced by content that is not valid
+            UTF-8, which is surfaced as OSError (not UnicodeDecodeError)
+            so callers have exactly one exception type to catch.
     """
     issues: List[ReadinessIssue] = []
 
     if not feature.has_plan:
         issues.append(ReadinessIssue(kind="missing_file", detail="plan.md missing"))
 
-    spec_text = (feature.dir_path / "spec.md").read_text(encoding="utf-8")
+    spec_path = feature.dir_path / "spec.md"
+    try:
+        spec_text = spec_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        logger.warning(f"[SPECKIT-DETECTION] {spec_path} is not valid UTF-8", exc_info=True)
+        raise OSError(f"{spec_path} is not valid UTF-8") from e
+
     for match in _NEEDS_CLARIFICATION_RE.finditer(spec_text):
         issues.append(ReadinessIssue(kind="needs_clarification", detail=match.group(0)))
 
