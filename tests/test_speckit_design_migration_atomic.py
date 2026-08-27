@@ -341,3 +341,48 @@ def test_add_column_failure_other_than_duplicate_is_not_silently_swallowed(monke
         monkeypatch.setattr(engine.__class__, "connect", original_execute)
 
         assert any("disk I/O error" in r.message and "check this" in r.message for r in caplog.records)
+
+
+def test_rebuild_restores_preexisting_fk_disabled_state_not_hardcoded_on():
+    """QA-finding BUG: migrate_speckit_design_columns's raw connection is
+    checked out of the same pool session_scope() uses -- an EXISTING
+    connection, not a new one, so a test harness's own "connect" listener
+    (which flips PRAGMA foreign_keys back OFF for every new connection,
+    e.g. tests/conftest.py's _skip_fk_enforcement_for_tests) never fires
+    for it. The migration must restore whatever value the connection
+    already had before it touched the pragma, not hardcode ON -- hardcoding
+    ON silently flips that pooled connection to FK-enforced for the rest
+    of its life, breaking any fixture that (by a test-only, FK-disabled
+    contract) creates rows with dangling FKs.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        _create_old_schema_db(db_path)
+
+        from sqlalchemy import event
+
+        from src.core.schema_migrations import migrate_speckit_design_columns
+
+        engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+
+        # Simulate a test harness that disables FK enforcement on every new
+        # connection (exactly tests/conftest.py's mechanism), independent
+        # of DatabaseManager's own connect listener.
+        @event.listens_for(engine, "connect")
+        def _disable_fk(dbapi_connection, connection_record):
+            cur = dbapi_connection.cursor()
+            cur.execute("PRAGMA foreign_keys=OFF")
+            cur.close()
+
+        with engine.connect() as conn:
+            assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 0  # sanity: OFF before migration
+
+        migrate_speckit_design_columns(engine)
+
+        with engine.connect() as conn:
+            # Must still be OFF -- the migration must not have hardcoded it ON.
+            assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 0
+            info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+            filename_col = next(row for row in info if row[1] == "filename")
+            assert filename_col[3] == 0  # the rebuild itself still happened
+        engine.dispose()

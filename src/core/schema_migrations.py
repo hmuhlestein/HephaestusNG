@@ -963,14 +963,23 @@ def migrate_speckit_design_columns(engine):
     try:
         raw_conn.isolation_level = None
         cur = raw_conn.cursor()
-        # PRAGMA foreign_keys=ON is set on every connection by DatabaseManager.
+        # DatabaseManager sets PRAGMA foreign_keys=ON on every NEW physical
+        # connection, but this raw connection is checked out of the SAME
+        # pool session_scope() uses -- it's an existing connection, so that
+        # "connect" event never fires for it, and its current pragma value
+        # reflects whatever the checkout actually has (ON in production; a
+        # test harness can legitimately override it OFF via its own connect
+        # listener). Read and restore THAT value rather than hardcoding ON:
+        # hardcoding would silently flip a test database's connection to
+        # FK-enforced for the rest of its life in the pool, breaking any
+        # fixture that (by test-only design) creates rows with dangling FKs.
+        original_fk_state = cur.execute("PRAGMA foreign_keys").fetchone()[0]
         # Dropping autopilot_designs while `features`/`workflows`/etc. still
         # reference it (real rows, real FKs) raises "FOREIGN KEY constraint
         # failed" if enforcement is on -- and the pragma can only be changed
         # outside an active transaction, so it must be turned off here,
-        # before BEGIN, and restored after COMMIT/ROLLBACK, before this raw
-        # connection goes back to the pool where other code relies on it
-        # being on.
+        # before BEGIN, and restored to its original value after COMMIT/
+        # ROLLBACK, before this raw connection goes back to the pool.
         cur.execute("PRAGMA foreign_keys=OFF")
         try:
             cur.execute("BEGIN IMMEDIATE")
@@ -1009,7 +1018,7 @@ def migrate_speckit_design_columns(engine):
                 cur.execute("ROLLBACK")
                 raise
         finally:
-            cur.execute("PRAGMA foreign_keys=ON")
+            cur.execute(f"PRAGMA foreign_keys={'ON' if original_fk_state else 'OFF'}")
     except Exception as e:
         logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
     finally:
