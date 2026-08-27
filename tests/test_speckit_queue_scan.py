@@ -34,7 +34,7 @@ def _setup(tmp_path, monkeypatch, speckit_auto_scan: bool):
 
 
 def test_disabled_by_default_never_queues_speckit_feature(tmp_path, monkeypatch):
-    project_id = _setup(tmp_path, monkeypatch, speckit_auto_scan=False)
+    _setup(tmp_path, monkeypatch, speckit_auto_scan=False)
     _make_feature_dir(tmp_path, "001-x", with_plan=True)
     empty_queue_dir = tmp_path / ".hephaestus" / "specs"
 
