@@ -117,6 +117,10 @@ def _scan_one_repo(specs_root: Path, repo_id: Optional[str], repo_label: Optiona
     return features
 
 
+def _sort_key(feature: SpecKitFeature):
+    return (feature.repo_label or "", int(feature.number) if feature.number.isdigit() else feature.number)
+
+
 def discover_speckit_features(db: Session, project_id: str, project_base_dir: str) -> List[SpecKitFeature]:
     """Scan specs/ under every ProjectRepo of the project (REQ-02), plus
     project_base_dir itself when no ProjectRepo rows exist yet. Returns
@@ -131,14 +135,15 @@ def discover_speckit_features(db: Session, project_id: str, project_base_dir: st
     else:
         features.extend(_scan_one_repo(Path(project_base_dir) / "specs", None, None))
 
-    return sorted(features, key=lambda f: (f.repo_label or "", f.number))
+    return sorted(features, key=_sort_key)
 
 
 def discover_speckit_features_unregistered(project_base_dir: str) -> List[SpecKitFeature]:
     """Fallback for an unregistered project (no AutopilotProject/ProjectRepo
     rows yet). Scans ONLY project_base_dir/specs/ -- single-repo semantics.
     repo_id/repo_label are always None on the returned features."""
-    return _scan_one_repo(Path(project_base_dir) / "specs", None, None)
+    features = _scan_one_repo(Path(project_base_dir) / "specs", None, None)
+    return sorted(features, key=_sort_key)
 
 
 def _match_feature_arg(features: List[SpecKitFeature], feature_arg: str) -> List[SpecKitFeature]:
