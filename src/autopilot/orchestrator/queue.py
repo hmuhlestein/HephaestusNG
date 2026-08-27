@@ -222,27 +222,40 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
             from src.core.database import AutopilotProject
             from src.core.database import get_db as _gdb
 
+            # Fetch the autoscan flag and run detection with the DB session
+            # open only as long as that takes -- find_speckit_features
+            # returns plain, session-independent SpecKitFeature dataclasses
+            # (per its own docstring), so nothing below needs the session.
+            # The per-feature hashing/self-heal work that follows is
+            # filesystem I/O (potentially slow: many repos, a network
+            # mount) that must not hold the DB open for its duration --
+            # a session held open that long blocks any other writer on
+            # SQLite's WAL lock (e.g. a running workflow's status update).
             with _gdb() as _db:
                 _project = _db.query(AutopilotProject).filter_by(id=project_id).first()
                 _autoscan_enabled = bool(_project and _project.speckit_autoscan_enabled)
-                for feature in find_speckit_features(_db, project_id):  # unconditional -- REQ-03/06
-                    if not _autoscan_enabled:
-                        continue  # detected, never queued (REQ-12)
-                    if not feature.has_plan:
-                        continue  # detected, not ready to auto-build yet (REQ-13)
-                    try:
-                        content_hash = directory_content_hash(feature.dir_path)
-                    except (FileNotFoundError, OSError) as e:
-                        logger.warning(f"[SPECKIT-QUEUE] skipping {feature.dir_name}: {e}")
-                        continue
-                    if content_hash in processed_hashes:
-                        # Same self-heal check as the file-sourced branch above.
-                        try:
-                            from src.core.database import AutopilotDesign, Feature
+                _features = find_speckit_features(_db, project_id)  # unconditional -- REQ-03/06
 
-                            _des = _db.query(AutopilotDesign).filter_by(content_hash=content_hash).first()
+            for feature in _features:
+                if not _autoscan_enabled:
+                    continue  # detected, never queued (REQ-12)
+                if not feature.has_plan:
+                    continue  # detected, not ready to auto-build yet (REQ-13)
+                try:
+                    content_hash = directory_content_hash(feature.dir_path)
+                except (FileNotFoundError, OSError) as e:
+                    logger.warning(f"[SPECKIT-QUEUE] skipping {feature.dir_name}: {e}")
+                    continue
+                if content_hash in processed_hashes:
+                    # Same self-heal check as the file-sourced branch above --
+                    # its own short-lived session, not the one above.
+                    try:
+                        from src.core.database import AutopilotDesign, Feature
+
+                        with _gdb() as _db2:
+                            _des = _db2.query(AutopilotDesign).filter_by(content_hash=content_hash).first()
                             if _des:
-                                _feats = _db.query(Feature).filter_by(design_id=_des.id).all()
+                                _feats = _db2.query(Feature).filter_by(design_id=_des.id).all()
                                 if not _feats or all(f.status == "pending" for f in _feats):
                                     logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
                                     processed_hashes.discard(content_hash)
@@ -250,17 +263,17 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                                     continue
                             else:
                                 continue
-                        except Exception:
-                            continue
-                    designs.append(
-                        DesignEntry(
-                            path=feature.dir_path,
-                            name=f"{feature.number}-{feature.slug}",
-                            content_hash=content_hash,
-                            source_dir=feature.dir_path,
-                            repo_id=feature.repo_id,
-                        )
+                    except Exception:
+                        continue
+                designs.append(
+                    DesignEntry(
+                        path=feature.dir_path,
+                        name=f"{feature.number}-{feature.slug}",
+                        content_hash=content_hash,
+                        source_dir=feature.dir_path,
+                        repo_id=feature.repo_id,
                     )
+                )
         except Exception as e:
             logger.warning(f"[SPECKIT-QUEUE] Spec Kit detection failed: {e}")
 
@@ -561,10 +574,25 @@ def pick_next_design(
                     # directory-sourced row per NFR-02).
                     source_path = Path(design.source_dir)
                     if source_path.is_dir():
+                        if design.content_hash:
+                            content_hash = design.content_hash
+                        else:
+                            # spec.md/plan.md can vanish between an earlier
+                            # scan and this pick (concurrent /speckit.* edit,
+                            # manual deletion). Failing here must not bubble
+                            # up to the generic DB-read except below -- that
+                            # would fall through to file-scan and potentially
+                            # pick a different design entirely, leaving this
+                            # one stuck in "processing" forever.
+                            try:
+                                content_hash = directory_content_hash(source_path)
+                            except (FileNotFoundError, OSError) as e:
+                                logger.warning(f"Could not hash design directory {source_path}: {e}")
+                                return None
                         entry = DesignEntry(
                             path=source_path,
                             name=design.name,
-                            content_hash=design.content_hash or directory_content_hash(source_path),
+                            content_hash=content_hash,
                             db_id=design.id,
                             source_dir=source_path,
                             repo_id=design.repo_id,

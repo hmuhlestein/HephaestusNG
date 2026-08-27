@@ -927,23 +927,32 @@ def migrate_speckit_design_columns(engine):
         logger.warning(f"speckit design columns migration failed (not just 'already exists' -- check this): {e}")
 
     try:
-        with engine.connect() as conn:
+        # engine.begin() runs rename+create+copy+drop as ONE transaction:
+        # committed only if every step succeeds, rolled back in full on any
+        # failure (crash, kill -9, exception) -- SQLite's DDL statements
+        # (CREATE/ALTER/DROP TABLE) participate in transactions same as DML,
+        # so a rollback here genuinely restores the original table intact
+        # rather than leaving autopilot_designs_old orphaned with no
+        # autopilot_designs to replace it. A prior version used two separate
+        # engine.connect()/commit() calls (rename, then create+copy+drop),
+        # which left a window where a crash after the rename committed but
+        # before the copy completed would silently lose every design row.
+        with engine.begin() as conn:
             info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
             filename_col = next((row for row in info if row[1] == "filename"), None)
             if filename_col is None or filename_col[3] == 0:
                 return  # table missing (fresh DB, handled by create_all) or already nullable
             col_list = ", ".join(row[1] for row in info)
             conn.execute(text("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old"))
-            conn.commit()
 
-        from src.core.database import AutopilotDesign
+            from sqlalchemy.schema import CreateTable
 
-        AutopilotDesign.__table__.create(engine)
-        with engine.connect() as conn:
+            from src.core.database import AutopilotDesign
+
+            conn.execute(CreateTable(AutopilotDesign.__table__))
             conn.execute(text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old"))
             conn.execute(text("DROP TABLE autopilot_designs_old"))
-            conn.commit()
-            logger.info("Rebuilt autopilot_designs with nullable filename")
+        logger.info("Rebuilt autopilot_designs with nullable filename")
     except Exception as e:
         logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
 
