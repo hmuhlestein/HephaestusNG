@@ -391,13 +391,94 @@ async def get_pipeline_status(
 
     return _store(cache_key, result)
 
+def _resolve_and_enqueue_speckit_feature(
+    project_id: str, project_path: str, feature: str, repo: Optional[str]
+) -> None:
+    """REQ-10/11/12/13: resolve --feature/--repo against this project's
+    detected Spec Kit features, raising HTTPException(422, {code, message,
+    candidates}) on any ambiguous/not-found case (never a silent guess),
+    then ensure a top-priority "pending" AutopilotDesign row exists for the
+    resolved feature so pick_next_design's normal ordinal-ordered selection
+    picks it up on this run's very next poll -- no new selection mechanism,
+    reuses the existing continuous-queue machinery."""
+    import uuid as _uuid
+
+    from src.autopilot.orchestrator.speckit import (
+        SpecKitSelectionError,
+        discover_speckit_features,
+        resolve_feature_selection,
+    )
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
+    with get_db() as db:
+        project = db.query(AutopilotProject).filter_by(id=project_id).first()
+        if project is None:
+            raise HTTPException(404, f"Project {project_id} not found")
+
+        features = discover_speckit_features(db, project_id, project.base_dir)
+        design_md_present = (Path(project_path) / "design.md").exists()
+
+        try:
+            selected = resolve_feature_selection(features, feature, repo, design_md_present)
+        except SpecKitSelectionError as e:
+            raise HTTPException(
+                422,
+                detail={"code": e.code, "message": e.message, "candidates": [c.label() for c in e.candidates]},
+            )
+
+        spec_path = str(selected.spec_path)
+        existing = db.query(AutopilotDesign).filter_by(project_id=project_id, file_path=spec_path).first()
+        min_ordinal = db.query(AutopilotDesign).filter_by(project_id=project_id).count()
+        top_ordinal = -(min_ordinal + 1)  # sorts before every existing row
+
+        if existing is not None:
+            existing.status = "pending"
+            existing.ordinal = top_ordinal
+        else:
+            db.add(
+                AutopilotDesign(
+                    id=f"des-{_uuid.uuid4().hex[:12]}",
+                    project_id=project_id,
+                    filename=selected.spec_path.name,
+                    name=f"{selected.number}-{selected.slug}",
+                    ordinal=top_ordinal,
+                    extension=".md",
+                    file_path=spec_path,
+                    status="pending",
+                )
+            )
+        db.commit()
+        logger.info(f"[SPECKIT] Selected feature {selected.number}-{selected.slug} for project {project_id}, enqueued at ordinal={top_ordinal}")
+
+
 @router.post("/start")
-async def start_pipeline(project_path: str, design_queue: str = "", max_iterations: int = 3):
-    """Start the autopilot pipeline."""
+async def start_pipeline(
+    project_path: str,
+    design_queue: str = "",
+    max_iterations: int = 3,
+    feature: Optional[str] = None,
+    repo: Optional[str] = None,
+):
+    """Start the autopilot pipeline.
+
+    feature/repo (REQ-10/11/12/13): only meaningful, and only touched at
+    all, when `feature` is explicitly given -- an existing project with an
+    unrelated specs/ dir plus its own already-queued design.md-derived
+    designs must keep working exactly as it does today (NFR-01). This is a
+    narrower reading than "unconditional disambiguation on every /start
+    call": that literal reading would force an explicit --feature/--repo
+    selection on every subsequent /start for ANY project that happens to
+    have both a specs/ dir and a queued design, breaking the continuous
+    multi-design queue's normal automatic operation for users who have
+    never touched Spec Kit. See NC-02 in architecture.md.
+    """
     from src.autopilot.orchestrator.state import _get_or_create_project_id
     from src.autopilot.service import get_registry
 
     project_id = _get_or_create_project_id(project_path)
+
+    if feature is not None:
+        _resolve_and_enqueue_speckit_feature(project_id, project_path, feature, repo)
 
     # Concurrency-cap check, before anything else touches the (possibly
     # already-running) service for this project -- a genuinely new project
@@ -522,6 +603,86 @@ async def _start_pipeline_reserved(project_id: str, project_path: str, design_qu
     except Exception as e:
         logger.error(f"Failed to start pipeline: {e}")
         raise HTTPException(500, str(e))
+
+
+@router.get("/speckit/check")
+async def speckit_check(project_path: str, feature: Optional[str] = None, repo: Optional[str] = None):
+    """REQ-15: voluntary readiness check. Never mutates state, never
+    affects /start -- read-only regardless of whether the project is
+    already registered."""
+    from src.autopilot.orchestrator.speckit import (
+        SpecKitSelectionError,
+        check_feature_readiness,
+        discover_speckit_features,
+        discover_speckit_features_unregistered,
+    )
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        project = db.query(AutopilotProject).filter_by(base_dir=str(Path(project_path).resolve())).first()
+        if project is not None:
+            features = discover_speckit_features(db, project.id, project.base_dir)
+            multi_repo_scan = True
+        else:
+            features = discover_speckit_features_unregistered(project_path)
+            multi_repo_scan = False
+
+    design_md_present = (Path(project_path) / "design.md").exists()
+
+    if feature is not None:
+        from src.autopilot.orchestrator.speckit import resolve_feature_selection
+
+        try:
+            targets = [resolve_feature_selection(features, feature, repo, design_md_present)]
+        except SpecKitSelectionError as e:
+            raise HTTPException(
+                422,
+                detail={"code": e.code, "message": e.message, "candidates": [c.label() for c in e.candidates]},
+            )
+    else:
+        targets = features
+
+    reports = [check_feature_readiness(f) for f in targets]
+    return {
+        "multi_repo_scan": multi_repo_scan,
+        "features": [
+            {
+                "number": r.feature.number,
+                "slug": r.feature.slug,
+                "repo_label": r.feature.repo_label,
+                "needs_clarification": r.needs_clarification,
+                "missing_files": r.missing_files,
+            }
+            for r in reports
+        ],
+    }
+
+
+@router.get("/speckit/features")
+async def list_speckit_features(project_path: str):
+    """Dashboard picker's data source (REQ-10) -- same discovery call
+    /start uses, read-only."""
+    from src.autopilot.orchestrator.speckit import discover_speckit_features, discover_speckit_features_unregistered
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        project = db.query(AutopilotProject).filter_by(base_dir=str(Path(project_path).resolve())).first()
+        if project is not None:
+            features = discover_speckit_features(db, project.id, project.base_dir)
+        else:
+            features = discover_speckit_features_unregistered(project_path)
+
+    return [
+        {
+            "number": f.number,
+            "slug": f.slug,
+            "repoLabel": f.repo_label,
+            "hasPlan": f.plan_path is not None,
+            "hasTasks": f.tasks_path is not None,
+        }
+        for f in features
+    ]
+
 
 @router.post("/stop")
 async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = None):

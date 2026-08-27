@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Upload, FileText, Check, FolderOpen, Folder, ArrowLeft, Sparkles, Bug, FolderInput } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
+import SpecKitFeaturePicker from './SpecKitFeaturePicker';
 import toast from 'react-hot-toast';
 
 interface LoadDesignModalProps {
@@ -540,6 +541,46 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                 onChange={handleFileSelect}
                 className="hidden"
               />
+
+              {/* Detected Spec Kit Features (REQ-10) -- lets a user jump
+                  straight to a known specs/<NNN-name>/ feature without
+                  navigating the remote browser folder-by-folder. Renders
+                  nothing when the project has no Spec Kit features. */}
+              {workflowType === 'feature' && projectId && (
+                <div>
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
+                    Or pick a Spec Kit feature
+                  </label>
+                  <SpecKitFeaturePicker
+                    projectId={projectId}
+                    onSelect={(feature) => {
+                      // This modal's remote browser (browseAutopilotProjectFiles/
+                      // getAutopilotProjectFileContent) only ever resolves paths
+                      // under the PRIMARY repo's base_dir -- a pre-existing
+                      // constraint of every file-browse path here, not new to
+                      // this picker. A feature attributed to a non-primary repo
+                      // (repoLabel set and not the project's single/primary
+                      // repo) would silently 404 through handleSelectSpecFolder's
+                      // catch-and-navigate fallback, landing on a confusing
+                      // empty listing instead of a clear error. Warn instead of
+                      // attempting a selection this modal can't actually fetch.
+                      if (feature.repoLabel) {
+                        toast.error(
+                          `"${feature.number}-${feature.slug}" lives in the "${feature.repoLabel}" repo -- ` +
+                          'this file browser only reaches the primary repo. Use `heph autopilot start --feature` ' +
+                          `${feature.number}-${feature.slug} --repo ${feature.repoLabel} instead.`
+                        );
+                        return;
+                      }
+                      handleSelectSpecFolder({
+                        name: `${feature.number}-${feature.slug}`,
+                        path: `specs/${feature.number}-${feature.slug}`,
+                        type: 'dir',
+                      });
+                    }}
+                  />
+                </div>
+              )}
 
               <div className="flex justify-start">
                 <button

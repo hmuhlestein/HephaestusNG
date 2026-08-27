@@ -71,42 +71,18 @@ def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directo
     return dest
 
 
-def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str = "design.md") -> Path:
-    """Copy design_entry's source content into heph_dir (a .hephaestus/-
-    style directory -- a worktree's own .hephaestus/, or a permanent
-    designs_folder). Single consolidated implementation for both design
-    sources (REQ-08), replacing the previously-independent inline
-    shutil.copy2 call sites.
-
-    File-sourced (design_entry.source_dir is None): copies design_entry.path
-    to heph_dir / filename (default "design.md"); callers that need the
-    original filename preserved (e.g. the permanent designs_folder archive
-    copy) pass filename=design_entry.path.name explicitly. Returns that
-    dest path.
-
-    Directory-sourced (design_entry.source_dir is not None): recursively
-    copies the ENTIRE Spec Kit feature directory tree to
-    heph_dir / "specs" / source_dir.name, preserving every file/subdirectory
-    present (spec.md, plan.md, tasks.md, data-model.md, contracts/,
-    research.md, quickstart.md, checklists/). `filename` is ignored in this
-    branch. Returns that directory's path.
-
-    Raises:
-        FileNotFoundError: design_entry.path (file-sourced) or
-            design_entry.source_dir (directory-sourced) does not exist.
-    """
-    is_directory = design_entry.source_dir is not None
-    source = design_entry.source_dir if is_directory else design_entry.path
-    return _copy_design_content(source, heph_dir, filename, is_directory)
-
-
-def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
-    """Unchanged public behavior (REQ-08: 'preserved exactly') -- now a
-    thin wrapper over copy_design_source so the feature_folder call site
-    also gets directory-sourced support for free."""
-    heph_dir = feature_folder / CONTEXT_DIR_NAME
-    filename = design_entry.source_dir.name if design_entry.source_dir else design_entry.path.name
-    return copy_design_source(design_entry, heph_dir, filename=filename)
+def copy_speckit_feature(dir_path: Path, feature_folder: Path) -> Path:
+    """Copy dir_path (a SpecKitFeature.dir_path / DesignEntry.speckit_feature_dir)
+    -> feature_folder/CONTEXT_DIR_NAME/specs/<NNN-name>/ recursively -- ALL
+    files, not just spec.md/plan.md/tasks.md (REQ-03/FR-002a). Raises
+    FileNotFoundError if dir_path no longer exists (race: the source specs/
+    dir was deleted between detection and worktree creation)."""
+    if not dir_path.is_dir():
+        raise FileNotFoundError(f"Spec Kit feature directory vanished: {dir_path}")
+    dest = feature_folder / CONTEXT_DIR_NAME / "specs" / dir_path.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(dir_path, dest, dirs_exist_ok=True)
+    return dest
 
 
 def _create_integration_worktree(

@@ -1160,11 +1160,9 @@ class AutopilotProject(Base):
     # and waits for the user to approve or request changes before continuing.
     review_mode = Column(Boolean, default=False, nullable=False)
 
-    # Opt-in: when True, the design-queue scan (scan_design_queue) auto-queues
-    # detected Spec Kit specs/<NNN>-<name>/ features for a build. Detection
-    # itself (find_speckit_features) is unconditional -- this only gates
-    # whether a detected feature is appended to the buildable queue. REQ-11.
-    speckit_autoscan_enabled = Column(Boolean, default=False, nullable=False)
+    # Opt-in (default off): the design-queue background scan also treats new/
+    # updated specs/<NNN>-<name>/ Spec Kit feature dirs as queueable designs.
+    speckit_auto_scan = Column(Boolean, default=False, nullable=False)
 
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
     repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")

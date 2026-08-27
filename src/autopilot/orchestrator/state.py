@@ -83,15 +83,11 @@ class DesignEntry:
     completed_at: Optional[str] = None
     file_path: Optional[str] = None  # absolute path to design file
     designs_folder: Optional[Path] = None  # path to permanent storage
-    source_dir: Optional[Path] = None  # Spec Kit specs/<NNN>-<name>/ dir.
-    # Set <=> this entry is Spec-Kit-directory-sourced. When set, `path` is
-    # ALSO set to this same directory -- existing call sites that read
-    # design_entry.path for display/logging or as the "design_document"
-    # launch param keep working unchanged; code that needs file content
-    # (not just a path) must check source_dir is None first.
-    repo_id: Optional[str] = None  # ProjectRepo this design belongs to.
-    # None for a single-repo project's legacy queue path, or a file-sourced
-    # design never repo-scoped to begin with.
+    # Set when this entry represents a Spec Kit feature (path still points
+    # at spec.md, so every existing "read design_entry.path" call site keeps
+    # working unchanged) -- worktree_integration.copy_speckit_feature copies
+    # this whole directory instead of just design_entry.path when set.
+    speckit_feature_dir: Optional[Path] = None
 
 
 @dataclass
