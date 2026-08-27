@@ -182,6 +182,13 @@ class AgentOutputCapture:
         .clean.log) live in. Shared by _read_transcript_log and
         _poll_stable_transcript so both agree on the same directory.
         """
+
+        def _has_transcript(candidate_dir: Path) -> bool:
+            return (
+                (candidate_dir / f"{agent.tmux_session_name}.clean.log").exists()
+                or (candidate_dir / f"{agent.tmux_session_name}.transcript.log").exists()
+            )
+
         # agent.working_directory is set once at creation and never
         # cleared or reassigned -- read it directly instead of rederiving
         # via task->workflow.working_directory, which used to be the only
@@ -189,12 +196,26 @@ class AgentOutputCapture:
         # are cleared on termination (see database.py's Agent.current_task_id
         # comment), leaving every terminated agent's transcript dir
         # unresolvable.
+        #
+        # BUT a completed feature's working_directory is usually a worktree
+        # that _cleanup_worktree (worktree_integration.py) deletes entirely
+        # once the pipeline finishes -- taking its .hephaestus/tmux/ with
+        # it. That same cleanup (and _archive_feature_docs in
+        # phase_manager.py) copies those transcripts out to the project
+        # root's .hephaestus/tmux/ and/or that feature's own permanent
+        # .hephaestus/features/<feature>/tmux/ archive first, specifically
+        # so they survive -- but this used to return the now-empty worktree
+        # path unconditionally and never look there, silently falling back
+        # to a much shorter (e.g. termination-time) snapshot. Verify the
+        # transcript is actually still there before trusting this path.
         if agent.working_directory:
-            return Path(agent.working_directory) / CONTEXT_DIR_NAME / "tmux"
+            candidate_dir = Path(agent.working_directory) / CONTEXT_DIR_NAME / "tmux"
+            if _has_transcript(candidate_dir):
+                return candidate_dir
 
-        # Legacy fallback: agents created before the working_directory
-        # column existed have no value to read above. Rederive it the old
-        # way, through whichever of the agent's tasks is still reachable.
+        # Rederive project_base/working_dir through whichever of the
+        # agent's tasks is still reachable -- also the legacy fallback for
+        # agents created before the working_directory column existed.
         working_dir = None
         project_base = None
         from src.core.database import Task
@@ -219,7 +240,9 @@ class AgentOutputCapture:
             session.close()
 
         if working_dir:
-            return Path(working_dir) / CONTEXT_DIR_NAME / "tmux"
+            candidate_dir = Path(working_dir) / CONTEXT_DIR_NAME / "tmux"
+            if _has_transcript(candidate_dir):
+                return candidate_dir
 
         # Search in common locations using the session name. Existence of
         # the raw transcript.log (always created unconditionally at
@@ -232,15 +255,26 @@ class AgentOutputCapture:
 
         for base in search_bases:
             candidate_dir = base / CONTEXT_DIR_NAME / "tmux"
-            if (candidate_dir / f"{agent.tmux_session_name}.transcript.log").exists():
+            if _has_transcript(candidate_dir):
                 return candidate_dir
             # Also check one level into .worktrees (worktree-local .hephaestus)
             if base.name == ".hephaestus":
                 continue  # skip worktree scan for .hephaestus itself
             for wt_dir in base.glob(".worktrees/*"):
                 candidate_dir = wt_dir / CONTEXT_DIR_NAME / "tmux"
-                if (candidate_dir / f"{agent.tmux_session_name}.transcript.log").exists():
+                if _has_transcript(candidate_dir):
                     return candidate_dir
+
+        # Last resort: a completed feature's permanent archive
+        # (.hephaestus/features/<timestamp>_<name>/tmux/), populated by
+        # phase_manager.py's _archive_feature_docs from both the project
+        # root's and the worktree's .hephaestus/tmux/ before the worktree
+        # is removed -- the fullest copy of this agent's transcript that
+        # still exists once its worktree is gone.
+        if project_base:
+            for feature_tmux_dir in Path(project_base).glob(f"{CONTEXT_DIR_NAME}/features/*/tmux"):
+                if _has_transcript(feature_tmux_dir):
+                    return feature_tmux_dir
 
         return None
 
