@@ -318,17 +318,27 @@ def _sync_speckit_designs(db, project) -> None:
     another feature's already-staged row in the same call (REQ-09). An
     unreadable/vanished spec.md is skipped via a dedicated OSError catch
     around the read (no DB write attempted yet, nothing to roll back).
-    Once a DB write is attempted, only expected, transient errors
+    Once a DB write is attempted, expected, transient errors
     (IntegrityError, OperationalError) are caught and rolled back --
     pick_next_design makes no writes of its own before this call runs, so
     a rollback at this point can only undo THIS feature's own
     not-yet-committed insert/update, never a sibling feature's already-
     `db.commit()`-ed row (committed transactions are durable) or a caller
-    write from outside this function. A genuine programming error
-    (anything else) is logged at ERROR with a traceback and re-raised
-    rather than silently swallowed as if it were one more transient sync
-    failure (adversarial review BLOCKER: broad `except Exception` here
-    previously masked bugs as routine WARNING-level noise).
+    write from outside this function.
+
+    A genuine programming error (anything else) is logged at ERROR with a
+    traceback but does NOT raise out of this function -- it is isolated to
+    just this one feature and the loop continues to the next (adversarial
+    review WARNING: an earlier revision re-raised here, which propagated
+    through pick_next_design's own generic `except Exception` into its
+    file-scan fallback branch -- a branch with NO budget check -- turning
+    one broken speckit feature into a per-project budget-gate bypass on
+    every subsequent scan, on top of blocking every OTHER speckit feature
+    in the same pass from ever syncing. Swallow-and-continue here matches
+    the philosophy already used a few lines above for a
+    find_speckit_features-level failure; every unexpected error is still
+    visible at ERROR with a traceback, just without cascading into
+    unrelated, more safety-critical logic one level up).
 
     Deliberately does NOT archive/clean up a pending row whose feature
     stops appearing in find_speckit_features's output (e.g. a renamed or
@@ -417,13 +427,16 @@ def _sync_speckit_designs(db, project) -> None:
             logger.warning(f"[SPECKIT-AUTOSCAN] failed to sync {feat.dir_name!r}: {e}")
             continue
         except Exception:
-            # Not an expected transient DB error -- a programming bug here
-            # must not be swallowed as routine sync noise (it would silently
-            # stop this feature, and every feature after it, from ever
-            # syncing again with no visible signal beyond a WARNING log).
+            # Not an expected transient DB error -- log the full traceback
+            # at ERROR so a genuine bug is visible, but isolate it to this
+            # one feature rather than raising: a `raise` here would abort
+            # the whole pass (skipping every remaining feature) and
+            # propagate into pick_next_design's own generic exception
+            # handler, whose fallback path has no budget check (see this
+            # function's docstring).
             db.rollback()
             logger.error(f"[SPECKIT-AUTOSCAN] unexpected error syncing {feat.dir_name!r}", exc_info=True)
-            raise
+            continue
 
 
 def pick_next_design(
@@ -468,14 +481,19 @@ def pick_next_design(
                 logger.info("pick_next_design: no active project found")
                 return None
 
-            _sync_speckit_designs(db, project)  # REQ-05/06/07/08/09
-
-            # Budget guard: skip project entirely if over budget
+            # Budget guard: skip project entirely if over budget. Checked
+            # BEFORE _sync_speckit_designs -- an over-budget project has no
+            # use for newly-queued rows it can't dispatch anyway, so skip
+            # the speckit filesystem scan/DB writes too, same as every other
+            # design-queue activity below (adversarial review WARNING: this
+            # used to run unconditionally before the budget check).
             from src.core.cost_derivation import check_budget_before_new_work
 
             if not check_budget_before_new_work(db, project.id):
                 logger.info(f"pick_next_design: project '{project.name}' ({project.id[:8]}) over budget (${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}) — skipping")
                 return None
+
+            _sync_speckit_designs(db, project)  # REQ-05/06/07/08/09
 
             logger.info(f"pick_next_design: searching project '{project.name}' ({project.id[:8]})")
 

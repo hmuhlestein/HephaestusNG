@@ -307,7 +307,11 @@ class TestSyncSpeckitDesigns:
         assert db_session.query(AutopilotDesign).count() == 0
         db_session.query(AutopilotDesign).all()  # would raise PendingRollbackError if session were broken
 
-    def test_unexpected_error_propagates_instead_of_being_swallowed(self, db_session, project_with_repo):
+    def test_unexpected_error_isolated_to_one_feature_not_raised(self, db_session, project_with_repo):
+        # A genuine programming bug must not raise out of _sync_speckit_designs:
+        # doing so would propagate into pick_next_design's own generic except
+        # block, whose file-scan fallback has no budget check (adversarial
+        # review WARNING).
         proj, repo_path = project_with_repo
         proj.speckit_auto_scan_enabled = True
         db_session.commit()
@@ -318,8 +322,38 @@ class TestSyncSpeckitDesigns:
 
         with patch("src.autopilot.orchestrator.queue.func") as mock_func:
             mock_func.max.side_effect = broken_max
-            with pytest.raises(TypeError):
-                _sync_speckit_designs(db_session, proj)
+            _sync_speckit_designs(db_session, proj)  # must not raise
+
+        assert db_session.query(AutopilotDesign).count() == 0
+
+    def test_unexpected_error_on_one_feature_does_not_block_sibling_in_same_pass(self, db_session, project_with_repo):
+        proj, repo_path = project_with_repo
+        proj.speckit_auto_scan_enabled = True
+        db_session.commit()
+        _make_feature(repo_path, "001", "bad", plan=True)
+        _make_feature(repo_path, "002", "good", plan=True)
+
+        real_max = __import__("sqlalchemy").func.max
+        call_count = {"n": 0}
+
+        def broken_max(column):
+            # AutopilotDesign.ordinal is queried once per genuinely-new
+            # feature, in find_speckit_features's stable (repo_label, number)
+            # order -- "001-bad" is processed first, so raise only on the
+            # first call and let every call after it (i.e. "002-good") behave
+            # normally.
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise TypeError("simulated programming bug")
+            return real_max(column)
+
+        with patch("src.autopilot.orchestrator.queue.func") as mock_func:
+            mock_func.max.side_effect = broken_max
+            _sync_speckit_designs(db_session, proj)  # must not raise
+
+        rows = db_session.query(AutopilotDesign).all()
+        assert len(rows) == 1
+        assert "002-good" in rows[0].file_path
 
     def test_detection_failure_logged_and_returns_without_raising(self, db_session, project_with_repo):
         proj, repo_path = project_with_repo
@@ -352,3 +386,84 @@ class TestSyncSpeckitDesigns:
     def test_is_synchronous_no_new_loop(self):
         # NFR-03: hooks into the existing scan loop, no new asyncio task.
         assert not inspect.iscoroutinefunction(_sync_speckit_designs)
+
+
+class TestPickNextDesignBudgetGate:
+    """pick_next_design must check the budget BEFORE calling
+    _sync_speckit_designs, not after -- an over-budget project should do
+    neither a speckit filesystem scan nor a DB write (adversarial review
+    WARNING)."""
+
+    @pytest.fixture
+    def orch_db_env(self, tmp_path, monkeypatch):
+        from src.core.database import DatabaseManager
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        return db
+
+    def test_over_budget_project_never_syncs_speckit_features(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.queue import pick_next_design
+        from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        _make_feature(repo_path, "001", "foo", plan=True)
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(
+                id="proj-overbudget",
+                name="p",
+                base_dir=str(repo_path),
+                is_active=True,
+                speckit_auto_scan_enabled=True,
+                cost_limit_usd=1.0,
+                cost_total_usd=5.0,
+            )
+        )
+        session.add(ProjectRepo(id="repo-overbudget", project_id="proj-overbudget", label="main", path=str(repo_path), is_primary=True))
+        session.commit()
+        session.close()
+
+        logger = OrchestratorLogger(tmp_path)
+        result = pick_next_design(repo_path, set(), logger, project_id="proj-overbudget")
+
+        assert result is None
+        with get_db() as db:
+            assert db.query(AutopilotDesign).count() == 0
+
+    def test_under_budget_project_syncs_speckit_features_via_pick_next_design(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.queue import pick_next_design
+        from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        _make_feature(repo_path, "001", "foo", plan=True)
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(
+                id="proj-underbudget",
+                name="p",
+                base_dir=str(repo_path),
+                is_active=True,
+                speckit_auto_scan_enabled=True,
+            )
+        )
+        session.add(ProjectRepo(id="repo-underbudget", project_id="proj-underbudget", label="main", path=str(repo_path), is_primary=True))
+        session.commit()
+        session.close()
+
+        logger = OrchestratorLogger(tmp_path)
+        result = pick_next_design(repo_path, set(), logger, project_id="proj-underbudget")
+
+        assert result is not None
+        with get_db() as db:
+            rows = db.query(AutopilotDesign).all()
+            assert len(rows) == 1
+            assert "001-foo" in rows[0].file_path
