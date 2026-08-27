@@ -537,6 +537,16 @@ class HephaestusSDK:
                 # deliberately off.
                 if phase.self_review:
                     phase_dict["self_review"] = phase.self_review
+                # Same gap, same fix, for validation -- phase_manager.py's
+                # own Phase(...) insert (line ~2483) already reads
+                # phase_config.get("validation") and has a comment flagging
+                # this exact omission as latent (dormant only because no
+                # phase YAML sets validation: yet).
+                if phase.validation:
+                    phase_dict["validation"] = {
+                        "enabled": phase.validation.enabled,
+                        "criteria": phase.validation.criteria,
+                    }
                 phases_config.append(phase_dict)
 
             # Convert WorkflowConfig to dict
