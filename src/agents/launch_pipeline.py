@@ -341,7 +341,26 @@ class LaunchPipeline:
             _agent_terminated = bool(_current and _current.status == "terminated")
 
             _fresh_task = _term_check.query(Task).filter_by(id=task_id).first()
-            _task_cancelled = bool(_fresh_task and (_fresh_task.status in TaskStatus.TERMINAL or (_fresh_task.assigned_agent_id and _fresh_task.assigned_agent_id != agent_id)))
+            # A mismatched assigned_agent_id alone isn't proof this task was
+            # genuinely reassigned to a live competitor -- the output-artifact
+            # hard-floor check (_run_done_hard_floor_checks) rejects a "done"
+            # claim without ever clearing assigned_agent_id, by design, so the
+            # SAME agent can retry in place. If that agent later dies/gets
+            # replaced instead of retrying, assigned_agent_id is left pointing
+            # at a now-terminated agent forever -- and every future dispatch
+            # attempt for this task (a fresh agent, its own id necessarily
+            # different) reads that stale value as "someone else already owns
+            # this," aborting immediately even though the "someone else" has
+            # been dead for hours. Only trust the mismatch if the OTHER agent
+            # is actually still alive. Observed live: task a12d727b's four
+            # dispatch attempts across two days all aborted this way after its
+            # first real agent's rejected "done" claim left assigned_agent_id
+            # pointing at itself, terminated, never reassigned since.
+            _other_agent_is_live = False
+            if _fresh_task and _fresh_task.assigned_agent_id and _fresh_task.assigned_agent_id != agent_id:
+                _other_agent = _term_check.query(Agent).filter_by(id=_fresh_task.assigned_agent_id).first()
+                _other_agent_is_live = bool(_other_agent and _other_agent.status != "terminated")
+            _task_cancelled = bool(_fresh_task and (_fresh_task.status in TaskStatus.TERMINAL or _other_agent_is_live))
 
             if _agent_terminated or _task_cancelled:
                 reason = "was terminated" if _agent_terminated else f"its task {task_id} was reassigned/cancelled (status={_fresh_task.status}, assigned_agent_id={_fresh_task.assigned_agent_id})"
