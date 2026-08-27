@@ -1,5 +1,6 @@
 """Tests for scan_design_queue's Spec Kit auto-scan extension (REQ-17/18/19)."""
 
+import json
 from pathlib import Path
 
 from src.autopilot.orchestrator.queue import scan_design_queue
@@ -78,3 +79,21 @@ def test_already_processed_feature_never_requeued(tmp_path, monkeypatch):
 
     second = scan_design_queue(empty_queue_dir, processed, speckit_project_id=project_id)
     assert second == []
+
+
+def test_multiple_speckit_features_survive_manual_reorder_file(tmp_path, monkeypatch):
+    """Adversarial review BLOCKER: Spec Kit entries all share the basename
+    "spec.md" -- a manual-reorder lookup keyed on bare filename silently
+    collapsed every feature but the last into one dict slot."""
+    project_id = _setup(tmp_path, monkeypatch, speckit_auto_scan=True)
+    _make_feature_dir(tmp_path, "001-a", with_plan=True)
+    _make_feature_dir(tmp_path, "002-b", with_plan=True)
+    queue_dir = tmp_path / ".hephaestus" / "specs"
+    queue_dir.mkdir(parents=True)
+    order_file = tmp_path / ".hephaestus" / ".queue_order.json"
+    order_file.write_text(json.dumps(["some_unrelated_design.md"]))
+
+    designs = scan_design_queue(queue_dir, set(), speckit_project_id=project_id)
+
+    dirs = {d.speckit_feature_dir.name for d in designs}
+    assert dirs == {"001-a", "002-b"}
