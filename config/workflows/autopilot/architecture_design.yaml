@@ -132,6 +132,18 @@ additional_notes: |
   - Note which NFR-XX requirements affect architecture decisions
   - Include a "Requirements-to-Components Mapping" section in architecture.md
     showing which components satisfy which REQ-XX requirements
+  - **TRACEABILITY (MANDATORY):** this mapping MUST cite every REQ-XX that
+    appears in requirements.md — a REQ-XX with no row in the mapping is a
+    silent drop and must not happen.
+
+  **SPEC KIT INPUT (if present):** check for `./.hephaestus/specs/<NNN-name>/plan.md`
+  (`find ./.hephaestus/specs -maxdepth 2 -name plan.md 2>/dev/null`). If it
+  exists, read it as your PRIMARY architecture input (REQ-05) — its
+  Technical Context and Phase 1 outputs carry entity/interface-contract
+  detail — along with `data-model.md`, `contracts/`, and `research.md` in
+  the same directory when present. Preserve the same P1/P2/P3 story-
+  priority language `requirements.md` already carries forward into your own
+  architecture sections. If no `plan.md` exists, proceed exactly as before.
 
   Also read the original design document to understand the overall vision.
   This context goes into architecture.md — the development agent reads it
