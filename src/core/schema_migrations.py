@@ -927,32 +927,44 @@ def migrate_speckit_design_columns(engine):
     except Exception as e:
         logger.warning(f"speckit design columns migration failed (not just 'already exists' -- check this): {e}")
 
-    # rename+create+copy+drop must be ONE atomic unit: a crash between the
-    # RENAME and the INSERT would otherwise leave every design row stranded
-    # in autopilot_designs_old with no autopilot_designs table pointing back
-    # at it (silent total data loss -- adversarial review BLOCKER). SQLite's
-    # DDL statements DO participate in transactions, but pysqlite's default
-    # driver auto-commits before each DDL statement regardless of any
-    # surrounding `engine.begin()` -- a plain SQLAlchemy transaction does
-    # NOT actually make this atomic. The documented workaround is to put the
-    # raw DBAPI connection in autocommit mode (isolation_level = None) and
-    # drive the transaction with explicit BEGIN/COMMIT/ROLLBACK ourselves.
+    # create+copy+drop+rename must be ONE atomic unit: a crash mid-sequence
+    # would otherwise leave every design row stranded in a table nothing
+    # points back at (silent total data loss -- adversarial review
+    # BLOCKER). SQLite's DDL statements DO participate in transactions, but
+    # pysqlite's default driver auto-commits before each DDL statement
+    # regardless of any surrounding `engine.begin()` -- a plain SQLAlchemy
+    # transaction does NOT actually make this atomic. The workaround is to
+    # put the raw DBAPI connection in autocommit mode (isolation_level =
+    # None) and drive the transaction with explicit BEGIN/COMMIT/ROLLBACK
+    # ourselves.
+    #
+    # The replacement table is built under a TEMPORARY name and swapped in
+    # at the end (create autopilot_designs_new -> copy -> drop the
+    # original autopilot_designs -> rename autopilot_designs_new to
+    # autopilot_designs), rather than renaming the original away first. An
+    # earlier version renamed autopilot_designs itself to
+    # autopilot_designs_old before rebuilding: SQLite's ALTER TABLE RENAME
+    # auto-updates OTHER tables' FK definitions to follow the renamed
+    # table (documented behavior since 3.25.0), so the moment
+    # autopilot_designs was renamed, features.design_id's FK definition
+    # started reading "REFERENCES autopilot_designs_old" -- and dropping
+    # that table afterward left features permanently referencing a table
+    # that no longer exists (caught by PRAGMA foreign_key_check in testing:
+    # a real FK integrity break, not just an enforcement-pragma hiccup).
+    # This sequence never renames the table other tables actually
+    # reference, so their FK text never changes.
     raw_conn = engine.raw_connection()
     try:
         raw_conn.isolation_level = None
         cur = raw_conn.cursor()
-        # This connection has PRAGMA foreign_keys=ON (DatabaseManager sets it on
-        # every connect). SQLite's ALTER TABLE RENAME auto-updates OTHER tables'
-        # foreign key definitions to follow the renamed table (documented
-        # behavior since 3.25.0) -- so the moment autopilot_designs is renamed
-        # to autopilot_designs_old, features.design_id (and every other FK
-        # referencing autopilot_designs) starts pointing at *_old, and the
-        # later `DROP TABLE autopilot_designs_old` fails with "FOREIGN KEY
-        # constraint failed" as long as any child rows exist. PRAGMA
-        # foreign_keys can only be changed outside an active transaction, so
-        # it must be turned off here, before BEGIN, and restored after COMMIT/
-        # ROLLBACK -- before this raw connection goes back to the pool, where
-        # other code relies on it being on.
+        # PRAGMA foreign_keys=ON is set on every connection by DatabaseManager.
+        # Dropping autopilot_designs while `features`/`workflows`/etc. still
+        # reference it (real rows, real FKs) raises "FOREIGN KEY constraint
+        # failed" if enforcement is on -- and the pragma can only be changed
+        # outside an active transaction, so it must be turned off here,
+        # before BEGIN, and restored after COMMIT/ROLLBACK, before this raw
+        # connection goes back to the pool where other code relies on it
+        # being on.
         cur.execute("PRAGMA foreign_keys=OFF")
         try:
             cur.execute("BEGIN IMMEDIATE")
@@ -963,20 +975,25 @@ def migrate_speckit_design_columns(engine):
                     cur.execute("ROLLBACK")
                     return  # table missing (fresh DB, handled by create_all) or already nullable
                 col_list = ", ".join(row[1] for row in info)
-                cur.execute("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old")
 
                 from sqlalchemy.schema import CreateTable
 
                 from src.core.database import AutopilotDesign
 
-                cur.execute(str(CreateTable(AutopilotDesign.__table__).compile(engine)))
-                cur.execute(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
-                cur.execute("DROP TABLE autopilot_designs_old")
+                # Clone into AutopilotDesign's OWN metadata (not a fresh empty
+                # one) -- repo_id's ForeignKey("project_repos.id") and
+                # phase0_workflow_id's ForeignKey("workflows.id") are resolved
+                # by looking up those table names in the target metadata; an
+                # empty MetaData() has neither registered and CreateTable
+                # fails outright ("could not find table 'project_repos'").
+                temp_table = AutopilotDesign.__table__.to_metadata(AutopilotDesign.metadata, name="autopilot_designs_new")
+                cur.execute(str(CreateTable(temp_table).compile(engine)))
+                cur.execute(f"INSERT INTO autopilot_designs_new ({col_list}) SELECT {col_list} FROM autopilot_designs")
+                cur.execute("DROP TABLE autopilot_designs")
+                cur.execute("ALTER TABLE autopilot_designs_new RENAME TO autopilot_designs")
                 # foreign_key_check runs even with enforcement off -- catch a
-                # genuinely broken reference (there shouldn't be one: nothing
-                # here changes any row's actual FK column values) before
-                # committing, rather than silently re-enabling enforcement
-                # over already-inconsistent data.
+                # genuinely broken reference before committing, rather than
+                # silently re-enabling enforcement over inconsistent data.
                 violations = cur.execute("PRAGMA foreign_key_check").fetchall()
                 if violations:
                     raise RuntimeError(f"foreign_key_check found violations after rebuild: {violations}")
