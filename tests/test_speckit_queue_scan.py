@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from src.autopilot.orchestrator.queue import scan_design_queue
+from src.autopilot.orchestrator.queue import pick_next_design, scan_design_queue
 from src.core.database import AutopilotProject, DatabaseManager
 
 
@@ -97,3 +97,37 @@ def test_multiple_speckit_features_survive_manual_reorder_file(tmp_path, monkeyp
 
     dirs = {d.speckit_feature_dir.name for d in designs}
     assert dirs == {"001-a", "002-b"}
+
+
+def test_pick_next_design_reads_speckit_auto_scan_flag_from_db(tmp_path, monkeypatch):
+    """Architectural review BLOCKER: scan_design_queue's speckit_project_id
+    param was never actually passed by pick_next_design (the only
+    production caller), so toggling AutopilotProject.speckit_auto_scan had
+    zero effect. This drives pick_next_design itself, not scan_design_queue
+    directly, so it fails if that wiring regresses."""
+    project_id = _setup(tmp_path, monkeypatch, speckit_auto_scan=True)
+    _make_feature_dir(tmp_path, "001-x", with_plan=True)
+    queue_dir = tmp_path / ".hephaestus" / "specs"
+    queue_dir.mkdir(parents=True)
+
+    from src.autopilot.orchestrator import OrchestratorLogger
+
+    logger = OrchestratorLogger(tmp_path)
+    result = pick_next_design(queue_dir, set(), logger, project_id=project_id)
+
+    assert result is not None
+    assert result.speckit_feature_dir == tmp_path / "specs" / "001-x"
+
+
+def test_pick_next_design_never_auto_scans_when_flag_disabled(tmp_path, monkeypatch):
+    project_id = _setup(tmp_path, monkeypatch, speckit_auto_scan=False)
+    _make_feature_dir(tmp_path, "001-x", with_plan=True)
+    queue_dir = tmp_path / ".hephaestus" / "specs"
+    queue_dir.mkdir(parents=True)
+
+    from src.autopilot.orchestrator import OrchestratorLogger
+
+    logger = OrchestratorLogger(tmp_path)
+    result = pick_next_design(queue_dir, set(), logger, project_id=project_id)
+
+    assert result is None
