@@ -9,8 +9,10 @@ from src.autopilot.orchestrator.speckit import (
     SpecKitSelectionError,
     _scan_one_repo,
     check_feature_readiness,
+    discover_speckit_features,
     discover_speckit_features_unregistered,
     resolve_feature_selection,
+    speckit_feature_dir_for_path,
 )
 
 
@@ -92,6 +94,58 @@ def test_malformed_specs_dir_never_counted_and_never_raises(tmp_path):
     (tmp_path / "specs" / "001-no-spec").mkdir(parents=True)
     features = _scan_one_repo(tmp_path / "specs", None, None)
     assert features == []
+
+
+def test_discover_speckit_features_scans_each_registered_repo(tmp_path, monkeypatch):
+    """discover_speckit_features's registered-repo branch (REQ-02) -- the
+    unregistered-fallback branch is covered elsewhere via
+    discover_speckit_features_unregistered."""
+    from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
+
+    backend_dir = tmp_path / "backend"
+    frontend_dir = tmp_path / "frontend"
+    _make_feature_dir(backend_dir, "001-x", {"spec.md": "# spec"})
+    _make_feature_dir(frontend_dir, "002-y", {"spec.md": "# spec"})
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+        session.add(ProjectRepo(id="repo-a", project_id="proj-1", label="backend", path=str(backend_dir), is_primary=True))
+        session.add(ProjectRepo(id="repo-b", project_id="proj-1", label="frontend", path=str(frontend_dir)))
+        session.flush()
+
+        features = discover_speckit_features(session, "proj-1", str(tmp_path))
+
+    assert {(f.repo_label, f.number) for f in features} == {("backend", "001"), ("frontend", "002")}
+
+
+def test_speckit_feature_dir_for_path_recognizes_spec_md(tmp_path):
+    d = tmp_path / "specs" / "001-x"
+    d.mkdir(parents=True)
+    spec_path = d / "spec.md"
+    spec_path.write_text("# spec")
+
+    assert speckit_feature_dir_for_path(spec_path) == d
+
+
+def test_speckit_feature_dir_for_path_rejects_non_spec_md_filename(tmp_path):
+    d = tmp_path / "specs" / "001-x"
+    d.mkdir(parents=True)
+    plan_path = d / "plan.md"
+    plan_path.write_text("# plan")
+
+    assert speckit_feature_dir_for_path(plan_path) is None
+
+
+def test_speckit_feature_dir_for_path_rejects_non_speckit_parent_dir(tmp_path):
+    spec_path = tmp_path / "docs" / "spec.md"
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text("# spec")
+
+    assert speckit_feature_dir_for_path(spec_path) is None
 
 
 def test_check_feature_readiness_reports_missing_plan_and_markers(tmp_path):
