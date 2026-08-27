@@ -155,6 +155,52 @@ class TestProjectScopedSpeckitFeaturesRoute:
         assert len(data) == 1
         assert data[0]["number"] == "001"
 
+    def test_primary_repo_feature_has_null_repo_label(self, tmp_path, client):
+        """BUG (ticket-008c98cf): discover_speckit_features sets a real
+        repo_label on every repo once ANY ProjectRepo row exists -- including
+        the primary one -- so a project with exactly one registered
+        (primary) repo returned a non-null repoLabel for its own features.
+        The frontend's `if (feature.repoLabel)` warning check then fired for
+        primary-repo features too, even though they ARE reachable via the
+        file browser (only non-primary repos aren't). This route must null
+        out repoLabel for the primary repo's own features."""
+        from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+        _make_feature_dir(tmp_path, "001-x")
+        with get_db() as db:
+            db.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+            db.add(ProjectRepo(id="repo-1", project_id="proj-1", label="my-repo", path=str(tmp_path), is_primary=True))
+            db.commit()
+
+        resp = client.get("/api/autopilot/projects/proj-1/speckit/features")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["repoLabel"] is None
+
+    def test_secondary_repo_feature_keeps_repo_label(self, tmp_path, client):
+        """The other half of the same fix: a genuinely non-primary repo's
+        features must still carry their real label -- only the primary
+        repo's own features get nulled out."""
+        from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+        primary_dir = tmp_path / "primary"
+        secondary_dir = tmp_path / "secondary"
+        _make_feature_dir(secondary_dir, "002-y")
+        with get_db() as db:
+            db.add(AutopilotProject(id="proj-1", name="p", base_dir=str(primary_dir)))
+            db.add(ProjectRepo(id="repo-1", project_id="proj-1", label="primary-repo", path=str(primary_dir), is_primary=True))
+            db.add(ProjectRepo(id="repo-2", project_id="proj-1", label="secondary-repo", path=str(secondary_dir)))
+            db.commit()
+
+        resp = client.get("/api/autopilot/projects/proj-1/speckit/features")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["repoLabel"] == "secondary-repo"
+
     def test_unknown_project_404s(self, client):
         resp = client.get("/api/autopilot/projects/does-not-exist/speckit/features")
         assert resp.status_code == 404
