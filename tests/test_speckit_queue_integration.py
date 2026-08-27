@@ -107,6 +107,108 @@ def test_enabled_withholds_until_plan_present(queue_db, tmp_path):
     assert designs[0].repo_id == "repo-b"
 
 
+def test_self_heal_requeues_directory_sourced_design_with_no_real_progress(queue_db, tmp_path):
+    """REQ-05: the existing [SELF-HEAL] re-queue check works unchanged for
+    directory-sourced designs -- a design already in processed_hashes but
+    whose features are all still pending (or don't exist) gets re-queued
+    on the next scan, same as the file-sourced branch already does.
+    """
+    from src.autopilot.orchestrator.engine_client import directory_content_hash
+    from src.autopilot.orchestrator.queue import scan_design_queue
+    from src.core.database import AutopilotDesign, Feature
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    feature_dir = _make_feature_dir(repo_path, "008-heal", has_plan=True)
+    _make_project(queue_db, "proj-h", repo_path, speckit_autoscan_enabled=True)
+    _make_repo(queue_db, "repo-h", "proj-h", "primary", repo_path)
+
+    content_hash = directory_content_hash(feature_dir)
+    with queue_db.session_scope() as session:
+        session.add(
+            AutopilotDesign(
+                id="des-h",
+                project_id="proj-h",
+                filename=None,
+                file_path=None,
+                source_dir=str(feature_dir),
+                repo_id="repo-h",
+                name="008-heal",
+                content_hash=content_hash,
+                status="processing",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-h",
+                design_id="des-h",
+                feature_key="only-feature",
+                name="Only Feature",
+                scope="scope",
+                status="pending",  # not started -- no real progress yet
+            )
+        )
+
+    processed_hashes = {content_hash}  # marked processed, but stuck
+    queue_dir = tmp_path / "empty_queue"
+    queue_dir.mkdir()
+    designs = scan_design_queue(queue_dir, processed_hashes, project_id="proj-h")
+
+    assert len(designs) == 1
+    assert designs[0].source_dir == feature_dir
+    assert content_hash not in processed_hashes  # self-heal discarded it
+
+
+def test_self_heal_does_not_requeue_directory_sourced_design_with_real_progress(queue_db, tmp_path):
+    """Mirror of the above: a feature that has actually started (status
+    other than pending) means real progress happened -- must NOT be
+    treated as stuck and re-queued.
+    """
+    from src.autopilot.orchestrator.engine_client import directory_content_hash
+    from src.autopilot.orchestrator.queue import scan_design_queue
+    from src.core.database import AutopilotDesign, Feature
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    feature_dir = _make_feature_dir(repo_path, "009-progress", has_plan=True)
+    _make_project(queue_db, "proj-i", repo_path, speckit_autoscan_enabled=True)
+    _make_repo(queue_db, "repo-i", "proj-i", "primary", repo_path)
+
+    content_hash = directory_content_hash(feature_dir)
+    with queue_db.session_scope() as session:
+        session.add(
+            AutopilotDesign(
+                id="des-i",
+                project_id="proj-i",
+                filename=None,
+                file_path=None,
+                source_dir=str(feature_dir),
+                repo_id="repo-i",
+                name="009-progress",
+                content_hash=content_hash,
+                status="active",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-i",
+                design_id="des-i",
+                feature_key="only-feature",
+                name="Only Feature",
+                scope="scope",
+                status="active",  # real progress
+            )
+        )
+
+    processed_hashes = {content_hash}
+    queue_dir = tmp_path / "empty_queue"
+    queue_dir.mkdir()
+    designs = scan_design_queue(queue_dir, processed_hashes, project_id="proj-i")
+
+    assert designs == []
+    assert content_hash in processed_hashes  # not disturbed
+
+
 def test_multi_repo_scan_tags_correct_repo(queue_db, tmp_path):
     from src.autopilot.orchestrator.queue import scan_design_queue
 
