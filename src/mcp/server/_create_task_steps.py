@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from src.core.database import Phase, Task
+from src.core.database import Agent, Phase, Task
 from src.core.simple_config import get_config
 from src.mcp.server._shared import (
     CreateTaskRequest,
@@ -537,6 +537,7 @@ async def _check_for_duplicate_task(task_id: str, phase_id: Optional[str], enric
         )
 
         if duplicate_info["is_duplicate"]:
+            live_agent_id = None
             session = server_state.db_manager.get_session()
             try:
                 task = session.query(Task).filter_by(id=task_id).first()
@@ -545,6 +546,23 @@ async def _check_for_duplicate_task(task_id: str, phase_id: Optional[str], enric
                     task.duplicate_of_task_id = duplicate_info["duplicate_of"]
                     task.similarity_score = duplicate_info["max_similarity"]
                     session.commit()
+                    # This check is embedding-based and runs asynchronously,
+                    # decoupled from this task's own dispatch decision (see
+                    # its own timing vs. _dispatch_agent_for_task below) --
+                    # by the time it fires, a DIFFERENT code path (e.g. the
+                    # orchestrator's own _create_phase_task, racing this
+                    # task's creation for the same phase) may have already
+                    # dispatched a live agent for it. Marking status alone
+                    # leaves that agent running, burning real cost on work
+                    # already superseded by the task named in
+                    # duplicate_of_task_id -- and, observed live, its
+                    # occupied capacity slot delayed the ORIGINAL task's own
+                    # dispatch by minutes. Capture the agent id now, before
+                    # the session closes, and terminate it below.
+                    if task.assigned_agent_id:
+                        agent = session.query(Agent).filter_by(id=task.assigned_agent_id).first()
+                        if agent and agent.status not in ("terminated", "done"):
+                            live_agent_id = agent.id
             except Exception:
                 session.rollback()
                 raise
@@ -552,6 +570,12 @@ async def _check_for_duplicate_task(task_id: str, phase_id: Optional[str], enric
                 session.close()
 
             logger.warning(f"Task {task_id} detected as duplicate of {duplicate_info['duplicate_of']} with similarity {duplicate_info['max_similarity']:.3f}")
+            if live_agent_id and server_state.agent_manager:
+                try:
+                    await server_state.agent_manager.terminate_agent(live_agent_id)
+                    logger.warning(f"Terminated agent {live_agent_id} for duplicated task {task_id} (superseded by {duplicate_info['duplicate_of']})")
+                except Exception as e:
+                    logger.error(f"Failed to terminate agent {live_agent_id} for duplicated task {task_id}: {e}")
             return True
 
         await server_state.task_similarity_service.store_task_embedding(

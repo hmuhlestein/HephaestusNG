@@ -48,13 +48,65 @@ def create_feature_folder(project_path: Path, design_name: str, logger: "Orchest
     return feature_folder
 
 
-def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
-    # Store in .hephaestus/ context, not docs/, so the design doc doesn't
-    # appear as a pipeline artifact in the UI's docs listing.
-    dest = feature_folder / CONTEXT_DIR_NAME / design_entry.path.name
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(design_entry.path, dest)
+def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directory: bool) -> Path:
+    """Shared copy primitive behind copy_design_source and every call site
+    that only has a raw path (not a DesignEntry) available -- e.g.
+    run_single_workflow, which only has launch_params["design_document"].
+
+    File case: copies source to heph_dir / filename. Directory case:
+    recursively copies the entire tree to heph_dir / "specs" / source.name,
+    replacing any existing destination wholesale (rmtree + copytree) rather
+    than merging, so a file deleted from the source between runs does not
+    silently survive at the destination.
+    """
+    heph_dir.mkdir(parents=True, exist_ok=True)
+    if is_directory:
+        dest = heph_dir / "specs" / source.name
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(source, dest)
+        return dest
+    dest = heph_dir / filename
+    shutil.copy2(source, dest)
     return dest
+
+
+def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str = "design.md") -> Path:
+    """Copy design_entry's source content into heph_dir (a .hephaestus/-
+    style directory -- a worktree's own .hephaestus/, or a permanent
+    designs_folder). Single consolidated implementation for both design
+    sources (REQ-08), replacing the previously-independent inline
+    shutil.copy2 call sites.
+
+    File-sourced (design_entry.source_dir is None): copies design_entry.path
+    to heph_dir / filename (default "design.md"); callers that need the
+    original filename preserved (e.g. the permanent designs_folder archive
+    copy) pass filename=design_entry.path.name explicitly. Returns that
+    dest path.
+
+    Directory-sourced (design_entry.source_dir is not None): recursively
+    copies the ENTIRE Spec Kit feature directory tree to
+    heph_dir / "specs" / source_dir.name, preserving every file/subdirectory
+    present (spec.md, plan.md, tasks.md, data-model.md, contracts/,
+    research.md, quickstart.md, checklists/). `filename` is ignored in this
+    branch. Returns that directory's path.
+
+    Raises:
+        FileNotFoundError: design_entry.path (file-sourced) or
+            design_entry.source_dir (directory-sourced) does not exist.
+    """
+    is_directory = design_entry.source_dir is not None
+    source = design_entry.source_dir if is_directory else design_entry.path
+    return _copy_design_content(source, heph_dir, filename, is_directory)
+
+
+def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
+    """Unchanged public behavior (REQ-08: 'preserved exactly') -- now a
+    thin wrapper over copy_design_source so the feature_folder call site
+    also gets directory-sourced support for free."""
+    heph_dir = feature_folder / CONTEXT_DIR_NAME
+    filename = design_entry.source_dir.name if design_entry.source_dir else design_entry.path.name
+    return copy_design_source(design_entry, heph_dir, filename=filename)
 
 
 def _create_integration_worktree(

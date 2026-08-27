@@ -907,6 +907,60 @@ def migrate_project_repos_table(engine):
     except Exception as e:
         logger.warning(f"project_repos primary backfill failed: {e}")
 
+def migrate_speckit_design_columns(engine):
+    """Add AutopilotDesign.repo_id/source_dir and
+    AutopilotProject.speckit_autoscan_enabled for existing databases.
+
+    Also relaxes autopilot_designs.filename to nullable: a Spec-Kit
+    directory-sourced design has no single filename (source_dir is set
+    instead, mutually exclusive per NFR-02), but the column has carried a
+    NOT NULL constraint since it was first created. SQLite has no ALTER
+    COLUMN, so dropping that constraint requires the standard rebuild-and-
+    swap: copy rows into a freshly created table (built from the current,
+    already-nullable model) under a temp name, drop the old table, rename.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN repo_id VARCHAR"))
+            except Exception:
+                pass  # Column already exists
+            try:
+                conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN source_dir TEXT"))
+            except Exception:
+                pass  # Column already exists
+            try:
+                conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN speckit_autoscan_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated speckit design columns")
+    except Exception as e:
+        logger.warning(f"speckit design columns migration failed (not just 'already exists' -- check this): {e}")
+
+    try:
+        with engine.connect() as conn:
+            info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+            filename_col = next((row for row in info if row[1] == "filename"), None)
+            if filename_col is None or filename_col[3] == 0:
+                return  # table missing (fresh DB, handled by create_all) or already nullable
+            col_list = ", ".join(row[1] for row in info)
+            conn.execute(text("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old"))
+            conn.commit()
+
+        from src.core.database import AutopilotDesign
+
+        AutopilotDesign.__table__.create(engine)
+        with engine.connect() as conn:
+            conn.execute(text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old"))
+            conn.execute(text("DROP TABLE autopilot_designs_old"))
+            conn.commit()
+            logger.info("Rebuilt autopilot_designs with nullable filename")
+    except Exception as e:
+        logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
+
 
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
@@ -938,4 +992,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_project_repos_table", migrate_project_repos_table),
     ("_migrate_autopilot_designs_archived_at_column", migrate_autopilot_designs_archived_at_column),
     ("_migrate_speckit_auto_scan_column", migrate_speckit_auto_scan_column),
+    ("_migrate_speckit_design_columns", migrate_speckit_design_columns),
 ]
