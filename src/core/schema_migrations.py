@@ -941,28 +941,52 @@ def migrate_speckit_design_columns(engine):
     try:
         raw_conn.isolation_level = None
         cur = raw_conn.cursor()
-        cur.execute("BEGIN IMMEDIATE")
+        # This connection has PRAGMA foreign_keys=ON (DatabaseManager sets it on
+        # every connect). SQLite's ALTER TABLE RENAME auto-updates OTHER tables'
+        # foreign key definitions to follow the renamed table (documented
+        # behavior since 3.25.0) -- so the moment autopilot_designs is renamed
+        # to autopilot_designs_old, features.design_id (and every other FK
+        # referencing autopilot_designs) starts pointing at *_old, and the
+        # later `DROP TABLE autopilot_designs_old` fails with "FOREIGN KEY
+        # constraint failed" as long as any child rows exist. PRAGMA
+        # foreign_keys can only be changed outside an active transaction, so
+        # it must be turned off here, before BEGIN, and restored after COMMIT/
+        # ROLLBACK -- before this raw connection goes back to the pool, where
+        # other code relies on it being on.
+        cur.execute("PRAGMA foreign_keys=OFF")
         try:
-            info = cur.execute("PRAGMA table_info(autopilot_designs)").fetchall()
-            filename_col = next((row for row in info if row[1] == "filename"), None)
-            if filename_col is None or filename_col[3] == 0:
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                info = cur.execute("PRAGMA table_info(autopilot_designs)").fetchall()
+                filename_col = next((row for row in info if row[1] == "filename"), None)
+                if filename_col is None or filename_col[3] == 0:
+                    cur.execute("ROLLBACK")
+                    return  # table missing (fresh DB, handled by create_all) or already nullable
+                col_list = ", ".join(row[1] for row in info)
+                cur.execute("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old")
+
+                from sqlalchemy.schema import CreateTable
+
+                from src.core.database import AutopilotDesign
+
+                cur.execute(str(CreateTable(AutopilotDesign.__table__).compile(engine)))
+                cur.execute(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
+                cur.execute("DROP TABLE autopilot_designs_old")
+                # foreign_key_check runs even with enforcement off -- catch a
+                # genuinely broken reference (there shouldn't be one: nothing
+                # here changes any row's actual FK column values) before
+                # committing, rather than silently re-enabling enforcement
+                # over already-inconsistent data.
+                violations = cur.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    raise RuntimeError(f"foreign_key_check found violations after rebuild: {violations}")
+                cur.execute("COMMIT")
+                logger.info("Rebuilt autopilot_designs with nullable filename")
+            except Exception:
                 cur.execute("ROLLBACK")
-                return  # table missing (fresh DB, handled by create_all) or already nullable
-            col_list = ", ".join(row[1] for row in info)
-            cur.execute("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old")
-
-            from sqlalchemy.schema import CreateTable
-
-            from src.core.database import AutopilotDesign
-
-            cur.execute(str(CreateTable(AutopilotDesign.__table__).compile(engine)))
-            cur.execute(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
-            cur.execute("DROP TABLE autopilot_designs_old")
-            cur.execute("COMMIT")
-            logger.info("Rebuilt autopilot_designs with nullable filename")
-        except Exception:
-            cur.execute("ROLLBACK")
-            raise
+                raise
+        finally:
+            cur.execute("PRAGMA foreign_keys=ON")
     except Exception as e:
         logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
     finally:
