@@ -191,13 +191,23 @@ class TestTerminationRaceRevertsStaleTaskMutation:
     async def test_task_reassigned_mid_launch_reverts_in_memory_task(
         self, db_manager, launch_pipeline
     ):
-        """The other abort trigger: the task was reassigned to a different
-        agent (or went terminal) while this launch was mid-flight."""
+        """The other abort trigger: the task was reassigned to a different,
+        still-live agent (or went terminal) while this launch was
+        mid-flight -- see test_termination_race_ignores_stale_dead_agent_id
+        below for the sibling case, a mismatched assigned_agent_id that
+        does NOT belong to a live agent."""
         other_agent_id = str(uuid.uuid4())
         task_id, agent_id = _seed(
             db_manager, agent_status="working", task_status="in_progress",
             assigned_agent_id=other_agent_id,
         )
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id=other_agent_id, system_prompt="p", status="working",
+                    cli_type="claude",
+                )
+            )
 
         stale_task = Task(id=task_id)
         stale_task.assigned_agent_id = agent_id
@@ -216,6 +226,52 @@ class TestTerminationRaceRevertsStaleTaskMutation:
             "in-memory task still points at the aborted agent, not the "
             "one it was actually reassigned to"
         )
+
+    @pytest.mark.asyncio
+    async def test_ignores_a_stale_assigned_agent_id_pointing_at_a_dead_agent(
+        self, db_manager, launch_pipeline
+    ):
+        """The actual bug: _run_done_hard_floor_checks (a rejected 'done'
+        claim, e.g. wrong output filename) never clears
+        Task.assigned_agent_id -- by design, so the SAME agent can retry in
+        place. If that agent instead dies without retrying, the stale
+        assigned_agent_id is left pointing at a now-terminated agent
+        forever. Every later dispatch attempt for this task (a fresh
+        agent, its own id necessarily different) must not read that stale
+        mismatch as "reassigned to a live competitor" and abort. Observed
+        live: task a12d727b's dispatch aborted this way across four
+        separate attempts spanning two days, all blocked by one dead
+        agent's leftover assigned_agent_id."""
+        dead_agent_id = str(uuid.uuid4())
+        task_id, agent_id = _seed(
+            db_manager, agent_status="working", task_status="pending",
+            assigned_agent_id=dead_agent_id,
+        )
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id=dead_agent_id, system_prompt="p", status="terminated",
+                    cli_type="claude",
+                )
+            )
+
+        stale_task = Task(id=task_id)
+        stale_task.assigned_agent_id = agent_id
+        stale_task.status = "in_progress"
+        marker = datetime.utcnow()
+        stale_task.started_at = marker
+
+        launch_pipeline._agent_manager.tmux_server.has_session.return_value = False
+
+        result = await launch_pipeline._check_termination_race(
+            agent_id, task_id, "some-session", agent_id_to_return=agent_id,
+            task=stale_task,
+        )
+
+        assert result is None, "a stale assigned_agent_id pointing at a dead agent must not abort a fresh dispatch"
+        assert stale_task.status == "in_progress"
+        assert stale_task.assigned_agent_id == agent_id
+        assert stale_task.started_at == marker
 
     @pytest.mark.asyncio
     async def test_no_race_leaves_task_untouched(self, db_manager, launch_pipeline):
