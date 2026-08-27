@@ -315,18 +315,20 @@ def _sync_speckit_designs(db, project) -> None:
 
     Each feature is synced in its own try/except + commit so one feature's
     failure (including a race against a concurrent writer) never discards
-    another feature's already-staged row in the same call (REQ-09). Only
-    expected, transient DB/IO errors (IntegrityError, OperationalError,
-    OSError) are caught and rolled back here -- pick_next_design makes no
-    writes of its own before this call runs, so a rollback at this point
-    can only undo THIS feature's own not-yet-committed insert/update,
-    never a sibling feature's already-`db.commit()`-ed row (committed
-    transactions are durable) or a caller write from outside this
-    function. A genuine programming error (anything else) is logged at
-    ERROR with a traceback and re-raised rather than silently swallowed
-    as if it were one more transient sync failure (adversarial review
-    BLOCKER: broad `except Exception` here previously masked bugs as
-    routine WARNING-level noise).
+    another feature's already-staged row in the same call (REQ-09). An
+    unreadable/vanished spec.md is skipped via a dedicated OSError catch
+    around the read (no DB write attempted yet, nothing to roll back).
+    Once a DB write is attempted, only expected, transient errors
+    (IntegrityError, OperationalError) are caught and rolled back --
+    pick_next_design makes no writes of its own before this call runs, so
+    a rollback at this point can only undo THIS feature's own
+    not-yet-committed insert/update, never a sibling feature's already-
+    `db.commit()`-ed row (committed transactions are durable) or a caller
+    write from outside this function. A genuine programming error
+    (anything else) is logged at ERROR with a traceback and re-raised
+    rather than silently swallowed as if it were one more transient sync
+    failure (adversarial review BLOCKER: broad `except Exception` here
+    previously masked bugs as routine WARNING-level noise).
 
     Deliberately does NOT archive/clean up a pending row whose feature
     stops appearing in find_speckit_features's output (e.g. a renamed or

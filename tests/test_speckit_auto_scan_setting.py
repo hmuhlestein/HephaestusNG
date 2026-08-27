@@ -226,6 +226,20 @@ class TestSyncSpeckitDesigns:
         assert rows[0].content_hash != original_hash
         assert rows[0].modified_at > original_modified_at
 
+    def test_multiple_new_features_all_queued_in_one_call(self, db_session, project_with_repo):
+        proj, repo_path = project_with_repo
+        proj.speckit_auto_scan_enabled = True
+        db_session.commit()
+        _make_feature(repo_path, "001", "foo", plan=True)
+        _make_feature(repo_path, "002", "bar", plan=True)
+
+        _sync_speckit_designs(db_session, proj)
+
+        rows = db_session.query(AutopilotDesign).all()
+        assert len(rows) == 2
+        names = {r.name for r in rows}
+        assert names == {"001-foo", "002-bar"}
+
     def test_non_pending_row_never_refreshed_or_duplicated(self, db_session, project_with_repo):
         proj, repo_path = project_with_repo
         proj.speckit_auto_scan_enabled = True
@@ -267,6 +281,31 @@ class TestSyncSpeckitDesigns:
         rows = db_session.query(AutopilotDesign).all()
         assert len(rows) == 1
         assert "002-good" in rows[0].file_path
+
+    def test_db_commit_failure_isolated_and_logged_as_warning(self, db_session, project_with_repo):
+        proj, repo_path = project_with_repo
+        proj.speckit_auto_scan_enabled = True
+        db_session.commit()
+        _make_feature(repo_path, "001", "foo", plan=True)
+
+        from sqlalchemy.exc import IntegrityError
+
+        real_commit = db_session.commit
+        call_count = {"n": 0}
+
+        def flaky_commit():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise IntegrityError("simulated race", params=None, orig=Exception("dup"))
+            return real_commit()
+
+        with patch.object(db_session, "commit", side_effect=flaky_commit):
+            _sync_speckit_designs(db_session, proj)  # must not raise
+
+        # The failed insert must not have left a half-committed row, and the
+        # session must remain usable afterward (rollback recovered it).
+        assert db_session.query(AutopilotDesign).count() == 0
+        db_session.query(AutopilotDesign).all()  # would raise PendingRollbackError if session were broken
 
     def test_unexpected_error_propagates_instead_of_being_swallowed(self, db_session, project_with_repo):
         proj, repo_path = project_with_repo
