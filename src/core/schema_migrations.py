@@ -420,6 +420,23 @@ def migrate_autopilot_designs_archived_at_column(engine):
         logger.warning(f"autopilot_designs.archived_at migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_speckit_auto_scan_column(engine):
+    """Add autopilot_projects.speckit_auto_scan for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN speckit_auto_scan BOOLEAN NOT NULL DEFAULT 0"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated autopilot_projects.speckit_auto_scan column")
+    except Exception as e:
+        logger.warning(f"autopilot_projects.speckit_auto_scan migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_workflow_paused_by_column(engine):
     """Add workflows.paused_by for existing databases.
 
@@ -923,4 +940,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
     ("_migrate_project_repos_table", migrate_project_repos_table),
     ("_migrate_autopilot_designs_archived_at_column", migrate_autopilot_designs_archived_at_column),
+    ("_migrate_speckit_auto_scan_column", migrate_speckit_auto_scan_column),
 ]
