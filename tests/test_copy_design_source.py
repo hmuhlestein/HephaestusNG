@@ -106,6 +106,30 @@ class TestCopyDesignSourcePath:
         assert dest == tmp_path / "dest" / "specs" / "004-x"
         assert (dest / "spec.md").read_text() == "spec"
 
+    def test_directory_case_preserves_symlinks_does_not_follow_them(self, tmp_path):
+        """Security-review finding: a Spec Kit feature directory is
+        git-tracked and editable by anyone with repo write access. A
+        symlink inside it pointing outside the repo (e.g. to a
+        credentials file readable by the Hephaestus process user) must
+        not have its target's actual content copied into the
+        destination -- the symlink itself must be preserved instead.
+        """
+        outside_secret = tmp_path / "outside_secret.txt"
+        outside_secret.write_text("super secret content")
+
+        feature_dir = tmp_path / "specs" / "005-symlink"
+        feature_dir.mkdir(parents=True)
+        (feature_dir / "spec.md").write_text("spec")
+        (feature_dir / "linked-secret.txt").symlink_to(outside_secret)
+
+        dest = copy_design_source_path(feature_dir, tmp_path / "dest", "design.md", is_directory=True)
+
+        copied_link = dest / "linked-secret.txt"
+        assert copied_link.is_symlink()
+        # The link target is preserved as a path, not dereferenced into a
+        # plain file at copy time.
+        assert copied_link.readlink() == outside_secret
+
 
 class TestCopyDesignDocumentWrapper:
     def test_file_sourced_preserved_exactly(self, tmp_path):

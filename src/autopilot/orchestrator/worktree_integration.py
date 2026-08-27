@@ -60,7 +60,13 @@ def copy_design_source_path(source: Path, heph_dir: Path, filename: str, is_dire
     recursively copies the entire tree to heph_dir / "specs" / source.name,
     replacing any existing destination wholesale (rmtree + copytree) rather
     than merging, so a file deleted from the source between runs does not
-    silently survive at the destination.
+    silently survive at the destination. Symlinks within the source tree
+    are preserved as symlinks (symlinks=True), not followed -- a Spec Kit
+    feature directory is git-tracked and editable by anyone with repo
+    write access; without this, a symlink pointing outside the repo (e.g.
+    to a credentials file readable by the Hephaestus process user) would
+    have its target's actual content copied into the worktree and the
+    permanent designs_folder, both later read by development-phase agents.
     """
     heph_dir.mkdir(parents=True, exist_ok=True)
     if is_directory:
@@ -75,7 +81,7 @@ def copy_design_source_path(source: Path, heph_dir: Path, filename: str, is_dire
                 shutil.rmtree(dest)
             else:
                 dest.unlink()
-        shutil.copytree(source, dest)
+        shutil.copytree(source, dest, symlinks=True)
         return dest
     dest = heph_dir / filename
     shutil.copy2(source, dest)
