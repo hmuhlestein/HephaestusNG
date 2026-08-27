@@ -304,6 +304,131 @@ def _archived_design_for_workflow(workflow_id: str):
         return design if design and design.archived_at else None
 
 
+def _sync_speckit_designs(db, project) -> None:
+    """Fold ready specs/<NNN>-<name>/ Spec Kit features into pending
+    AutopilotDesign rows, gated on project.speckit_auto_scan_enabled.
+
+    No-op (REQ-06) unless the flag is set. Reuses find_speckit_features for
+    all directory/readiness parsing (REQ-10, NFR-04) -- this function only
+    decides which already-detected features become queue entries.
+
+    Dedup key is (project_id, filename), the ACTUAL unique constraint on
+    AutopilotDesign (uq_design_project_filename, src/core/database.py:1358)
+    -- not content_hash, which is nullable and NOT unique, and which drifts
+    every time a user edits spec.md (e.g. resolving a [NEEDS CLARIFICATION]
+    marker) before the row is picked up. Looking up by content_hash would
+    fail to find the existing row after such an edit and attempt a second
+    insert with the same filename, raising IntegrityError on
+    uq_design_project_filename -- permanently, since every subsequent scan
+    repeats the same stale-hash miss.
+
+    Each feature is synced in its own try/except + commit so one feature's
+    failure (including a race against a concurrent writer) never discards
+    another feature's already-staged row in the same call (REQ-09).
+
+    Deliberately does NOT archive/clean up a pending row whose feature
+    stops appearing in find_speckit_features's output (e.g. a renamed or
+    deleted specs/<NNN>-<name>/ directory) -- find_speckit_features's own
+    is_dir() check and a plain Path.exists() call both silently swallow
+    OSError and return False on a transient filesystem/mount hiccup, not
+    just on genuine deletion, so archiving on absence could permanently
+    hide a legitimately pending, ready feature. No REQ-XX requires
+    rename/orphan detection.
+    """
+    if not getattr(project, "speckit_auto_scan_enabled", False):
+        return
+    from src.core.speckit_detection import find_speckit_features
+    from src.autopilot.orchestrator.engine_client import file_hash
+    from src.core.database import AutopilotDesign, utc_now
+
+    try:
+        features = find_speckit_features(db, project.id)
+    except Exception as e:
+        logger.warning(f"[SPECKIT-AUTOSCAN] detection failed for project {project.id[:8]}: {e}")
+        return
+
+    for feat in features:
+        if not feat.has_plan:  # REQ-07
+            continue
+        spec_path = feat.dir_path / "spec.md"
+        if not spec_path.exists():
+            continue
+
+        filename = f"speckit/{feat.repo_label}/{feat.number}-{feat.slug}.md"
+
+        try:
+            content_hash = file_hash(spec_path)
+        except OSError as e:
+            logger.warning(f"[SPECKIT-AUTOSCAN] cannot hash {spec_path}: {e}")
+            continue
+
+        try:
+            # REQ-08 dedup key: (project_id, filename) -- the real unique
+            # constraint. content_hash is compared only to decide whether an
+            # existing PENDING row needs its snapshot refreshed, never used
+            # as the existence check itself.
+            existing = (
+                db.query(AutopilotDesign)
+                .filter_by(project_id=project.id, filename=filename)
+                .first()
+            )
+            if existing:
+                if existing.status != "pending":
+                    # Already processing/active/completed/failed/skipped --
+                    # REQ-08: never re-queue or double-build.
+                    continue
+                if existing.content_hash != content_hash:
+                    # spec.md was edited before pickup -- refresh the
+                    # snapshot in place rather than silently building the
+                    # stale version or attempting a duplicate insert.
+                    existing.content_hash = content_hash
+                    existing.size_bytes = spec_path.stat().st_size
+                    existing.modified_at = utc_now()
+                    db.commit()
+                    logger.info(
+                        f"[SPECKIT-AUTOSCAN] refreshed pending design {existing.id[:8]} "
+                        f"for {feat.dir_name!r} (spec.md changed before pickup)"
+                    )
+                continue
+
+            from sqlalchemy import func
+            import uuid as _uuid
+
+            max_ordinal = (
+                db.query(func.max(AutopilotDesign.ordinal))
+                .filter_by(project_id=project.id)
+                .scalar()
+                or 0
+            )
+            design = AutopilotDesign(
+                id=f"des-{_uuid.uuid4().hex[:12]}",
+                project_id=project.id,
+                filename=filename,
+                name=f"{feat.number}-{feat.slug}",
+                ordinal=max_ordinal + 1,
+                size_bytes=spec_path.stat().st_size,
+                extension=".md",
+                content_hash=content_hash,
+                file_path=str(spec_path),
+                status="pending",
+                workflow_type="feature",
+            )
+            db.add(design)
+            db.commit()
+            logger.info(
+                f"[SPECKIT-AUTOSCAN] queued Spec Kit feature {feat.dir_name!r} "
+                f"(repo={feat.repo_label}) as design {design.id[:8]}"
+            )
+        except Exception as e:
+            # Isolate this feature's failure from every other feature in
+            # this same sync pass (REQ-09) -- a failure here must not
+            # discard rows already committed for sibling features above,
+            # and must not abort the scan for features still to come below.
+            db.rollback()
+            logger.warning(f"[SPECKIT-AUTOSCAN] failed to sync {feat.dir_name!r}: {e}")
+            continue
+
+
 def pick_next_design(
     queue_dir: Path,
     processed_hashes: Set[str],
@@ -345,6 +470,8 @@ def pick_next_design(
             if not project:
                 logger.info("pick_next_design: no active project found")
                 return None
+
+            _sync_speckit_designs(db, project)  # REQ-05/06/07/08/09
 
             # Budget guard: skip project entirely if over budget
             from src.core.cost_derivation import check_budget_before_new_work

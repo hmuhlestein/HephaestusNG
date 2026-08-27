@@ -378,6 +378,7 @@ class PipelineStatus(BaseModel):
     running_projects: List[Dict[str, Any]] = Field(default_factory=list)
     # Review mode
     review_mode: bool = False
+    speckit_auto_scan_enabled: bool = False
     features_awaiting_review: int = 0
 
 class MessageItem(BaseModel):

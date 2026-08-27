@@ -55,6 +55,26 @@ async def set_review_mode(project_id: str, req: ReviewModeUpdate):
     _invalidate("status")
     return {"review_mode": req.review_mode}
 
+
+class SpeckitAutoScanUpdate(BaseModel):
+    speckit_auto_scan_enabled: bool
+
+@router.patch("/projects/{project_id}/speckit-auto-scan")
+async def set_speckit_auto_scan(project_id: str, req: SpeckitAutoScanUpdate):
+    """Toggle automatic Spec Kit feature scanning for a project. When
+    enabled, ready (has_plan=True) specs/<NNN>-<name>/ features are queued
+    and built automatically on the next design-queue scan."""
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Project not found")
+        proj.speckit_auto_scan_enabled = req.speckit_auto_scan_enabled
+        db.commit()
+    _invalidate("status")
+    return {"speckit_auto_scan_enabled": req.speckit_auto_scan_enabled}
+
 async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewRequest):
     """Approve or request changes for a Phase 0 (Feature Architect) decomposition.
 
