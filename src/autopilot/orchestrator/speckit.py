@@ -117,6 +117,20 @@ def _scan_one_repo(specs_root: Path, repo_id: Optional[str], repo_label: Optiona
     return features
 
 
+def speckit_feature_dir_for_path(spec_path: Path) -> Optional[Path]:
+    """If spec_path IS a Spec Kit feature's spec.md (basename "spec.md",
+    parent dir matching Spec Kit's <NNN>-<name> convention), return that
+    parent dir; else None. Lets any code path that only has a plain file
+    path on hand (e.g. an AutopilotDesign.file_path from the existing
+    manual file-browser flow, REQ-03) recognize a Spec Kit selection
+    without needing its own SpecKitFeature/discovery machinery."""
+    if spec_path.name != "spec.md":
+        return None
+    if not _DIR_NAME_RE.match(spec_path.parent.name):
+        return None
+    return spec_path.parent
+
+
 def _sort_key(feature: SpecKitFeature):
     return (feature.repo_label or "", int(feature.number) if feature.number.isdigit() else feature.number)
 

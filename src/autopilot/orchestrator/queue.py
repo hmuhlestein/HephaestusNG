@@ -585,12 +585,20 @@ def pick_next_design(
                     design_path = Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
 
                 if design_path.exists():
+                    from src.autopilot.orchestrator.speckit import speckit_feature_dir_for_path
+
                     entry = DesignEntry(
                         path=design_path,
                         name=design.name,
                         content_hash=design.content_hash or file_hash(design_path),
                         db_id=design.id,
                         file_path=str(design_path),
+                        # REQ-03: a design row whose file_path was set to a
+                        # Spec Kit spec.md (e.g. via the manual "load
+                        # design" file-browser flow selecting one) must
+                        # still get plan.md/tasks.md/contracts/ copied into
+                        # the worktree, not just spec.md's bytes.
+                        speckit_feature_dir=speckit_feature_dir_for_path(design_path),
                     )
                     logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
                     return entry
