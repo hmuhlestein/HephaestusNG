@@ -713,6 +713,20 @@ def migrate_review_mode_columns(engine):
         logger.warning(f"Review mode columns migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_speckit_auto_scan_column(engine):
+    """Add speckit_auto_scan_enabled to autopilot_projects (REQ-01)."""
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN speckit_auto_scan_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated speckit_auto_scan_enabled column")
+    except Exception as e:
+        logger.warning(f"speckit_auto_scan_enabled migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_agent_pending_message_column(engine):
     """Add agents.pending_message_sent_at for existing databases.
 
@@ -977,5 +991,6 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
     ("_migrate_project_repos_table", migrate_project_repos_table),
     ("_migrate_autopilot_designs_archived_at_column", migrate_autopilot_designs_archived_at_column),
+    ("_migrate_speckit_auto_scan_column", migrate_speckit_auto_scan_column),
     ("_migrate_speckit_design_columns", migrate_speckit_design_columns),
 ]

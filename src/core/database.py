@@ -5,7 +5,6 @@ import os
 import threading
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from sqlalchemy import (
@@ -1160,6 +1159,10 @@ class AutopilotProject(Base):
     # and waits for the user to approve or request changes before continuing.
     review_mode = Column(Boolean, default=False, nullable=False)
 
+    # Spec Kit auto-scan: when True, the design-queue scan also auto-queues
+    # ready (has_plan=True) specs/<NNN>-<name>/ Spec Kit feature directories.
+    speckit_auto_scan_enabled = Column(Boolean, default=False, nullable=False)
+
     # Opt-in: when True, the design-queue scan (scan_design_queue) auto-queues
     # detected Spec Kit specs/<NNN>-<name>/ features for a build. Detection
     # itself (find_speckit_features) is unconditional -- this only gates
@@ -1292,7 +1295,7 @@ class Feature(Base):
         nullable=True,
         default=None,
     )
-    review_feedback = Column(Text, nullable=True)   # user's change-request text
+    review_feedback = Column(Text, nullable=True)  # user's change-request text
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(100), nullable=True, default=None)
 
@@ -1680,9 +1683,7 @@ class DatabaseManager:
                 if session.query(SchemaMigration).filter_by(id=migration_id).first():
                     return
         except Exception as e:
-            logger.warning(
-                f"Could not check schema_migrations for {migration_id}, running it anyway: {e}"
-            )
+            logger.warning(f"Could not check schema_migrations for {migration_id}, running it anyway: {e}")
 
         try:
             fn()
@@ -1761,6 +1762,7 @@ def utc_now() -> datetime:
     comparison raises TypeError.
     """
     from datetime import timezone
+
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
