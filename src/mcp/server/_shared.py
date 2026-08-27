@@ -92,6 +92,7 @@ def _resolve_worktree_path(session, task) -> Optional[str]:
             return wf.working_directory
     return None
 
+
 def _resolve_worktree_head_sha(session, task) -> Optional[str]:
     """Current git HEAD commit of the worktree the task's agent is working
     in, for self-review telemetry (see docs/GAP_CHECK_SELF_LOOP_DESIGN.md).
@@ -105,7 +106,6 @@ def _resolve_worktree_head_sha(session, task) -> Optional[str]:
     except Exception as e:
         logger.debug(f"[SELF-REVIEW] Could not read worktree HEAD for task {task.id[:8]}: {e}")
         return None
-
 
 
 # Initialize FastAPI app
@@ -135,13 +135,14 @@ if config.server.enable_cors:
         _config = get_config()
         _frontend_port = _config.server.frontend_port
         _backend_port = _config.server.mcp_port
-        _cors_origins = [f"http://localhost:{_frontend_port}",
-                         "http://localhost:3000",
-                         f"http://localhost:{_backend_port}",
-                         f"http://127.0.0.1:{_frontend_port}",
-                         "http://127.0.0.1:3000",
-                         f"http://127.0.0.1:{_backend_port}",
-                         ]
+        _cors_origins = [
+            f"http://localhost:{_frontend_port}",
+            "http://localhost:3000",
+            f"http://localhost:{_backend_port}",
+            f"http://127.0.0.1:{_frontend_port}",
+            "http://127.0.0.1:3000",
+            f"http://127.0.0.1:{_backend_port}",
+        ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
@@ -158,7 +159,6 @@ app.include_router(memory_router)
 
 
 # Request/Response Models
-
 
 
 class CreateTaskRequest(BaseModel):
@@ -204,6 +204,7 @@ class CreateTaskRequest(BaseModel):
         # Return the stripped value (trimmed)
         return stripped if stripped else v
 
+
 class CreateTaskResponse(BaseModel):
     """Response model for task creation."""
 
@@ -212,6 +213,7 @@ class CreateTaskResponse(BaseModel):
     assigned_agent_id: str
     estimated_completion_time: int  # minutes
     status: str
+
 
 class UpdateTaskStatusRequest(BaseModel):
     """Request model for updating task status."""
@@ -227,12 +229,14 @@ class UpdateTaskStatusRequest(BaseModel):
         description="Optional structured data (verdict, counts, etc.) — folded into summary",
     )
 
+
 class UpdateTaskStatusResponse(BaseModel):
     """Response model for task status update."""
 
     success: bool
     message: str
     termination_scheduled: bool
+
 
 class RegisterWorkflowDefinitionRequest(BaseModel):
     """Request model for registering a workflow definition."""
@@ -242,6 +246,7 @@ class RegisterWorkflowDefinitionRequest(BaseModel):
     description: str = Field(default="", description="Description of the workflow")
     phases_config: List[Dict[str, Any]] = Field(..., description="Phase configurations")
     workflow_config: Optional[Dict[str, Any]] = Field(default=None, description="Workflow configuration")
+
 
 class StartWorkflowRequest(BaseModel):
     """Request model for starting a workflow execution."""
@@ -257,6 +262,7 @@ class StartWorkflowRequest(BaseModel):
         default=None,
         description="autopilot_designs.id that spawned this execution (§9.7)",
     )
+
 
 class ServerState:
     """Global server state."""
@@ -374,9 +380,7 @@ class ServerState:
                 # store_memory call fail silently later (see the
                 # function's own docstring -- every current caller
                 # swallows that per-call ValueError).
-                validate_embedding_dimension_compatibility(
-                    self.vector_store, self.embedding_service.get_dim()
-                )
+                validate_embedding_dimension_compatibility(self.vector_store, self.embedding_service.get_dim())
                 # Share the same embedding provider instance with TicketSearchService
                 # instead of letting it create its own separate model load.
                 TicketSearchService._embedding_provider = self.embedding_service
@@ -427,7 +431,6 @@ class ServerState:
         return await self._broadcaster.broadcast_update(message, project_id, project_name)
 
 
-
 # Initialize server state
 
 server_state = ServerState()
@@ -468,6 +471,7 @@ __all__ = [
     "is_sdk_or_root_agent",
 ]
 
+
 async def verify_agent_authentication(agent_id: str) -> bool:
     """Verify agent is authenticated and authorized.
 
@@ -503,13 +507,18 @@ async def verify_agent_authentication(agent_id: str) -> bool:
             session = server_state.db_manager.get_session()
             try:
                 agent = session.query(Agent).filter_by(id=agent_id).first()
-                if agent and agent.status in ["idle", "working", "starting"]:
-                    # Agent exists and is active - trusted
+                if agent:
+                    # Agent exists in DB — authenticated. Allow "terminated"
+                    # status too because per-endpoint authorization (e.g.
+                    # _authorize_agent_for_task) already controls which actions
+                    # terminated-status agents may take, and rejecting here
+                    # prevented agents whose tmux session survived a server
+                    # restart (while agent status was flipped to "terminated"
+                    # by mechanical_recovery) from reporting any task
+                    # completion/status update at all — observed with 9+
+                    # agents hitting "Agent not authenticated" on
+                    # update_task_status/complete_my_task after backend restart.
                     return True
-                elif agent and agent.status == "terminated":
-                    # Agent was terminated - reject (not a visibility race, no retry)
-                    logger.warning(f"Rejected terminated agent: {agent_id[:8]}")
-                    return False
                 elif attempt == 0:
                     # Possibly a transient cross-thread commit-visibility race —
                     # retry once before rejecting as genuinely unknown.
@@ -526,6 +535,7 @@ async def verify_agent_authentication(agent_id: str) -> bool:
             logger.error(f"Agent auth check failed: {e}")
             return False
     return False
+
 
 def _git_expert_already_landed(session, task, config) -> bool:
     """Check whether a git_expert task's actual git work (commit +
@@ -563,7 +573,10 @@ def _git_expert_already_landed(session, task, config) -> bool:
 
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=wd, capture_output=True, text=True, timeout=10,
+            cwd=wd,
+            capture_output=True,
+            text=True,
+            timeout=10,
         ).stdout.strip()
         if not branch or branch == "HEAD":
             return False
@@ -572,11 +585,14 @@ def _git_expert_already_landed(session, task, config) -> bool:
         base_repo = Path(wd).parent.parent
         result = subprocess.run(
             ["git", "merge-base", "--is-ancestor", branch, config.git.base_branch],
-            cwd=base_repo, capture_output=True, timeout=10,
+            cwd=base_repo,
+            capture_output=True,
+            timeout=10,
         )
         return result.returncode == 0
     except Exception:
         return False
+
 
 def _tmux_session_alive(session_name: str) -> bool:
     """True if the named tmux session currently exists."""
@@ -589,6 +605,7 @@ def _tmux_session_alive(session_name: str) -> bool:
         return r.returncode == 0
     except Exception:
         return False
+
 
 def _build_phase_dict(phase) -> dict:
     """Serialize a source sdk.models.Phase into the dict form stored in
@@ -629,6 +646,7 @@ def _build_phase_dict(phase) -> dict:
         phase_dict["thinking_level"] = phase.thinking_level
     return phase_dict
 
+
 def _touch_agent_activity(agent_id: str) -> None:
     """Update agent's last_activity timestamp (best-effort, never raises)."""
     try:
@@ -638,13 +656,13 @@ def _touch_agent_activity(agent_id: str) -> None:
 
             agent = session.query(Agent).filter_by(id=agent_id).first()
             if agent:
-
                 agent.last_activity = utc_now()
                 session.commit()
         finally:
             session.close()
     except Exception:
         pass  # non-critical
+
 
 def _resolve_agent_current_phase(agent_id: str, workflow_id: str) -> Optional[str]:
     """Resolve the agent's current phase ID from their assigned task.
