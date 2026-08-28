@@ -1372,7 +1372,10 @@ class AutopilotDesign(Base):
     project = relationship("AutopilotProject", back_populates="designs")
     features = relationship("Feature", back_populates="design", cascade="all, delete-orphan")
 
-    __table_args__ = (UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+        UniqueConstraint("project_id", "source_dir", name="uq_design_project_source_dir"),
+    )
 
 
 class PhasePromptVersion(Base):
