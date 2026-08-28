@@ -2053,6 +2053,95 @@ class TestCaseInProgressComplete:
                 mock_release.assert_called_once_with(session, "phase-1")
 
 
+class TestCaseInProgressCompleteResolvesDoneArbitrationInstead:
+    """Regression, observed live (workflow e9019930, phase design_review):
+    when a phase's most recent task is a DONE arbitration decision that
+    hasn't been consumed yet, _case_in_progress_complete used to fall
+    through to the generic "phase complete, evaluate transition" path --
+    which has no idea the "done" task it's looking at is itself an
+    arbitration attempt, so it just recomputes "retry budget exhausted"
+    fresh and requests a BRAND NEW arbitration for the exact question the
+    first one just answered. fire_spec_gate_if_ready already has an
+    equivalent guard for the event-driven path (see its own docstring,
+    prior incident workflow ca539a75) -- this is the periodic-sweep
+    sibling of that fix. Without it, whichever path's sweep tick lands
+    first wins the race, and the two can duplicate arbitration agents
+    indefinitely until MAX_ARBITRATIONS_PER_PHASE forces a resolution."""
+
+    def test_resolves_arbitration_instead_of_re_firing_the_gate(
+        self, db_manager, sample_workflow
+    ):
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-arb-done",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="Arbitrate stuck phase: requirements",
+                    done_definition="d",
+                    status="done",
+                    created_by_agent_id=ARBITRATION_CREATED_BY,
+                )
+            )
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions._maybe_resolve_arbitration"
+        ) as mock_resolve, patch(
+            "src.autopilot.orchestrator.phase_transitions._fire_phase_transition"
+        ) as mock_fire:
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        mock_resolve.assert_called_once_with("wf-1", ANY)
+        mock_fire.assert_not_called()
+
+    def test_still_running_arbitration_task_is_untouched(self, db_manager, sample_workflow):
+        """The companion case: an arbitration task that's still pending/
+        in_progress must keep hitting the pre-existing "has active tasks"
+        skip (incomplete > 0), not this new branch -- it's not done yet,
+        there's nothing to resolve."""
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-arb-running",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="Arbitrate stuck phase: requirements",
+                    done_definition="d",
+                    status="in_progress",
+                    created_by_agent_id=ARBITRATION_CREATED_BY,
+                )
+            )
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions._maybe_resolve_arbitration"
+        ) as mock_resolve, patch(
+            "src.autopilot.orchestrator.phase_transitions._fire_phase_transition"
+        ) as mock_fire:
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is None
+        mock_resolve.assert_not_called()
+        mock_fire.assert_not_called()
+
+
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check
     only ever sees phases already "in_progress" -- but a phase whose claim
