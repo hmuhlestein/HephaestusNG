@@ -402,3 +402,77 @@ def test_migrate_speckit_design_source_dir_unique_resumes_after_interrupted_rebu
             assert [r[0] for r in rows] == ["des-crash-1"]
 
         engine.dispose()
+
+
+def test_migrate_speckit_design_source_dir_unique_resumes_when_new_table_already_created():
+    """A different crash point than the test above: the process died AFTER
+    the CREATE that restores autopilot_designs (with the new constraint) but
+    BEFORE the INSERT/DROP that copies rows over and removes the old table.
+    Both tables coexist -- the migration must not try to CREATE again (which
+    would raise "table already exists") and must still copy the stranded
+    rows across and clean up the leftover table."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+
+        from sqlalchemy import MetaData, Table, UniqueConstraint
+        from sqlalchemy.orm import sessionmaker
+
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.schema_migrations import migrate_speckit_design_source_dir_unique
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        AutopilotProject.__table__.create(engine)
+
+        old_cols = [c.copy() for c in AutopilotDesign.__table__.columns]
+        meta = MetaData()
+        old_table = Table(
+            "autopilot_designs_old",
+            meta,
+            *old_cols,
+            UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+        )
+        old_table.create(engine)
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        now = datetime.datetime.utcnow()
+        session.execute(
+            AutopilotProject.__table__.insert().values(
+                id="proj-crash2", name="Crash Project 2", base_dir="/tmp/crash2", is_active=True, created_at=now, updated_at=now
+            )
+        )
+        session.execute(
+            old_table.insert().values(
+                id="des-crash2-1",
+                project_id="proj-crash2",
+                filename=None,
+                name="010-baz",
+                ordinal=0,
+                size_bytes=0,
+                extension=".md",
+                status="pending",
+                created_at=now,
+                cost_total_usd=0.0,
+                source_dir="/tmp/crash2/specs/010-baz",
+            )
+        )
+        session.commit()
+        session.close()
+
+        # Simulate the second crash point: autopilot_designs already
+        # recreated (current model, with the new constraint) but still
+        # empty -- the INSERT/DROP never ran.
+        AutopilotDesign.__table__.create(engine)
+
+        migrate_speckit_design_source_dir_unique(engine)
+
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id FROM autopilot_designs")).fetchall()
+            assert [r[0] for r in rows] == ["des-crash2-1"]
+
+            leftover = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_designs_old'")
+            ).scalar()
+            assert leftover is None
+
+        engine.dispose()
