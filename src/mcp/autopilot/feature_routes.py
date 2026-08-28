@@ -316,6 +316,7 @@ async def delete_feature(feature_id: str):
 
     from src.core.app_context import get_app_state
     from src.core.database import (
+        Agent,
         AgentResult,
         BoardConfig,
         CostEntry,
@@ -391,6 +392,16 @@ async def delete_feature(feature_id: str):
                     # feature that ever recorded real LLM cost (the common
                     # case, not the exception) would otherwise fail to delete.
                     db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # Agent.current_task_id -> tasks.id is also an enforced
+                    # FK -- a belt-and-suspenders null-out alongside the
+                    # termination above (repair_service.py's rerun does the
+                    # same): an agent that crashed/was killed without going
+                    # through the normal terminate path (which clears this)
+                    # can leave it dangling at one of these tasks, failing
+                    # the Task delete below.
+                    db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).update(
+                        {"current_task_id": None}, synchronize_session=False
+                    )
 
                 db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id == workflow_id).delete(synchronize_session=False)
                 db.query(WorkflowResult).filter(WorkflowResult.workflow_id == workflow_id).delete(synchronize_session=False)
