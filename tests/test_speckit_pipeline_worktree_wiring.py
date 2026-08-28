@@ -38,6 +38,36 @@ def test_speckit_entry_populates_whole_feature_dir_in_worktree(tmp_path):
     assert not (worktree / CONTEXT_DIR_NAME / "design.md").exists()
 
 
+def test_source_dir_only_entry_populates_whole_feature_dir_in_worktree(tmp_path):
+    """Regression: pick_next_design's DB-first directory-sourced path
+    (--feature selection) constructs DesignEntry with source_dir set and
+    speckit_feature_dir left None -- design_entry.path is the feature
+    DIRECTORY itself in this case, not spec.md. Before this fix,
+    _copy_design_input_into_worktree only checked speckit_feature_dir, so
+    this fell through to shutil.copy2(directory, ...), raising
+    IsADirectoryError."""
+    feature_dir = tmp_path / "specs" / "001-x"
+    feature_dir.mkdir(parents=True)
+    (feature_dir / "spec.md").write_text("# spec")
+    (feature_dir / "plan.md").write_text("# plan")
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    entry = DesignEntry(
+        path=feature_dir,
+        name="001-x",
+        content_hash="abc",
+        source_dir=feature_dir,
+    )
+
+    _copy_design_input_into_worktree(entry, worktree)
+
+    dest = worktree / CONTEXT_DIR_NAME / "specs" / "001-x"
+    assert (dest / "spec.md").read_text() == "# spec"
+    assert (dest / "plan.md").read_text() == "# plan"
+    assert not (worktree / CONTEXT_DIR_NAME / "design.md").exists()
+
+
 def test_design_md_entry_still_copies_plain_design_md(tmp_path):
     design_file = tmp_path / "design.md"
     design_file.write_text("# design")

@@ -88,6 +88,11 @@ class DesignEntry:
     # working unchanged) -- worktree_integration.copy_speckit_feature copies
     # this whole directory instead of just design_entry.path when set.
     speckit_feature_dir: Optional[Path] = None
+    # Set when this entry is directory-sourced (REQ-02/NFR-02): the absolute
+    # path to the specs/<NNN-name>/ directory backing this design, mirroring
+    # AutopilotDesign.source_dir. Mutually exclusive with file_path being set.
+    source_dir: Optional[Path] = None
+    repo_id: Optional[str] = None
 
 
 @dataclass
