@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.autopilot.orchestrator.queue import _sync_speckit_designs
 from src.core.database import AutopilotDesign, AutopilotProject, Base, ProjectRepo
-from src.core.schema_migrations import migrate_speckit_auto_scan_enabled_column
+from src.core.schema_migrations import migrate_speckit_auto_scan_column
 from src.core.speckit_detection import find_speckit_features
 
 
@@ -90,7 +90,7 @@ class TestSchemaAndMigration:
             conn.execute(text("INSERT INTO autopilot_projects (id, name, base_dir) VALUES ('p1', 'P', '/tmp')"))
             conn.commit()
 
-        migrate_speckit_auto_scan_enabled_column(engine)
+        migrate_speckit_auto_scan_column(engine)
 
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT speckit_auto_scan_enabled FROM autopilot_projects")).fetchall()
@@ -103,8 +103,8 @@ class TestSchemaAndMigration:
             conn.execute(text("CREATE TABLE autopilot_projects (id VARCHAR PRIMARY KEY)"))
             conn.commit()
 
-        migrate_speckit_auto_scan_enabled_column(engine)
-        migrate_speckit_auto_scan_enabled_column(engine)  # must not raise
+        migrate_speckit_auto_scan_column(engine)
+        migrate_speckit_auto_scan_column(engine)  # must not raise
 
 
 class TestPatchEndpoint:
