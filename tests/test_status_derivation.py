@@ -600,6 +600,61 @@ class TestDeriveWorkflowStatus:
             result = derive_workflow_status(session, "wf-1")
         assert result == "active"
 
+    def test_returns_failed_when_the_only_task_is_a_genuine_failure(self, db_manager):
+        """A single failed task with no "Orphaned:" tag is a real failure,
+        not self-heal's own transient artifact -- must still derive
+        'failed' (existing behavior, guarded against the fix below being
+        too broad)."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="Task 1",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason="evaluator rejected the output",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "failed"
+
+    def test_does_not_derive_failed_from_a_transient_orphan_marking(self, db_manager):
+        """Regression, observed live (workflow e35be066): _create_phase_task's
+        orphan-detection marks a stale task "failed" (failure_reason
+        prefixed "Orphaned:") as the FIRST of two steps before immediately
+        creating a fresh replacement task in the same self-heal pass. A
+        write_back=True caller landing in the gap between those two steps
+        used to see task_statuses == {"failed"} and derive/persist
+        workflow.status="failed" -- which _advance_phases then treats as
+        terminal, and which raced the fresh replacement task/agent the
+        orphan-detection was already about to create, killing a
+        legitimately just-dispatched agent. Must trust the existing DB
+        status instead."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="Task 1",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "active"
+
     def test_stays_active_when_a_later_phase_has_no_task_yet(self, db_manager):
         """Regression, observed live: task_statuses == {"done"} only looks
         at tasks that EXIST -- a phase that hasn't been dispatched yet has
