@@ -620,3 +620,91 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
         "status": "failed",
         "message": task.failure_reason,
     }
+
+
+def verify_development_produced_a_commit(session, task, phase=None) -> Optional[Dict[str, Any]]:
+    """Post-commit hard floor for development: reject 'done' if nothing
+    was actually committed to the shared worktree during this task's
+    lifetime.
+
+    development's whole job is writing the feature's code -- a
+    "verification-only, no changes needed" claim is a real failure mode,
+    not a legitimate outcome: it means the agent decided nothing needed
+    doing without actually implementing what the phase was launched to
+    build. Observed live: workflow e9019930's development task for
+    speckit-cli-integration reported 'done' with a memory note reading
+    "verification-only pass, zero new code", while --design-doc,
+    queue_routes.py's directory-registration logic, and the whole
+    tests/test_cli_autopilot_speckit.py file were all still missing --
+    the required work was simply never done.
+
+    Checked independently of commit_and_link_ticket's own return value
+    (which only reflects the LAST `git add -A` at completion time): an
+    agent that made its own intermediate commit mid-task, with nothing
+    left dirty by the time it calls done, must not be penalized for that
+    -- any commit landed after this task started counts.
+    """
+    from pathlib import Path
+
+    from src.core.database import Phase, Workflow
+
+    if phase is None:
+        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+    if not phase or phase.name != "development":
+        return None
+    if not task.workflow_id:
+        return None
+
+    # Same exemption as the other hard floors here -- an arbitration
+    # task's job is a goto/fail/continue decision, not writing code.
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
+        return None
+
+    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+    if not (wf and wf.working_directory):
+        return None  # verify_output_artifact already surfaces this case.
+    if not Path(wf.working_directory).is_dir():
+        return None
+
+    since = task.started_at or task.created_at
+    if not since:
+        return None
+
+    try:
+        from datetime import datetime
+
+        from git import Repo
+
+        repo = Repo(wf.working_directory)
+        has_commit = False
+        for commit in repo.iter_commits(max_count=50):
+            if commit.committed_date is None:
+                continue
+            if datetime.utcfromtimestamp(commit.committed_date) >= since:
+                has_commit = True
+                break
+    except Exception as e:
+        logger.warning(f"Git history check for task {task.id} (development) failed in {wf.working_directory}: {e}")
+        return None  # Fail open -- a git error here shouldn't block a real completion.
+
+    if has_commit:
+        return None
+
+    logger.warning(f"Task {task.id[:8]} (development) claimed done with no commit made since it started — rejecting")
+    task.status = "failed"
+    task.failure_reason = (
+        "No commit was made during this development task -- the phase's "
+        "required implementation work was not actually done."
+    )
+    session.commit()
+    return {
+        "status": "failed",
+        "message": (
+            "Cannot mark done: no commit was made in this worktree since the task started. "
+            "development must actually implement the feature's required changes -- re-read "
+            "the scope/requirements, make the necessary code changes, and commit them before "
+            "calling update_task_status(done) again."
+        ),
+    }

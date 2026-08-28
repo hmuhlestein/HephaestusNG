@@ -332,6 +332,14 @@ async def _complete_task_normally(
             None, functools.partial(TaskCompletionService.verify_output_survived_commit, session, task, phase=phase)
         )
 
+        # Only checked if the output-survival floor above didn't already
+        # reject -- task.status still "done" means it's worth asking
+        # whether development actually did anything at all.
+        if task.status == "done":
+            output_lost_rejection = await loop.run_in_executor(
+                None, functools.partial(TaskCompletionService.verify_development_produced_a_commit, session, task, phase=phase)
+            )
+
     if task.status == "done":
         # Checks task.status, NOT request.status -- verify_output_survived_commit
         # just above can flip task.status to "failed" in place (same ORM
