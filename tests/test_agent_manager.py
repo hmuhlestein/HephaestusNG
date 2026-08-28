@@ -17,6 +17,7 @@ import pytest
 
 from src.core.database import (
     Agent,
+    AgentBranch,
     AgentLog,
     AutopilotProject,
     DatabaseManager,
@@ -1993,6 +1994,125 @@ class TestTerminateAgent:
 
         mock_agent_manager.branch_manager.cleanup_worktree.assert_called_once_with(
             "agent-term-worktree-cleanup", delete_branch=False
+        )
+
+    @pytest.mark.asyncio
+    async def test_terminate_agent_skips_worktree_cleanup_when_it_is_the_workflow_shared_dir(
+        self, mock_agent_manager, db_manager
+    ):
+        """Regression, confirmed live: workflow e35be066 (feature
+        speckit-cli-integration). _resolve_worktree's legacy fallback forks
+        a fresh per-agent worktree (AgentBranch record + all) when there's
+        no existing shared worktree to reuse, and that same path can go on
+        to become Workflow.working_directory for every later phase. The
+        unconditional cleanup_worktree call above doesn't know the
+        difference and deletes it the moment THIS agent's task finishes --
+        even with more phases left -- so every later phase's agent
+        creation then hits _resolve_worktree's own "shared worktree is
+        missing" guard and fails forever. Must skip cleanup when this
+        agent's own AgentBranch.worktree_path equals the still-active
+        workflow's working_directory."""
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-shared-wt",
+                    name="Test Workflow",
+                    status="active",
+                    working_directory="/tmp/wt_agent-term-shared",
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-shared-wt",
+                    workflow_id="wf-shared-wt",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-term-shared",
+                    system_prompt="Test",
+                    status="working",
+                    cli_type="pi",
+                    tmux_session_name="test-session-term-shared",
+                    current_task_id="task-shared-wt",
+                )
+            )
+            session.add(
+                AgentBranch(
+                    agent_id="agent-term-shared",
+                    worktree_path="/tmp/wt_agent-term-shared",
+                    branch_name="agent-term-shared-branch",
+                    parent_commit_sha="abc123",
+                    base_commit_sha="abc123",
+                )
+            )
+
+        mock_agent_manager.branch_manager.cleanup_worktree = MagicMock(return_value={"status": "cleaned"})
+
+        with patch("src.agents.terminator.time.sleep"):
+            await mock_agent_manager.terminate_agent("agent-term-shared")
+
+        mock_agent_manager.branch_manager.cleanup_worktree.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_terminate_agent_still_cleans_up_when_workflow_is_done(
+        self, mock_agent_manager, db_manager
+    ):
+        """Paired guard test: the skip above must not become a blanket
+        "never clean up a workflow-linked agent's worktree" -- once the
+        workflow itself is no longer active/paused (e.g. completed), a
+        matching AgentBranch.worktree_path/working_directory should still
+        get cleaned up normally."""
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-done-wt",
+                    name="Test Workflow",
+                    status="completed",
+                    working_directory="/tmp/wt_agent-term-done",
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-done-wt",
+                    workflow_id="wf-done-wt",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-term-done",
+                    system_prompt="Test",
+                    status="working",
+                    cli_type="pi",
+                    tmux_session_name="test-session-term-done",
+                    current_task_id="task-done-wt",
+                )
+            )
+            session.add(
+                AgentBranch(
+                    agent_id="agent-term-done",
+                    worktree_path="/tmp/wt_agent-term-done",
+                    branch_name="agent-term-done-branch",
+                    parent_commit_sha="abc123",
+                    base_commit_sha="abc123",
+                )
+            )
+
+        mock_agent_manager.branch_manager.cleanup_worktree = MagicMock(return_value={"status": "cleaned"})
+
+        with patch("src.agents.terminator.time.sleep"):
+            await mock_agent_manager.terminate_agent("agent-term-done")
+
+        mock_agent_manager.branch_manager.cleanup_worktree.assert_called_once_with(
+            "agent-term-done", delete_branch=False
         )
 
     @pytest.mark.asyncio
