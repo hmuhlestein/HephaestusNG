@@ -965,6 +965,77 @@ def migrate_speckit_design_columns(engine):
         logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
 
 
+def migrate_speckit_design_source_dir_unique(engine):
+    """Add UniqueConstraint("project_id", "source_dir") to autopilot_designs.
+
+    Closes a real double-enqueue race: _resolve_and_enqueue_speckit_feature
+    (control_routes.py) does a query-then-insert on (project_id, source_dir)
+    with no DB-level constraint backing it, so two concurrent `start
+    --feature X` requests could both see no existing row and both insert,
+    silently rebuilding the same Spec Kit feature twice. filename-sourced
+    rows keep source_dir NULL and never collide with each other under this
+    constraint (SQLite NULLs are pairwise distinct), so this only fires for
+    genuine directory-sourced duplicates.
+
+    SQLite has no ALTER TABLE ... ADD CONSTRAINT, so this uses the same
+    rebuild-and-swap as migrate_speckit_design_columns's filename-nullable
+    fix: copy rows into a freshly created table (built from the current
+    model, which already declares this constraint) under a temp name, drop
+    the old table, rename. Pre-existing duplicate (project_id, source_dir)
+    rows from before this migration (created by the exact race this closes)
+    would violate the new constraint mid-copy, so duplicates are resolved
+    first -- keep the oldest row per (project_id, source_dir), drop the rest
+    (mirrors pick_next_design's own "oldest wins" ordering).
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+            if not info:
+                return  # table missing (fresh DB, create_all already declares the constraint)
+
+            # SQLite doesn't preserve constraint names in PRAGMA index_list
+            # for table-level UNIQUE constraints (they show up as
+            # sqlite_autoindex_*) -- the name only survives in the stored
+            # CREATE TABLE text, so check there instead.
+            create_sql = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE type='table' AND name='autopilot_designs'")
+            ).scalar()
+            if create_sql and "uq_design_project_source_dir" in create_sql:
+                return  # already applied
+
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM autopilot_designs
+                    WHERE source_dir IS NOT NULL
+                    AND id NOT IN (
+                        SELECT MIN(id) FROM autopilot_designs
+                        WHERE source_dir IS NOT NULL
+                        GROUP BY project_id, source_dir
+                    )
+                    """
+                )
+            )
+            conn.commit()
+
+            col_list = ", ".join(row[1] for row in info)
+            conn.execute(text("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old"))
+            conn.commit()
+
+        from src.core.database import AutopilotDesign
+
+        AutopilotDesign.__table__.create(engine)
+        with engine.connect() as conn:
+            conn.execute(text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old"))
+            conn.execute(text("DROP TABLE autopilot_designs_old"))
+            conn.commit()
+            logger.info("Rebuilt autopilot_designs with UniqueConstraint(project_id, source_dir)")
+    except Exception as e:
+        logger.warning(f"autopilot_designs source_dir-unique rebuild failed: {e}")
+
+
 def drop_speckit_auto_scan_column(engine):
     """Drop autopilot_projects.speckit_auto_scan -- superseded by
     speckit_auto_scan_enabled/_sync_speckit_designs (the one real Spec Kit
@@ -1043,6 +1114,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_project_repos_table", migrate_project_repos_table),
     ("_migrate_autopilot_designs_archived_at_column", migrate_autopilot_designs_archived_at_column),
     ("_migrate_speckit_design_columns", migrate_speckit_design_columns),
+    ("_migrate_speckit_design_source_dir_unique", migrate_speckit_design_source_dir_unique),
     ("_migrate_speckit_auto_scan_enabled_column", migrate_speckit_auto_scan_column),
     ("_drop_speckit_auto_scan_column", drop_speckit_auto_scan_column),
     ("_drop_speckit_autoscan_enabled_column", drop_speckit_autoscan_enabled_column),

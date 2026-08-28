@@ -4,6 +4,7 @@ Verifies that the additive ALTER TABLE migration works on databases
 that are missing the new columns (status, content_hash, feature_folder, completed_at).
 """
 
+import datetime
 import tempfile
 from pathlib import Path
 
@@ -178,3 +179,137 @@ def test_autopilot_designs_can_insert_and_query():
             assert result2.status == "completed"
         finally:
             session.close()
+
+
+def test_autopilot_designs_source_dir_unique_constraint_enforced():
+    """Two rows with the same (project_id, source_dir) must be rejected --
+    this is the DB-level backstop for the _resolve_and_enqueue_speckit_feature
+    double-enqueue race (design review round 4 BLOCKER)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+
+        from sqlalchemy.exc import IntegrityError
+
+        from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager
+
+        db_manager = DatabaseManager(str(db_path))
+        db_manager.create_tables()
+
+        session = db_manager.get_session()
+        try:
+            session.add(AutopilotProject(id="proj-race", name="Race Project", base_dir="/tmp/race", is_active=True))
+            session.add(
+                AutopilotDesign(
+                    id="des-race-1",
+                    project_id="proj-race",
+                    filename=None,
+                    name="007-foo",
+                    source_dir="/tmp/race/specs/007-foo",
+                    status="pending",
+                )
+            )
+            session.commit()
+
+            session.add(
+                AutopilotDesign(
+                    id="des-race-2",
+                    project_id="proj-race",
+                    filename=None,
+                    name="007-foo-dup",
+                    source_dir="/tmp/race/specs/007-foo",
+                    status="pending",
+                )
+            )
+            try:
+                session.commit()
+                assert False, "second insert with the same (project_id, source_dir) should have raised IntegrityError"
+            except IntegrityError:
+                session.rollback()
+
+            assert session.query(AutopilotDesign).filter_by(project_id="proj-race").count() == 1
+        finally:
+            session.close()
+
+
+def test_migrate_speckit_design_source_dir_unique_resolves_pre_existing_duplicates():
+    """A database that already has two rows sharing (project_id, source_dir)
+    -- created by the pre-round-4 race -- must not fail the migration; the
+    older duplicate is dropped and the constraint is applied cleanly."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+
+        from sqlalchemy import MetaData, Table, UniqueConstraint
+        from sqlalchemy.orm import sessionmaker
+
+        from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        AutopilotProject.__table__.create(engine)
+
+        # Build the OLD schema: current model's columns, but only the
+        # filename constraint -- no source_dir uniqueness yet.
+        old_cols = [c.copy() for c in AutopilotDesign.__table__.columns]
+        meta = MetaData()
+        old_table = Table(
+            "autopilot_designs",
+            meta,
+            *old_cols,
+            UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+        )
+        old_table.create(engine)
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        now = datetime.datetime.utcnow()
+        session.execute(
+            AutopilotProject.__table__.insert().values(
+                id="proj-old", name="Old Project", base_dir="/tmp/old", is_active=True, created_at=now, updated_at=now
+            )
+        )
+        session.execute(
+            old_table.insert().values(
+                id="des-old-1",
+                project_id="proj-old",
+                filename=None,
+                name="007-foo",
+                ordinal=0,
+                size_bytes=0,
+                extension=".md",
+                status="pending",
+                created_at=now,
+                cost_total_usd=0.0,
+                source_dir="/tmp/old/specs/007-foo",
+            )
+        )
+        session.execute(
+            old_table.insert().values(
+                id="des-old-2",
+                project_id="proj-old",
+                filename=None,
+                name="007-foo-dup",
+                ordinal=1,
+                size_bytes=0,
+                extension=".md",
+                status="pending",
+                created_at=now,
+                cost_total_usd=0.0,
+                source_dir="/tmp/old/specs/007-foo",
+            )
+        )
+        session.commit()
+        session.close()
+        engine.dispose()
+
+        # Running the full migration chain must not raise, must drop the
+        # older duplicate, and must leave the new constraint in place.
+        db_manager = DatabaseManager(str(db_path))
+        db_manager.create_tables()
+
+        with db_manager.engine.connect() as conn:
+            rows = conn.execute(text("SELECT id FROM autopilot_designs")).fetchall()
+            assert [r[0] for r in rows] == ["des-old-1"]
+
+            create_sql = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE type='table' AND name='autopilot_designs'")
+            ).scalar()
+            assert "uq_design_project_source_dir" in create_sql
