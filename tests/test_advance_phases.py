@@ -969,6 +969,51 @@ class TestMaybeRetryFailedTasks:
             assert task.status == "in_progress"
             assert task.enriched_description is None
 
+    def test_orphaned_failure_reason_gets_plain_reset_not_a_retry_banner(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: 'Orphaned: ...' means no agent ever actually
+        received this task -- a scheduling/claim-race artifact, not a real
+        attempt that made a mistake. Wrapping it in "your previous attempt
+        failed... fix it rather than repeating the same mistake" was
+        actively misleading on what is, from the next agent's own point of
+        view, genuinely its FIRST prompt for this task."""
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-fail-0",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="Execute phase X",
+                    enriched_description="Execute phase X: do the thing",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                )
+            )
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("new-agent-1"),
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger)
+                assert result is True
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-fail-0").first()
+            assert task.status == "in_progress"
+            assert task.failure_reason is None
+            assert "RETRY" not in (task.enriched_description or "")
+            assert "repeating the same mistake" not in (task.enriched_description or "")
+            # enriched_description left untouched -- not overwritten with
+            # a misleading banner, and not blanked either.
+            assert task.enriched_description == "Execute phase X: do the thing"
+
     def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
         self, db_manager, sample_workflow
     ):
@@ -5552,6 +5597,54 @@ class TestMaybeResolveArbitration:
         _maybe_resolve_arbitration("wf-1", MagicMock())
 
         mock_pm.mark_phase_complete.assert_not_called()
+
+
+class TestRetryFailedTasksWithDone:
+    """Tests for _retry_failed_tasks_with_done's own RETRY-banner guard --
+    the done+failed sibling of _maybe_retry_failed_tasks's same fix."""
+
+    def test_orphaned_failure_reason_gets_plain_reset_not_a_retry_banner(
+        self, db_manager, sample_workflow
+    ):
+        """Same fix as _maybe_retry_failed_tasks's own regression test:
+        'Orphaned: ...' means no agent ever actually received this task --
+        skip the misleading RETRY banner; this is genuinely the next
+        agent's first prompt for the task."""
+        from src.autopilot.orchestrator._phase_case_steps import _retry_failed_tasks_with_done
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-fail-0",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="Execute phase X",
+                    enriched_description="Execute phase X: do the thing",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                )
+            )
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator._phase_case_steps.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("new-agent-1"),
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _retry_failed_tasks_with_done(
+                    session, phase, "wf-1", execution=None,
+                    logger=logger, failed_count=1, done_count=1, cycle_filter=(),
+                )
+                assert result is True
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-fail-0").first()
+            assert task.status == "in_progress"
+            assert task.failure_reason is None
+            assert "RETRY" not in (task.enriched_description or "")
+            assert task.enriched_description == "Execute phase X: do the thing"
 
 
 if __name__ == "__main__":

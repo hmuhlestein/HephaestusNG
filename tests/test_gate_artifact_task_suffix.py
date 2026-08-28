@@ -232,17 +232,34 @@ class TestResolvePhaseInputSuffix:
 
         assert found == tmp_path / ".hephaestus" / "requirements-a1b2c3d4.md"
 
-    def test_exact_bare_name_still_preferred_over_suffixed(self, tmp_path, monkeypatch):
-        """Backward compat: an older/test fixture that wrote the bare name
-        directly must still be found, and takes priority over the glob
-        fallback (checked first)."""
+    def test_suffixed_file_preferred_over_a_stale_bare_name(self, tmp_path, monkeypatch):
+        """Every producing phase writes a task-id-suffixed filename, never
+        the bare declared name -- a bare-named file, if one exists at all,
+        can only be a stale leftover (pre-suffixing convention, or debris
+        from something that doesn't follow it) and must not outrank the
+        real, current-run suffixed file. The suffixed match is checked
+        first now; bare name is the fallback."""
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: ["adversarial_review"])
+        d = tmp_path / ".hephaestus" / "adversarial_review"
+        d.mkdir(parents=True)
+        (d / "adversarial.md").write_text("stale bare leftover")
+        (d / "adversarial-a1b2c3d4.md").write_text("current suffixed report")
+
+        found = resolve_phase_input(str(tmp_path), "adversarial.md", workflow_id="wf-1")
+
+        assert found == d / "adversarial-a1b2c3d4.md"
+
+    def test_bare_name_still_found_as_a_fallback_when_no_suffixed_file_exists(self, tmp_path, monkeypatch):
+        """Backward compat: an older/test fixture that wrote only the bare
+        name directly must still be found."""
         import src.autopilot.spec as spec_module
 
         monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: ["adversarial_review"])
         d = tmp_path / ".hephaestus" / "adversarial_review"
         d.mkdir(parents=True)
         (d / "adversarial.md").write_text("bare")
-        (d / "adversarial-a1b2c3d4.md").write_text("suffixed")
 
         found = resolve_phase_input(str(tmp_path), "adversarial.md", workflow_id="wf-1")
 
