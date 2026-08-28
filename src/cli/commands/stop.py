@@ -103,11 +103,18 @@ def run(args):
     # never got its pidfile entry synced (or a process started outside
     # `heph start` entirely) would otherwise survive this command.
     # Includes vite to catch orphaned dev-server processes from start_all.sh.
+    #
+    # Same liveness verification as the port-cleanup and per-PID-file blocks
+    # above: a bare SIGTERM with no follow-up can't be trusted to have
+    # actually killed the process (this exact gap -- declaring a kill done
+    # without checking -- is the root cause behind both incidents documented
+    # in tests/test_cli_stop.py), so wait for exit and escalate to SIGKILL.
     for pattern in ("run_watchdog.py", "run_server.py", "run_monitor.py", "vite"):
         try:
             result = subprocess.run(
                 ["pgrep", "-f", pattern], capture_output=True, text=True
             )
+            orphan_pids = []
             for pid_str in result.stdout.strip().split("\n"):
                 if not pid_str:
                     continue
@@ -115,9 +122,24 @@ def run(args):
                     pid = int(pid_str)
                     sig = signal.SIGKILL if args.force else signal.SIGTERM
                     os.kill(pid, sig)
+                    orphan_pids.append(pid)
                     stopped[f"orphan-{pattern}-{pid}"] = "killed"
                 except (OSError, ValueError):
                     pass
+
+            if orphan_pids and not args.force:
+                for _ in range(10):
+                    time.sleep(0.5)
+                    if not any(is_process_running(pid) for pid in orphan_pids):
+                        break
+                else:
+                    for pid in orphan_pids:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            stopped[f"orphan-{pattern}-{pid}"] = "force_killed"
+                        except OSError:
+                            pass
+                    time.sleep(0.5)
         except Exception:
             pass
 
