@@ -313,3 +313,92 @@ def test_migrate_speckit_design_source_dir_unique_resolves_pre_existing_duplicat
                 text("SELECT sql FROM sqlite_master WHERE type='table' AND name='autopilot_designs'")
             ).scalar()
             assert "uq_design_project_source_dir" in create_sql
+
+
+def test_migrate_speckit_design_source_dir_unique_resumes_after_interrupted_rebuild():
+    """A prior run of this migration that crashed between the RENAME and the
+    final DROP TABLE leaves autopilot_designs_old behind -- possibly with
+    autopilot_designs missing entirely (crash before CREATE). The migration
+    must detect this and finish the rebuild, not silently treat "table
+    missing" as "fresh DB" and leave the app permanently unable to query
+    AutopilotDesign."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+
+        from sqlalchemy import MetaData, Table, UniqueConstraint
+        from sqlalchemy.orm import sessionmaker
+
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.schema_migrations import migrate_speckit_design_source_dir_unique
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        AutopilotProject.__table__.create(engine)
+
+        # Simulate the crash point: autopilot_designs was already renamed to
+        # autopilot_designs_old, but the process died before the CREATE that
+        # would restore autopilot_designs -- so it does not exist at all.
+        old_cols = [c.copy() for c in AutopilotDesign.__table__.columns]
+        meta = MetaData()
+        old_table = Table(
+            "autopilot_designs_old",
+            meta,
+            *old_cols,
+            UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+        )
+        old_table.create(engine)
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        now = datetime.datetime.utcnow()
+        session.execute(
+            AutopilotProject.__table__.insert().values(
+                id="proj-crash", name="Crash Project", base_dir="/tmp/crash", is_active=True, created_at=now, updated_at=now
+            )
+        )
+        session.execute(
+            old_table.insert().values(
+                id="des-crash-1",
+                project_id="proj-crash",
+                filename=None,
+                name="009-bar",
+                ordinal=0,
+                size_bytes=0,
+                extension=".md",
+                status="pending",
+                created_at=now,
+                cost_total_usd=0.0,
+                source_dir="/tmp/crash/specs/009-bar",
+            )
+        )
+        session.commit()
+        session.close()
+
+        # autopilot_designs must not exist yet -- this is the exact state
+        # the WARNING describes.
+        with engine.connect() as conn:
+            info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+            assert info == []
+
+        migrate_speckit_design_source_dir_unique(engine)
+
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id FROM autopilot_designs")).fetchall()
+            assert [r[0] for r in rows] == ["des-crash-1"]
+
+            create_sql = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE type='table' AND name='autopilot_designs'")
+            ).scalar()
+            assert "uq_design_project_source_dir" in create_sql
+
+            leftover = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_designs_old'")
+            ).scalar()
+            assert leftover is None
+
+        # Idempotent: re-running after the resume must be a clean no-op.
+        migrate_speckit_design_source_dir_unique(engine)
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id FROM autopilot_designs")).fetchall()
+            assert [r[0] for r in rows] == ["des-crash-1"]
+
+        engine.dispose()
