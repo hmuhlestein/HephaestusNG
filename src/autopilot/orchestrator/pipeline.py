@@ -988,8 +988,14 @@ def _copy_design_input_into_worktree(design_entry: DesignEntry, worktree: Path) 
     silently diverge."""
     wt_heph = worktree / CONTEXT_DIR_NAME
     wt_heph.mkdir(parents=True, exist_ok=True)
-    if design_entry.speckit_feature_dir is not None:
-        copy_speckit_feature(design_entry.speckit_feature_dir, worktree)
+    # speckit_feature_dir: file-scan-fallback discovery path. source_dir:
+    # DB-first directory-sourced path (--feature selection). Either means
+    # this design is directory-sourced -- design_entry.path is a directory
+    # in the source_dir case, not a file, so shutil.copy2 below would raise
+    # IsADirectoryError.
+    feature_dir = design_entry.speckit_feature_dir or design_entry.source_dir
+    if feature_dir is not None:
+        copy_speckit_feature(Path(feature_dir), worktree)
     else:
         shutil.copy2(design_entry.path, wt_heph / "design.md")
 
