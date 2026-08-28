@@ -152,6 +152,7 @@ async def get_design_status(
                         "id": t.id,
                         "description": (t.enriched_description or t.raw_description or "")[:200],
                         "status": t.status,
+                        "failure_reason": t.failure_reason,
                         "priority": t.priority,
                         "phase_id": t.phase_id,
                         "phase_name": phase_map.get(t.phase_id),
@@ -533,7 +534,18 @@ async def get_design_status(
                         "completed"
                         if all(t["status"] == "done" for t in phase0_tasks)
                         else "failed"
-                        if any(t["status"] == "failed" for t in phase0_tasks)
+                        # "Orphaned:"-tagged failures are self-heal's own
+                        # transient artifact (_create_phase_task marks a
+                        # stale task failed, then immediately creates a
+                        # fresh replacement in the same pass) -- not a
+                        # genuine failure. Same class of bug fixed in
+                        # status_derivation.py's derive_workflow_status/
+                        # derive_feature_status: without this guard, a
+                        # status poll landing in that split-second gap
+                        # showed this design's Feature Architect card as
+                        # "failed" for a task that was already being
+                        # replaced.
+                        if any(t["status"] == "failed" and not (t.get("failure_reason") or "").startswith("Orphaned:") for t in phase0_tasks)
                         else "active"
                         if any(t["status"] in ("assigned", "in_progress") for t in phase0_tasks)
                         else "pending"

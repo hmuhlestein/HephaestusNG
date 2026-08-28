@@ -3435,6 +3435,72 @@ class TestPhase0PseudoFeatureReviewFields:
         assert phase0["status"] == "completed"
         assert phase0["review_pending"] is False
 
+    def test_orphaned_failed_task_does_not_show_phase0_as_failed(
+        self, project_client
+    ):
+        """Regression: a task marked failed with an "Orphaned:"-prefixed
+        failure_reason is self-heal's own transient artifact
+        (_create_phase_task marks a stale task failed, then immediately
+        creates a fresh replacement in the same pass) -- not a genuine
+        failure. Same class of bug fixed in status_derivation.py's
+        derive_workflow_status/derive_feature_status: a status poll
+        landing in that split-second gap must not show this design's
+        Feature Architect card as "failed" for a task that's already
+        being replaced."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Task, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "phase0-orphaned.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-phase0-orphaned",
+                    project_id=pid,
+                    filename="phase0-orphaned.md",
+                    name="Phase0 Orphaned",
+                    ordinal=22,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-phase0-orphaned",
+                    name="Phase 0",
+                    definition_id="feature_architect",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    launch_params={
+                        "design_document": str(design_dir / "phase0-orphaned.md"),
+                        "project_path": str(dirs["project_dir"]),
+                    },
+                )
+            )
+            db.add(
+                Task(
+                    id="task-phase0-orphaned",
+                    raw_description="Execute product_requirements",
+                    enriched_description="Execute product_requirements",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                    workflow_id="wf-phase0-orphaned",
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/phase0-orphaned.md/status")
+        assert resp.status_code == 200, resp.text
+        features = resp.json()["features"]
+        phase0 = next(f for f in features if f["id"] == "phase0-wf-phase0-orphaned")
+
+        assert phase0["status"] != "failed"
+
 
 class TestPhase0ReviewAction:
     """POST /features/{feature_id}/review for a "phase0-{workflow_id}"

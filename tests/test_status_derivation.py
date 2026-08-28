@@ -271,6 +271,45 @@ class TestDeriveFeatureStatus:
             result = derive_feature_status(session, "feat-1")
         assert result == "failed"
 
+    def test_does_not_derive_failed_from_a_transient_orphan_marking(self, db_manager):
+        """Regression, same race as derive_workflow_status's paired test:
+        _create_phase_task's orphan-detection marks a stale task "failed"
+        (failure_reason prefixed "Orphaned:") as step one of a two-step
+        self-heal, immediately followed by a fresh replacement task in the
+        same pass. A write_back=True call landing in the gap between those
+        steps must not derive/persist Feature.status="failed" for a task
+        that's already being replaced."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+
+            feature = Feature(
+                id="feat-1",
+                design_id="design-1",
+                feature_key="test-feature",
+                name="Test Feature",
+                scope="Test scope",
+                workflow_id="wf-1",
+                status="active",
+            )
+            session.add(feature)
+
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="Task 1",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1")
+        assert result == "active"
+
     def test_excludes_diagnostic_tasks(self, db_manager):
         """Should exclude DIAGNOSTIC: prefixed tasks from status derivation."""
         with db_manager.session_scope() as session:
