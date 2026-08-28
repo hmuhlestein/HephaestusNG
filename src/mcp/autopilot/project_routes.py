@@ -162,7 +162,12 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
 
     # Remove DB records for deleted files
     for fname in db_filenames - fs_filenames:
-        db.delete(queue_scoped[fname])
+        removed = queue_scoped[fname]
+        logger.info(
+            f"[SYNC] Removing design {removed.id} ({fname!r}) for project "
+            f"{project_id}: not found in {design_dir}"
+        )
+        db.delete(removed)
 
     # Add or update DB records — two passes: prefixed first, then unprefixed
     prefixed = []

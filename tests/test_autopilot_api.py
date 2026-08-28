@@ -2223,6 +2223,27 @@ class TestProjectDesigns:
         assert resp.status_code == 200
         assert len(resp.json()) == 2
 
+    def test_sync_logs_deleted_design(self, project_client, caplog):
+        """Regression test: _sync_project_designs used to silently
+        db.delete() a queue-scoped row whenever its file went missing from
+        .hephaestus/specs/ -- with zero logging. That silence is what let a
+        real, in-use design row (des-2acb39c6378d, referenced by 7 live
+        Feature rows) vanish without a trace, since its source file lived
+        outside the queue dir and every sync treated that as "deleted"."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        design_dir = dirs["design_dir"]
+        (design_dir / "01-auth.md").unlink()
+
+        with caplog.at_level("INFO"):
+            resp = client.post(f"/api/autopilot/projects/{pid}/sync")
+        assert resp.status_code == 200
+        assert any(
+            "01-auth.md" in r.message and "Removing design" in r.message
+            for r in caplog.records
+        )
+
     def test_design_not_found_project(self, project_client):
         client, _ = project_client
         resp = client.get("/api/autopilot/projects/nonexistent/designs")
