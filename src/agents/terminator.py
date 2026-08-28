@@ -335,6 +335,32 @@ class Terminator:
                     # child processes (opencode/claude/pi) can outlive the session.
                     logger.warning(f"Failed to collect pane PIDs for {agent.tmux_session_name}: {e}")
 
+                # Final unconditional flush of the stability-tracked "clean"
+                # transcript (see _flush_stable_transcript), done here --
+                # before the capture-pane snapshot below -- so the phase-name
+                # log can prefer it over that snapshot. A full-screen TUI
+                # (Claude Code, Codex, pi) runs in tmux's alternate screen
+                # buffer, which tmux never retains scrollback for regardless
+                # of history-limit: capture-pane -S - there only ever returns
+                # whatever currently fits on the visible pane, not the
+                # session's actual history. The clean transcript has no such
+                # gap -- it's built incrementally via periodic capture-pane
+                # polling over the agent's whole life (_poll_stable_transcript),
+                # so it holds real history that a single post-hoc snapshot
+                # structurally cannot. Also still needed pre-kill regardless,
+                # since capture-pane can no longer see anything once the
+                # session is gone.
+                clean_transcript_path = None
+                try:
+                    transcript_dir = self._output_capture._resolve_tmux_transcript_dir(agent)
+                    if transcript_dir:
+                        clean_transcript_path = transcript_dir / f"{agent.tmux_session_name}.clean.log"
+                        self._output_capture._flush_stable_transcript(
+                            agent.tmux_session_name, clean_transcript_path
+                        )
+                except Exception as e:
+                    logger.debug(f"[STABLE-TRANSCRIPT] Final flush failed: {e}")
+
                 try:
                     if self.tmux_server.has_session(agent.tmux_session_name):
                         for tmux_sess in self.tmux_server.sessions:
@@ -384,7 +410,25 @@ class Terminator:
                                                 / f"{_phase.name}_{agent_id[:8]}.log"
                                             )
 
+                                            # Prefer the just-flushed clean
+                                            # transcript over the capture-pane
+                                            # snapshot above -- see the flush
+                                            # comment near _wait_for_pane_idle
+                                            # for why the snapshot alone is
+                                            # structurally incomplete for a
+                                            # full-screen TUI agent.
                                             clean_scrollback = full_scrollback
+                                            if (
+                                                clean_transcript_path
+                                                and clean_transcript_path.exists()
+                                                and clean_transcript_path.stat().st_size > 0
+                                            ):
+                                                try:
+                                                    clean_scrollback = clean_transcript_path.read_text(
+                                                        errors="replace"
+                                                    )
+                                                except Exception:
+                                                    pass
                                             log_file.write_text(clean_scrollback)
                                             logger.info(
                                                 f"[TMUX-LOG] Final capture for "
@@ -398,21 +442,6 @@ class Terminator:
                                 break
                 except Exception as e:
                     logger.debug(f"Could not capture output before terminate: {e}")
-
-            # Final unconditional flush of the stability-tracked "clean"
-            # transcript (see _flush_stable_transcript) -- must happen
-            # before the session is killed below, since capture-pane can
-            # no longer see anything once it's gone.
-            if agent.tmux_session_name:
-                try:
-                    transcript_dir = self._output_capture._resolve_tmux_transcript_dir(agent)
-                    if transcript_dir:
-                        self._output_capture._flush_stable_transcript(
-                            agent.tmux_session_name,
-                            transcript_dir / f"{agent.tmux_session_name}.clean.log",
-                        )
-                except Exception as e:
-                    logger.debug(f"[STABLE-TRANSCRIPT] Final flush failed: {e}")
 
             # Kill tmux session using subprocess (more reliable than libtmux)
             if agent.tmux_session_name:
