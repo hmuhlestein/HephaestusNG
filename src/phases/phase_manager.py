@@ -653,12 +653,14 @@ class PhaseManager:
         already run at least once before (a goto or retry sending it back
         to itself).
 
-        Session IDs are deterministic per (project, design, role, model) --
-        see get_session_id in src.autopilot.phases -- so both cases resume
-        the exact same pi session/conversation with full memory. A role
-        appearing more than once in the pipeline config is not by itself
-        evidence of reuse: the *first* phase to use a shared role has no
-        prior session either.
+        Session IDs are deterministic per (project, design, workflow, role,
+        model) -- see get_session_id in src.autopilot.phases -- so both
+        cases resume the exact same pi session/conversation with full
+        memory. A role appearing more than once in the pipeline config is
+        not by itself evidence of reuse: the *first* phase to use a shared
+        role has no prior session either. Every comparison below is
+        already scoped to this same phase's workflow_id, so workflow_id's
+        presence in the hash doesn't change any of this reasoning.
         """
         from src.autopilot.phases import SESSION_ROLES
 
@@ -696,10 +698,11 @@ class PhaseManager:
             # A goto/retry back to THIS SAME phase (e.g. adversarial_review
             # finds issues and sends the pipeline back to development) is
             # not "an earlier phase" in the Phase.order sense above -- it's
-            # the identical phase_id, re-run. get_session_id keys purely on
-            # (project, design, role, model), so this new task's agent
-            # resumes the exact same conversation as the phase's first
-            # pass regardless. A goto also resets this phase's own
+            # the identical phase_id, re-run. get_session_id keys on
+            # (project, design, workflow, role, model), and a goto/retry
+            # never changes workflow_id, so this new task's agent resumes
+            # the exact same conversation as the phase's first pass
+            # regardless. A goto also resets this phase's own
             # PhaseExecution.status back to "pending" (see
             # _handle_evaluation_goto), erasing the "completed" evidence a
             # status check would need -- count prior Task rows for this
