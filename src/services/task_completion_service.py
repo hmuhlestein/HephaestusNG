@@ -71,6 +71,11 @@ class TaskCompletionService:
         return verify_output_survived_commit(session, task, phase)
 
     @staticmethod
+    def verify_development_produced_a_commit(session, task, phase=None):
+        from src.services.task_completion.verification import verify_development_produced_a_commit
+        return verify_development_produced_a_commit(session, task, phase)
+
+    @staticmethod
     async def commit_and_link_ticket(session, agent_id: str, task, summary: str):
         from src.services.task_completion.git_link import commit_and_link_ticket
         return await commit_and_link_ticket(session, agent_id, task, summary)
