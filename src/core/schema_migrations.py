@@ -965,6 +965,54 @@ def migrate_speckit_design_columns(engine):
         logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
 
 
+def drop_speckit_auto_scan_column(engine):
+    """Drop autopilot_projects.speckit_auto_scan -- superseded by
+    speckit_auto_scan_enabled/_sync_speckit_designs (the one real Spec Kit
+    auto-scan mechanism now). Column was never exposed via any UI and every
+    project's value was confirmed False before this migration was written.
+    Idempotent - safe to call on every startup. Requires SQLite 3.35.0+
+    (ALTER TABLE ... DROP COLUMN); silently no-ops on older SQLite so this
+    never breaks startup, just leaves the harmless orphaned column behind.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_projects DROP COLUMN speckit_auto_scan"))
+                conn.commit()
+                logger.info("Dropped autopilot_projects.speckit_auto_scan column")
+            except Exception as e:
+                if "no such column" in str(e).lower():
+                    pass  # Already dropped (or never existed on a fresh DB)
+                else:
+                    raise
+    except Exception as e:
+        logger.warning(f"autopilot_projects.speckit_auto_scan drop failed (not just 'already dropped' -- check this): {e}")
+
+
+def drop_speckit_autoscan_enabled_column(engine):
+    """Drop autopilot_projects.speckit_autoscan_enabled -- confirmed via
+    exhaustive grep to have zero production usage anywhere; a leftover
+    column added as a side effect of migrate_speckit_design_columns
+    (which still owns repo_id/source_dir -- left untouched, only this one
+    column from that migration's original ALTER statements is dropped
+    here). Idempotent - safe to call on every startup. Same SQLite
+    version note as drop_speckit_auto_scan_column above.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_projects DROP COLUMN speckit_autoscan_enabled"))
+                conn.commit()
+                logger.info("Dropped autopilot_projects.speckit_autoscan_enabled column")
+            except Exception as e:
+                if "no such column" in str(e).lower():
+                    pass  # Already dropped (or never existed on a fresh DB)
+                else:
+                    raise
+    except Exception as e:
+        logger.warning(f"autopilot_projects.speckit_autoscan_enabled drop failed (not just 'already dropped' -- check this): {e}")
+
+
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
@@ -996,4 +1044,6 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_autopilot_designs_archived_at_column", migrate_autopilot_designs_archived_at_column),
     ("_migrate_speckit_design_columns", migrate_speckit_design_columns),
     ("_migrate_speckit_auto_scan_enabled_column", migrate_speckit_auto_scan_column),
+    ("_drop_speckit_auto_scan_column", drop_speckit_auto_scan_column),
+    ("_drop_speckit_autoscan_enabled_column", drop_speckit_autoscan_enabled_column),
 ]
