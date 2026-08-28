@@ -237,8 +237,21 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         derived = FeatureStatus.ACTIVE
     elif TaskStatus.FAILED in task_statuses:
         # Check if ALL tasks failed (vs mixed)
-        if task_statuses == {TaskStatus.FAILED}:
+        if task_statuses == {TaskStatus.FAILED} and not all(
+            (t.failure_reason or "").startswith("Orphaned:")
+            for t in tasks
+            if t.status == TaskStatus.FAILED
+        ):
             derived = FeatureStatus.FAILED
+        elif task_statuses == {TaskStatus.FAILED}:
+            # Every failed task is "Orphaned:"-tagged -- self-heal's own
+            # transient artifact (_create_phase_task marks the stale task
+            # failed, then immediately creates a fresh replacement in the
+            # same pass), not a genuine failure. Same race
+            # derive_workflow_status was fixed for: a write_back=True call
+            # landing in the gap between those two steps must not derive/
+            # persist "failed" here. Trust the existing DB status instead.
+            derived = feature.status
         elif workflow_blocks_completion:
             # Workflow is paused/failed, so the feature should be failed
             # even if some tasks are done
