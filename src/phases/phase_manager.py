@@ -1571,6 +1571,7 @@ class PhaseManager:
             workflow = session.query(Workflow).filter_by(id=self.workflow_id).first()
             if workflow:
                 workflow.status = "failed"
+                workflow.status_reason = reason
                 session.commit()
                 logger.error(f"Workflow {self.workflow_id} failed: {reason}")
 
