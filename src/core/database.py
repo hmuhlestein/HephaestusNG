@@ -1164,13 +1164,8 @@ class AutopilotProject(Base):
     # updated specs/<NNN>-<name>/ Spec Kit feature dirs as queueable designs.
     speckit_auto_scan = Column(Boolean, default=False, nullable=False)
 
-    # Spec Kit auto-scan (UI-facing "Auto scan for specs" toggle): when True,
-    # pick_next_design's _sync_speckit_designs folds ready (has_plan=True)
-    # specs/<NNN>-<name>/ Spec Kit features directly into pending
-    # AutopilotDesign rows on every poll. Distinct from speckit_auto_scan
-    # above (that flag gates the older scan_design_queue fallback file-scan
-    # path and has no UI exposure) -- kept separate rather than merged so
-    # neither mechanism's behavior changes for existing users of the other.
+    # Spec Kit auto-scan: when True, the design-queue scan also auto-queues
+    # ready (has_plan=True) specs/<NNN>-<name>/ Spec Kit feature directories.
     speckit_auto_scan_enabled = Column(Boolean, default=False, nullable=False)
 
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")

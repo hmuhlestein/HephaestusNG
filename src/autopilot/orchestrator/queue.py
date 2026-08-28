@@ -381,23 +381,23 @@ def _sync_speckit_designs(db, project) -> None:
     """Fold ready specs/<NNN>-<name>/ Spec Kit features into pending
     AutopilotDesign rows, gated on project.speckit_auto_scan_enabled.
 
-    No-op unless the flag is set. Reuses find_speckit_features for all
-    directory/readiness parsing -- this function only decides which
-    already-detected features become queue entries.
+    No-op (REQ-06) unless the flag is set. Reuses find_speckit_features for
+    all directory/readiness parsing (REQ-10, NFR-04) -- this function only
+    decides which already-detected features become queue entries.
 
     Dedup key is (project_id, filename), the ACTUAL unique constraint on
-    AutopilotDesign (uq_design_project_filename) -- not content_hash, which
-    is nullable and NOT unique, and which drifts every time a user edits
-    spec.md (e.g. resolving a [NEEDS CLARIFICATION] marker) before the row
-    is picked up. Looking up by content_hash would fail to find the
-    existing row after such an edit and attempt a second insert with the
-    same filename, raising IntegrityError on uq_design_project_filename --
-    permanently, since every subsequent scan repeats the same stale-hash
-    miss.
+    AutopilotDesign (uq_design_project_filename, src/core/database.py:1358)
+    -- not content_hash, which is nullable and NOT unique, and which drifts
+    every time a user edits spec.md (e.g. resolving a [NEEDS CLARIFICATION]
+    marker) before the row is picked up. Looking up by content_hash would
+    fail to find the existing row after such an edit and attempt a second
+    insert with the same filename, raising IntegrityError on
+    uq_design_project_filename -- permanently, since every subsequent scan
+    repeats the same stale-hash miss.
 
     Each feature is synced in its own try/except + commit so one feature's
     failure (including a race against a concurrent writer) never discards
-    another feature's already-staged row in the same call. An
+    another feature's already-staged row in the same call (REQ-09). An
     unreadable/vanished spec.md is skipped via a dedicated OSError catch
     around the read (no DB write attempted yet, nothing to roll back).
     Once a DB write is attempted, expected, transient errors
@@ -410,11 +410,17 @@ def _sync_speckit_designs(db, project) -> None:
 
     A genuine programming error (anything else) is logged at ERROR with a
     traceback but does NOT raise out of this function -- it is isolated to
-    just this one feature and the loop continues to the next. A `raise`
-    here would abort the whole pass and propagate into pick_next_design's
-    own generic exception handler, whose file-scan fallback path has no
-    budget check -- turning one broken speckit feature into a per-project
-    budget-gate bypass on every subsequent scan.
+    just this one feature and the loop continues to the next (adversarial
+    review WARNING: an earlier revision re-raised here, which propagated
+    through pick_next_design's own generic `except Exception` into its
+    file-scan fallback branch -- a branch with NO budget check -- turning
+    one broken speckit feature into a per-project budget-gate bypass on
+    every subsequent scan, on top of blocking every OTHER speckit feature
+    in the same pass from ever syncing. Swallow-and-continue here matches
+    the philosophy already used a few lines above for a
+    find_speckit_features-level failure; every unexpected error is still
+    visible at ERROR with a traceback, just without cascading into
+    unrelated, more safety-critical logic one level up).
 
     Deliberately does NOT archive/clean up a pending row whose feature
     stops appearing in find_speckit_features's output (e.g. a renamed or
@@ -422,7 +428,8 @@ def _sync_speckit_designs(db, project) -> None:
     is_dir() check and a plain Path.exists() call both silently swallow
     OSError and return False on a transient filesystem/mount hiccup, not
     just on genuine deletion, so archiving on absence could permanently
-    hide a legitimately pending, ready feature.
+    hide a legitimately pending, ready feature. No REQ-XX requires
+    rename/orphan detection.
     """
     if not getattr(project, "speckit_auto_scan_enabled", False):
         return
@@ -436,14 +443,15 @@ def _sync_speckit_designs(db, project) -> None:
         return
 
     for feat in features:
-        if not feat.has_plan:
+        if not feat.has_plan:  # REQ-07
             continue
         spec_path = feat.dir_path / "spec.md"
 
         try:
             # Read once and derive both hash and size from the same bytes --
             # separate stat()/read_bytes() calls could observe two different
-            # versions of a concurrently-edited spec.md.
+            # versions of a concurrently-edited spec.md (adversarial review
+            # WARNING: stat/hash race).
             spec_bytes = spec_path.read_bytes()
         except OSError as e:
             logger.warning(f"[SPECKIT-AUTOSCAN] cannot read {spec_path}: {e}")
@@ -454,7 +462,7 @@ def _sync_speckit_designs(db, project) -> None:
         filename = f"speckit/{feat.repo_label}/{feat.number}-{feat.slug}.md"
 
         try:
-            # Dedup key: (project_id, filename) -- the real unique
+            # REQ-08 dedup key: (project_id, filename) -- the real unique
             # constraint. content_hash is compared only to decide whether an
             # existing PENDING row needs its snapshot refreshed, never used
             # as the existence check itself.
@@ -462,7 +470,7 @@ def _sync_speckit_designs(db, project) -> None:
             if existing:
                 if existing.status != "pending":
                     # Already processing/active/completed/failed/skipped --
-                    # never re-queue or double-build.
+                    # REQ-08: never re-queue or double-build.
                     continue
                 if existing.content_hash != content_hash:
                     # spec.md was edited before pickup -- refresh the
@@ -494,21 +502,23 @@ def _sync_speckit_designs(db, project) -> None:
             logger.info(f"[SPECKIT-AUTOSCAN] queued Spec Kit feature {feat.dir_name!r} (repo={feat.repo_label}) as design {design.id[:8]}")
         except (IntegrityError, OperationalError) as e:
             # Isolate this feature's failure from every other feature in
-            # this same sync pass -- a failure here must not discard rows
-            # already committed for sibling features above, and must not
-            # abort the scan for features still to come below.
+            # this same sync pass (REQ-09) -- a failure here must not
+            # discard rows already committed for sibling features above,
+            # and must not abort the scan for features still to come below.
             db.rollback()
             logger.warning(f"[SPECKIT-AUTOSCAN] failed to sync {feat.dir_name!r}: {e}")
             continue
         except Exception:
             # Not an expected transient DB error -- log the full traceback
             # at ERROR so a genuine bug is visible, but isolate it to this
-            # one feature rather than raising (see this function's
-            # docstring for why a raise here is unsafe).
+            # one feature rather than raising: a `raise` here would abort
+            # the whole pass (skipping every remaining feature) and
+            # propagate into pick_next_design's own generic exception
+            # handler, whose fallback path has no budget check (see this
+            # function's docstring).
             db.rollback()
             logger.error(f"[SPECKIT-AUTOSCAN] unexpected error syncing {feat.dir_name!r}", exc_info=True)
             continue
-
 
 def pick_next_design(
     queue_dir: Path,
@@ -562,7 +572,7 @@ def pick_next_design(
                 )
                 return None
 
-            _sync_speckit_designs(db, project)
+            _sync_speckit_designs(db, project)  # REQ-05/06/07/08/09
 
             logger.info(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"

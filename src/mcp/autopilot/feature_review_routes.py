@@ -58,6 +58,7 @@ async def set_review_mode(project_id: str, req: ReviewModeUpdate):
 class SpeckitAutoScanUpdate(BaseModel):
     speckit_auto_scan_enabled: bool
 
+
 @router.patch("/projects/{project_id}/speckit-auto-scan")
 async def set_speckit_auto_scan(project_id: str, req: SpeckitAutoScanUpdate):
     """Toggle automatic Spec Kit feature scanning for a project. When
