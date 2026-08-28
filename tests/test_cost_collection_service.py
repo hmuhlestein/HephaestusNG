@@ -21,6 +21,7 @@ from src.services.cost_collection_service import (
     PiJsonlCollector,
     _discover_codex_session_file,
     _discover_session_file,
+    _extract_session_id,
     collect_task_cost,
 )
 
@@ -615,6 +616,64 @@ def _make_task_agent_workflow(db, cli_type="pi", session_suffix="sess-abc123"):
     db.add_all([workflow, phase, agent, task])
     db.commit()
     return task, agent, workflow
+
+
+class TestExtractSessionId:
+    """_extract_session_id must reconstruct the EXACT id get_session_id
+    produced at launch time (src/agents/launch_pipeline.py's
+    _resolve_session_id), or cost collection silently stops finding any
+    session file at all -- get_session_id is now scoped by workflow_id
+    (see tests/test_get_session_id.py), so this reconstruction must
+    include it too."""
+
+    def test_matches_get_session_id_with_workflow_id(self, cost_db_session):
+        from src.autopilot.phases import get_session_id
+
+        task, agent, workflow = _make_task_agent_workflow(cost_db_session)
+
+        with patch("src.core.database.get_db") as mock_get_db:
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+            extracted = _extract_session_id(agent, task)
+
+        expected = get_session_id(
+            "/tmp/test-project", "des-test", "development", model="test-model", workflow_id=workflow.id
+        )
+        assert extracted == expected
+
+    def test_different_workflow_id_yields_different_session_id(self, cost_db_session):
+        """Regression guard: without workflow_id in the reconstruction, two
+        tasks from different workflow attempts of the same project+design+
+        phase+model would wrongly reconstruct the SAME session id."""
+        task_a, agent_a, _ = _make_task_agent_workflow(cost_db_session, session_suffix="a")
+
+        cost_db_session.add(Workflow(
+            id="wf-2",
+            name="test-2",
+            phases_folder_path="config/workflows/test",
+            working_directory="/tmp/test-cwd",
+            launch_params={"project_path": "/tmp/test-project", "design_id": "des-test"},
+        ))
+        cost_db_session.commit()
+        task_a.workflow_id = "wf-1"  # unchanged, for clarity
+        task_b = Task(
+            id="task-2",
+            raw_description="test",
+            done_definition="test",
+            workflow_id="wf-2",
+            assigned_agent_id=agent_a.id,
+            phase_id=task_a.phase_id,
+        )
+        cost_db_session.add(task_b)
+        cost_db_session.commit()
+
+        with patch("src.core.database.get_db") as mock_get_db:
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+            id_a = _extract_session_id(agent_a, task_a)
+            id_b = _extract_session_id(agent_a, task_b)
+
+        assert id_a != id_b
 
 
 class TestCollectTaskCostRealtimeVsFallback:
