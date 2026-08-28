@@ -15,6 +15,7 @@ duplication (section 4.4).
 """
 
 import logging
+import re
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -706,5 +707,120 @@ def verify_development_produced_a_commit(session, task, phase=None) -> Optional[
             "development must actually implement the feature's required changes -- re-read "
             "the scope/requirements, make the necessary code changes, and commit them before "
             "calling update_task_status(done) again."
+        ),
+    }
+
+
+_CLI_FLAG_RE = re.compile(r"--[a-zA-Z][\w-]*")
+
+
+def verify_requirements_cover_scope_cli_flags(session, task, phase=None) -> Optional[Dict[str, Any]]:
+    """Post-commit hard floor for product_requirements: reject 'done' if a
+    CLI flag named in the feature's own scope.md never got a dedicated
+    REQ-XX/NFR-XX row in requirements.md.
+
+    product_requirements.yaml's own MANDATORY traceability rule already
+    says this in prose ("every source ID that never appears in a Source
+    citation is a silent drop") -- a prompt instruction alone is
+    compliance-dependent, same reasoning as every other hard floor in this
+    module. This makes the specific, mechanically-checkable half of that
+    rule (a flag mentioned in scope.md but never promoted to its own
+    REQ-XX row) actually enforced.
+
+    Observed live: scope.md's Overview named `--design-doc` as one of
+    three CLI args to wire up (alongside `--feature`/`--repo`).
+    requirements.md's own intro prose also mentioned `--design-doc` in
+    passing while summarizing scope -- but no REQ-XX row was ever created
+    for it, so development.yaml's own REQ-XX tracking loop (which only
+    iterates rows that exist) never saw it as something to implement.
+    Checking "does this flag appear anywhere in the document" would have
+    missed this exact case, since the intro prose mention was real -- the
+    check has to be scoped to REQ-XX/NFR-XX table rows specifically.
+
+    Only applies when this workflow's launch_params carries a
+    feature_scope path (a Spec Kit per-feature run) -- a hand-written
+    design.md with no such per-feature scope doc has nothing to check
+    this against.
+    """
+    from pathlib import Path
+
+    from src.core.database import Phase, Workflow
+
+    if phase is None:
+        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+    if not phase or phase.name != "product_requirements":
+        return None
+    if not task.workflow_id:
+        return None
+
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
+        return None
+
+    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+    if not (wf and wf.working_directory):
+        return None  # verify_output_artifact already surfaces this case.
+
+    launch_params = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+    scope_path_str = launch_params.get("feature_scope")
+    if not scope_path_str:
+        return None
+
+    scope_path = Path(scope_path_str)
+    if not scope_path.is_file():
+        return None
+
+    try:
+        scope_text = scope_path.read_text(errors="replace")
+    except Exception as e:
+        logger.warning(f"Could not read scope doc {scope_path} for task {task.id}: {e}")
+        return None
+
+    scope_flags = set(_CLI_FLAG_RE.findall(scope_text))
+    if not scope_flags:
+        return None
+
+    from src.autopilot.spec import resolve_declared_output_path
+
+    req_path = resolve_declared_output_path(
+        wf.working_directory, phase.name, "requirements.md", task_id=task.id
+    )
+    if not req_path:
+        return None  # verify_output_artifact already surfaces a missing requirements.md.
+
+    try:
+        req_text = req_path.read_text(errors="replace")
+    except Exception as e:
+        logger.warning(f"Could not read {req_path} for task {task.id}: {e}")
+        return None
+
+    req_table_rows = "\n".join(
+        line for line in req_text.splitlines()
+        if re.match(r"^\s*\|\s*(REQ|NFR)-", line)
+    )
+    missing_flags = sorted(flag for flag in scope_flags if flag not in req_table_rows)
+    if not missing_flags:
+        return None
+
+    logger.warning(
+        f"Task {task.id[:8]} (product_requirements) claimed done but {missing_flags} "
+        f"from scope.md never got a REQ-XX/NFR-XX row — rejecting"
+    )
+    task.status = "failed"
+    task.failure_reason = (
+        f"CLI flag(s) {', '.join(missing_flags)} are named in scope.md but have no "
+        "dedicated REQ-XX/NFR-XX row in requirements.md."
+    )
+    session.commit()
+    return {
+        "status": "failed",
+        "message": (
+            f"Cannot mark done: {', '.join(missing_flags)} {'is' if len(missing_flags) == 1 else 'are'} "
+            "named in this feature's scope.md but missing a dedicated REQ-XX/NFR-XX row in "
+            "requirements.md -- a mention in prose is not enough (per this phase's own MANDATORY "
+            "traceability rule: every source item must be citable, or it's a silent drop). Add a "
+            "REQ-XX/NFR-XX row for each, with real acceptance criteria, before calling "
+            "update_task_status(done) again."
         ),
     }

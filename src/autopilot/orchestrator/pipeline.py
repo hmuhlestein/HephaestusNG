@@ -1000,6 +1000,38 @@ def _copy_design_input_into_worktree(design_entry: DesignEntry, worktree: Path) 
         shutil.copy2(design_entry.path, wt_heph / "design.md")
 
 
+def _copy_feature_scope_into_worktree(
+    designs_folder: Path, feature_key: str, wt_heph: Path, logger: OrchestratorLogger
+) -> Optional[Path]:
+    """Copy this feature's scope.md into the worktree, returning the
+    destination path if it landed, else None.
+
+    product_requirements.yaml's phase_1_task_prompt tells the agent "if
+    feature_scope is provided, read it first" with no existence-check of
+    its own -- the caller must only put launch_params["feature_scope"] to
+    a path this function actually confirms exists, so a missing source
+    correctly reads as "not provided" (falling through to design.md, the
+    documented fallback) instead of silently pointing the agent at a
+    promised file that was never delivered. Observed live: scope_src
+    didn't exist (a Feature row recreated by hand after a delete/rerun
+    pointed scope_doc_path at a stale designs_folder), the copy silently
+    no-op'd under the previous unconditional launch_params assignment,
+    and the agent's primary input was a dead link for the rest of the
+    feature's pipeline run with nothing logging it.
+    """
+    scope_src = designs_folder / "features" / feature_key / "scope.md"
+    scope_dest = wt_heph / "features" / feature_key / "scope.md"
+    if not scope_src.exists():
+        logger.warning(
+            f"[FEATURE-SCOPE] {scope_src} does not exist -- feature_scope "
+            f"will NOT be set for {feature_key}; agent falls back to design.md"
+        )
+        return None
+    scope_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(scope_src, scope_dest)
+    return scope_dest
+
+
 def run_phase0(
     sdk,
     design_entry: DesignEntry,
@@ -2075,21 +2107,19 @@ def _run_one_feature(
         if features_json_path.exists():
             shutil.copy2(features_json_path, wt_heph / "features.json")
 
-        # Copy scope.md for this feature
-        scope_src = designs_folder / "features" / feature_key / "scope.md"
-        scope_dest = wt_heph / "features" / feature_key / "scope.md"
-        scope_dest.parent.mkdir(parents=True, exist_ok=True)
-        if scope_src.exists():
-            shutil.copy2(scope_src, scope_dest)
+        # Copy scope.md for this feature.
+        scope_dest = _copy_feature_scope_into_worktree(designs_folder, feature_key, wt_heph, logger)
 
         # Launch autopilot workflow (12-phase)
         launch_params = {
             "design_document": str(design_entry.path),
             "project_path": str(project_path),
             "feature_id": feature_key,
-            "feature_scope": str(wt_heph / "features" / feature_key / "scope.md"),
-            "project_context": f"Building feature: {feature_name}. Scope: {wt_heph / 'features' / feature_key / 'scope.md'}",
+            "project_context": f"Building feature: {feature_name}.",
         }
+        if scope_dest is not None:
+            launch_params["feature_scope"] = str(scope_dest)
+            launch_params["project_context"] = f"Building feature: {feature_name}. Scope: {scope_dest}"
 
         description = f"Autopilot: {design_entry.name} - Feature: {feature_name}"
 
