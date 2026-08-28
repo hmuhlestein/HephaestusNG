@@ -85,7 +85,14 @@ from src.autopilot.orchestrator.state import (
     _delete_project_context,
     _workflow_belongs_to_project,
 )
-from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree, copy_design_source, copy_speckit_feature
+from src.autopilot.orchestrator.worktree_integration import (
+    _cleanup_worktree,
+    _copy_design_content,
+    _create_designs_folder,
+    _create_integration_worktree,
+    copy_design_source,
+    copy_speckit_feature,
+)
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, HEPHAESTUS_INSTALL_DIR, PHASE0_DEFINITION_IDS
 from src.core.database import DatabaseManager, Workflow, get_db, get_default_db_manager, utc_now
 from src.core.simple_config import get_config
@@ -374,6 +381,90 @@ def _merge_design_branch_into_main(
         logger.warning(f"Final merge failed: {e}")
 
 
+def _setup_shared_design_worktree(
+    project_path: str,
+    launch_params: Dict[str, Any],
+    design_name: str,
+    logger: "OrchestratorLogger",
+) -> Tuple[Optional[str], Optional[str], Optional["DatabaseManager"]]:
+    """Create (or reuse) the shared per-design worktree all phases of this
+    workflow commit to, and copy launch_params["design_document"] into it.
+    Extracted from run_single_workflow so this exact sequence -- including
+    the broad except below that falls back to project_path on any failure
+    -- is directly unit-testable (architectural review BLOCKER: a NameError
+    here from an unimported _copy_design_content silently discarded a
+    freshly created isolated worktree back to project_path on every normal
+    pipeline launch).
+
+    Returns (design_worktree_path, design_branch_name, db_manager). On any
+    failure, falls back to (project_path, None, None) -- matching
+    pre-extraction behavior, where design_branch_name stays whatever it
+    already was (None unless the worktree-creation branch above already set
+    it before the failure). db_manager is returned so run_single_workflow
+    can pass the same instance to the later final-merge call instead of
+    creating a second one -- pre-extraction, that reuse was implicit
+    (db was a local variable of run_single_workflow's own frame, visible
+    hundreds of lines later); extracting this block into its own function
+    would otherwise silently drop that reuse.
+    """
+    design_worktree_path = None
+    design_branch_name = None
+    db = None
+    try:
+        from src.core.database import DatabaseManager as DbManager
+        from src.core.simple_config import get_config
+        from src.core.worktree_manager import WorktreeManager
+
+        cfg = get_config()
+        db = DbManager(str(cfg.paths.database_path))
+        wt_mgr = WorktreeManager(db_manager=db, repo_path=Path(project_path))
+
+        # FIX: If project_path is already a worktree (contains .worktrees/),
+        # use it directly as the design worktree. Don't create a nested
+        # worktree inside it — that would be destroyed when the parent
+        # worktree is cleaned up.
+        if ".worktrees/" in str(project_path):
+            design_worktree_path = str(project_path)
+            logger.info(f"Using existing worktree directly: {design_worktree_path}")
+        else:
+
+            # Create feature branch from main
+            import git as _git
+
+            # Use design_entry name if available, otherwise derive from design_doc
+            _design_label = design_name.replace(" ", "-").lower() if design_name else "design"
+            feature_branch = f"feature/{_design_label}"
+            # Ensure branch name is unique (append short hash if needed)
+            try:
+                wt_mgr.main_repo.git.branch(feature_branch)
+            except _git.exc.GitCommandError:
+                # Branch exists — use it (idempotent)
+                pass
+
+            # Create worktree for the feature branch
+            # Use flattened name for worktree path (branch name has / which creates subdirs)
+            safe_branch = feature_branch.replace("/", "-")
+            wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
+            if not wt_path.exists():
+                wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
+            design_worktree_path = str(wt_path)
+            design_branch_name = feature_branch
+            logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
+
+        # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
+        wt_heph = Path(design_worktree_path) / CONTEXT_DIR_NAME
+        wt_heph.mkdir(parents=True, exist_ok=True)
+        if "design_document" in (launch_params or {}):
+            _dd = Path(launch_params["design_document"])
+            if _dd.exists():
+                _copy_design_content(_dd, wt_heph, "design.md", is_directory=_dd.is_dir())
+                logger.info(f"Copied design doc to worktree: {wt_heph / 'design.md'}")
+    except Exception as e:
+        logger.warning(f"Failed to create shared worktree, using project path: {e}")
+        design_worktree_path = project_path
+    return design_worktree_path, design_branch_name, db
+
+
 def run_single_workflow(
     sdk,
     workflow_id: str,
@@ -506,60 +597,9 @@ def run_single_workflow(
     )
 
     # Create a shared worktree for this design (all phases commit here)
-    design_worktree_path = None
-    design_branch_name = None
-    try:
-        from src.core.database import DatabaseManager as DbManager
-        from src.core.simple_config import get_config
-        from src.core.worktree_manager import WorktreeManager
-
-        cfg = get_config()
-        db = DbManager(str(cfg.paths.database_path))
-        wt_mgr = WorktreeManager(db_manager=db, repo_path=Path(project_path))
-
-        # FIX: If project_path is already a worktree (contains .worktrees/),
-        # use it directly as the design worktree. Don't create a nested
-        # worktree inside it — that would be destroyed when the parent
-        # worktree is cleaned up.
-        if ".worktrees/" in str(project_path):
-            design_worktree_path = str(project_path)
-            logger.info(f"Using existing worktree directly: {design_worktree_path}")
-        else:
-
-            # Create feature branch from main
-            import git as _git
-
-            # Use design_entry name if available, otherwise derive from design_doc
-            _design_label = design_name.replace(" ", "-").lower() if design_name else "design"
-            feature_branch = f"feature/{_design_label}"
-            # Ensure branch name is unique (append short hash if needed)
-            try:
-                wt_mgr.main_repo.git.branch(feature_branch)
-            except _git.exc.GitCommandError:
-                # Branch exists — use it (idempotent)
-                pass
-
-            # Create worktree for the feature branch
-            # Use flattened name for worktree path (branch name has / which creates subdirs)
-            safe_branch = feature_branch.replace("/", "-")
-            wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
-            if not wt_path.exists():
-                wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
-            design_worktree_path = str(wt_path)
-            design_branch_name = feature_branch
-            logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
-
-        # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
-        wt_heph = Path(design_worktree_path) / CONTEXT_DIR_NAME
-        wt_heph.mkdir(parents=True, exist_ok=True)
-        if "design_document" in (launch_params or {}):
-            _dd = Path(launch_params["design_document"])
-            if _dd.exists():
-                _copy_design_content(_dd, wt_heph, "design.md", is_directory=_dd.is_dir())
-                logger.info(f"Copied design doc to worktree: {wt_heph / 'design.md'}")
-    except Exception as e:
-        logger.warning(f"Failed to create shared worktree, using project path: {e}")
-        design_worktree_path = project_path
+    design_worktree_path, design_branch_name, _design_db_manager = _setup_shared_design_worktree(
+        project_path, launch_params, design_name, logger
+    )
 
     try:
         if existing_workflow_id:
@@ -761,7 +801,7 @@ def run_single_workflow(
 
                     _merge_design_branch_into_main(
                         getattr(state, "_design_branch", None), project_path, logger,
-                        db_manager=db,
+                        db_manager=_design_db_manager,
                     )
 
                     if state:
