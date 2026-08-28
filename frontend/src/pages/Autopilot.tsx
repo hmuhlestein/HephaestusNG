@@ -16,6 +16,7 @@ import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
 import MessageCenter from '@/components/autopilot/MessageCenter';
 import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
 import ReviewModeToggle from '@/components/autopilot/ReviewModeToggle';
+import SpeckitAutoScanToggle from '@/components/autopilot/SpeckitAutoScanToggle';
 import FeatureReviewModal from '@/components/autopilot/FeatureReviewModal';
 import ImprovementsPanel from '@/components/autopilot/ImprovementsPanel';
 import ProjectSettingsModal from '@/components/ProjectSettingsModal';
@@ -408,6 +409,10 @@ const Autopilot: React.FC = () => {
           <ReviewModeToggle
             projectId={projectId}
             reviewMode={status?.review_mode ?? false}
+          />
+          <SpeckitAutoScanToggle
+            projectId={projectId}
+            enabled={status?.speckit_auto_scan_enabled ?? false}
           />
         </nav>
       </div>

@@ -366,6 +366,7 @@ async def get_pipeline_status(
                 with _get_db() as _db:
                     _proj = _db.query(AutopilotProject).get(project_id)
                     review_mode = bool(_proj and getattr(_proj, "review_mode", False))
+                    speckit_auto_scan_enabled = bool(_proj and getattr(_proj, "speckit_auto_scan_enabled", False))
                     # Count features whose workflow is paused_by="review"
                     proj_wf_ids = [
                         wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()
@@ -381,11 +382,13 @@ async def get_pipeline_status(
                             )
                             .count()
                         )
-                    return review_mode, features_awaiting_review
+                    return review_mode, speckit_auto_scan_enabled, features_awaiting_review
 
-            result.review_mode, result.features_awaiting_review = await loop.run_in_executor(
-                None, _fetch_review_mode_sync
-            )
+            (
+                result.review_mode,
+                result.speckit_auto_scan_enabled,
+                result.features_awaiting_review,
+            ) = await loop.run_in_executor(None, _fetch_review_mode_sync)
         except Exception:
             pass
 

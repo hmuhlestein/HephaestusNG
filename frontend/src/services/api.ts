@@ -942,6 +942,11 @@ export const apiService = {
     return data;
   },
 
+  patchProjectSpeckitAutoScan: async (projectId: string, enabled: boolean): Promise<{ speckit_auto_scan_enabled: boolean }> => {
+    const { data } = await api.patch(`/autopilot/projects/${encodeURIComponent(projectId)}/speckit-auto-scan`, { speckit_auto_scan_enabled: enabled });
+    return data;
+  },
+
   postFeatureReview: async (
     featureId: string,
     action: 'approve' | 'request_changes',
