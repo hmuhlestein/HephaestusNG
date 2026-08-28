@@ -402,9 +402,16 @@ async def delete_feature(feature_id: str):
                     db.query(PhasePromptVersion).filter(PhasePromptVersion.phase_id.in_(phase_ids)).delete(synchronize_session=False)
                 db.query(Phase).filter(Phase.workflow_id == workflow_id).delete(synchronize_session=False)
 
-                db.query(Workflow).filter_by(id=workflow_id).delete(synchronize_session=False)
-
+            # features.workflow_id also FKs to workflows.id -- the Feature
+            # row itself (still pointing at workflow_id here) must be gone
+            # before DELETE FROM workflows runs, or that statement fails
+            # the same FK-violation way phases/tasks did above. flush()
+            # forces the ORM delete to hit the DB now rather than at the
+            # transaction's final commit, which would be too late.
             db.delete(feature)
+            if workflow_id:
+                db.flush()
+                db.query(Workflow).filter_by(id=workflow_id).delete(synchronize_session=False)
     except IntegrityError as e:
         raise HTTPException(
             status_code=409,
