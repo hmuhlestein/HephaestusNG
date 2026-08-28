@@ -420,31 +420,6 @@ def migrate_autopilot_designs_archived_at_column(engine):
         logger.warning(f"autopilot_designs.archived_at migration failed (not just 'already exists' -- check this): {e}")
 
 
-def migrate_speckit_auto_scan_flag_column(engine):
-    """Add autopilot_projects.speckit_auto_scan for existing databases.
-
-    Idempotent - safe to call on every startup.
-
-    Named distinctly from migrate_speckit_auto_scan_column below (which
-    migrates the newer speckit_auto_scan_enabled column) -- this function's
-    OWN registered id in SCHEMA_MIGRATIONS ("_migrate_speckit_auto_scan_column")
-    predates that rename and is already recorded in the schema_migrations
-    table of every existing database. Renaming this function is safe (the
-    registered id is what's tracked, not the function name); renaming the
-    registered id itself would not be -- see this module's docstring.
-    """
-    try:
-        with engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN speckit_auto_scan BOOLEAN NOT NULL DEFAULT 0"))
-            except Exception:
-                pass  # Column already exists
-            conn.commit()
-            logger.info("Migrated autopilot_projects.speckit_auto_scan column")
-    except Exception as e:
-        logger.warning(f"autopilot_projects.speckit_auto_scan migration failed (not just 'already exists' -- check this): {e}")
-
-
 def migrate_speckit_auto_scan_column(engine):
     """Add autopilot_projects.speckit_auto_scan_enabled for existing databases.
 
@@ -1019,7 +994,6 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
     ("_migrate_project_repos_table", migrate_project_repos_table),
     ("_migrate_autopilot_designs_archived_at_column", migrate_autopilot_designs_archived_at_column),
-    ("_migrate_speckit_auto_scan_column", migrate_speckit_auto_scan_flag_column),
     ("_migrate_speckit_design_columns", migrate_speckit_design_columns),
     ("_migrate_speckit_auto_scan_enabled_column", migrate_speckit_auto_scan_column),
 ]

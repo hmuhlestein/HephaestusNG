@@ -1160,10 +1160,6 @@ class AutopilotProject(Base):
     # and waits for the user to approve or request changes before continuing.
     review_mode = Column(Boolean, default=False, nullable=False)
 
-    # Opt-in (default off): the design-queue background scan also treats new/
-    # updated specs/<NNN>-<name>/ Spec Kit feature dirs as queueable designs.
-    speckit_auto_scan = Column(Boolean, default=False, nullable=False)
-
     # Spec Kit auto-scan: when True, the design-queue scan also auto-queues
     # ready (has_plan=True) specs/<NNN>-<name>/ Spec Kit feature directories.
     speckit_auto_scan_enabled = Column(Boolean, default=False, nullable=False)
