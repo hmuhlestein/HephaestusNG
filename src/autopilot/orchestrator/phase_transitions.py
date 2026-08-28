@@ -2182,7 +2182,17 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
         # got the same generic phase description and no idea what to fix.
         reset_task_ids = []
         for task in retryable_tasks:
-            if task.failure_reason:
+            # "Orphaned: ..." means no agent ever actually received this
+            # task -- a scheduling/claim-race artifact (see
+            # _create_phase_task's own orphan-detection), not a real
+            # attempt that made a mistake. Framing it as "your previous
+            # attempt failed... fix it rather than repeating the same
+            # mistake" is actively misleading on what is, from the next
+            # agent's own point of view, genuinely its FIRST prompt for
+            # this task -- there is nothing to "fix" or "stop repeating".
+            # Skip the RETRY banner for this case; dispatch it as a plain
+            # first attempt.
+            if task.failure_reason and "orphaned" not in task.failure_reason.lower():
                 # Use raw_description as base to avoid accumulating retry messages
                 base = task.raw_description or ""
                 task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed with this specific error, fix it rather than repeating the same mistake ---\n{task.failure_reason}"
