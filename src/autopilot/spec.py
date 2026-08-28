@@ -907,8 +907,12 @@ def build_input_manifest(
         return ""
 
     manifest = (
-        "\n\nINPUTS AVAILABLE TO YOU THIS RUN (resolved at dispatch, do not "
-        "guess these paths):\n" + "\n".join(lines)
+        "\n\nINPUTS AVAILABLE TO YOU THIS RUN -- you MUST actually read AND "
+        "resolve each of these (incorporate every requirement/finding into "
+        "your own work), not just cite that the file exists or mention it "
+        "in passing. Citing a document without acting on its content is "
+        "not the same as having read it. Paths are resolved at dispatch --"
+        " do not guess them:\n" + "\n".join(lines)
     )
     if missing_required:
         manifest += (
