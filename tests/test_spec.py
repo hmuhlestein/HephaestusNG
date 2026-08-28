@@ -1048,6 +1048,19 @@ class TestInputManifest:
         )
         assert "./.hephaestus/architecture_design/architecture.md" in out
 
+    def test_manifest_mandates_reading_and_resolving_not_just_citing(self, tmp_path):
+        """Regression: a phase claimed a document's content was already
+        satisfied while only citing it in passing prose, without actually
+        resolving every item in it into its own output. The manifest's own
+        header must say so explicitly, not just tell the agent where files
+        are."""
+        self._seed(tmp_path, [".hephaestus/architecture_design/architecture.md"])
+        out = self._manifest(
+            "development", tmp_path, {"development": {"required": ["architecture.md"]}}
+        )
+        assert "MUST actually read AND resolve" in out
+        assert "not just cite" in out
+
     def test_present_line_omits_the_bare_declared_name(self, tmp_path):
         """The bare declared name (e.g. "challenge.md") never exists on
         disk under that name -- every producing phase writes its report
