@@ -336,6 +336,29 @@ class Task(Base):
     ticket = relationship("Ticket", foreign_keys=[ticket_id], backref="related_tasks")
 
 
+@event.listens_for(Task, "after_insert")
+def _log_task_insert(mapper, connection, target):
+    """Diagnostic: log every Task row's creation site (id/phase_id/
+    workflow_id + the calling src/ frames), to catch a phase-1 task-
+    duplication race whose actual creator doesn't go through any of the
+    logged creation paths (_create_phase_task, agent_task_routes.create_task)
+    -- observed live, workflow e9019930's product_requirements phase got a
+    second task 16s after the first with no matching log line from either
+    known creator. Remove once that creator is identified."""
+    import traceback
+
+    frames = [
+        f"{Path(f.filename).name}:{f.lineno}:{f.name}"
+        for f in traceback.extract_stack()
+        if "src/" in f.filename or "src\\" in f.filename
+    ]
+    logger.info(
+        f"[TASK-CREATED] {target.id[:8]} phase_id={(target.phase_id or '')[:8]} "
+        f"workflow_id={(target.workflow_id or '')[:8]} status={target.status} "
+        f"via: {' <- '.join(reversed(frames[-6:]))}"
+    )
+
+
 class Memory(Base):
     """Memory model for storing agent discoveries and learnings."""
 
