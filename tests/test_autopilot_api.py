@@ -4061,6 +4061,50 @@ class TestDeleteFeature:
             assert db.query(Feature).filter_by(id="feat-cost").first() is None
             assert db.query(CostEntry).filter_by(id="cost-del-1").first() is None
 
+    def test_deletes_feature_with_phases_and_phase_executions(self, project_client):
+        """Phase rows (and their PhaseExecution children) were never
+        cleaned up, and the PhaseExecution cleanup that did exist filtered
+        on the unused workflow_execution_id column instead of joining
+        through Phase.workflow_id -- both left phases.workflow_id (and
+        phase_executions.phase_id) FK rows behind, so DELETE FROM workflows
+        failed with an IntegrityError."""
+        client, dirs = project_client
+        from src.core.database import Feature, Phase, PhaseExecution, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-del-phase", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-phase", design_id="does-not-matter", feature_key="p",
+                    name="P", scope="s", status="active", workflow_id="wf-del-phase",
+                )
+            )
+            db.add(
+                Phase(
+                    id="phase-del-1", workflow_id="wf-del-phase", order=1,
+                    name="p1", description="d", done_definitions=[],
+                )
+            )
+            db.add(
+                PhaseExecution(
+                    id="phase-exec-del-1", phase_id="phase-del-1", status="completed",
+                )
+            )
+
+        resp = client.delete("/api/autopilot/features/feat-phase")
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-phase").first() is None
+            assert db.query(Workflow).filter_by(id="wf-del-phase").first() is None
+            assert db.query(Phase).filter_by(id="phase-del-1").first() is None
+            assert db.query(PhaseExecution).filter_by(id="phase-exec-del-1").first() is None
+
     def test_terminates_assigned_agent_before_deleting(self, project_client, monkeypatch):
         client, dirs = project_client
         from src.core.database import Agent, Feature, Task, Workflow, get_db
