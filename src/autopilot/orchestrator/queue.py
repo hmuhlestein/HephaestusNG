@@ -1,12 +1,16 @@
 """Design-queue scanning, picking, and status."""
 
+import hashlib
 import json
 import logging
 import os
 import subprocess
+import uuid as _uuid
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.core.constants import (
     CONTEXT_DIR_NAME,
@@ -373,6 +377,139 @@ def _archived_design_for_workflow(workflow_id: str):
         return design if design and design.archived_at else None
 
 
+def _sync_speckit_designs(db, project) -> None:
+    """Fold ready specs/<NNN>-<name>/ Spec Kit features into pending
+    AutopilotDesign rows, gated on project.speckit_auto_scan_enabled.
+
+    No-op unless the flag is set. Reuses find_speckit_features for all
+    directory/readiness parsing -- this function only decides which
+    already-detected features become queue entries.
+
+    Dedup key is (project_id, filename), the ACTUAL unique constraint on
+    AutopilotDesign (uq_design_project_filename) -- not content_hash, which
+    is nullable and NOT unique, and which drifts every time a user edits
+    spec.md (e.g. resolving a [NEEDS CLARIFICATION] marker) before the row
+    is picked up. Looking up by content_hash would fail to find the
+    existing row after such an edit and attempt a second insert with the
+    same filename, raising IntegrityError on uq_design_project_filename --
+    permanently, since every subsequent scan repeats the same stale-hash
+    miss.
+
+    Each feature is synced in its own try/except + commit so one feature's
+    failure (including a race against a concurrent writer) never discards
+    another feature's already-staged row in the same call. An
+    unreadable/vanished spec.md is skipped via a dedicated OSError catch
+    around the read (no DB write attempted yet, nothing to roll back).
+    Once a DB write is attempted, expected, transient errors
+    (IntegrityError, OperationalError) are caught and rolled back --
+    pick_next_design makes no writes of its own before this call runs, so
+    a rollback at this point can only undo THIS feature's own
+    not-yet-committed insert/update, never a sibling feature's already-
+    `db.commit()`-ed row (committed transactions are durable) or a caller
+    write from outside this function.
+
+    A genuine programming error (anything else) is logged at ERROR with a
+    traceback but does NOT raise out of this function -- it is isolated to
+    just this one feature and the loop continues to the next. A `raise`
+    here would abort the whole pass and propagate into pick_next_design's
+    own generic exception handler, whose file-scan fallback path has no
+    budget check -- turning one broken speckit feature into a per-project
+    budget-gate bypass on every subsequent scan.
+
+    Deliberately does NOT archive/clean up a pending row whose feature
+    stops appearing in find_speckit_features's output (e.g. a renamed or
+    deleted specs/<NNN>-<name>/ directory) -- find_speckit_features's own
+    is_dir() check and a plain Path.exists() call both silently swallow
+    OSError and return False on a transient filesystem/mount hiccup, not
+    just on genuine deletion, so archiving on absence could permanently
+    hide a legitimately pending, ready feature.
+    """
+    if not getattr(project, "speckit_auto_scan_enabled", False):
+        return
+    from src.core.database import AutopilotDesign, utc_now
+    from src.core.speckit_detection import find_speckit_features
+
+    try:
+        features = find_speckit_features(db, project.id)
+    except Exception:
+        logger.error(f"[SPECKIT-AUTOSCAN] detection failed for project {project.id[:8]}", exc_info=True)
+        return
+
+    for feat in features:
+        if not feat.has_plan:
+            continue
+        spec_path = feat.dir_path / "spec.md"
+
+        try:
+            # Read once and derive both hash and size from the same bytes --
+            # separate stat()/read_bytes() calls could observe two different
+            # versions of a concurrently-edited spec.md.
+            spec_bytes = spec_path.read_bytes()
+        except OSError as e:
+            logger.warning(f"[SPECKIT-AUTOSCAN] cannot read {spec_path}: {e}")
+            continue
+        content_hash = hashlib.sha256(spec_bytes).hexdigest()[:16]  # matches file_hash's truncation
+        size_bytes = len(spec_bytes)
+
+        filename = f"speckit/{feat.repo_label}/{feat.number}-{feat.slug}.md"
+
+        try:
+            # Dedup key: (project_id, filename) -- the real unique
+            # constraint. content_hash is compared only to decide whether an
+            # existing PENDING row needs its snapshot refreshed, never used
+            # as the existence check itself.
+            existing = db.query(AutopilotDesign).filter_by(project_id=project.id, filename=filename).first()
+            if existing:
+                if existing.status != "pending":
+                    # Already processing/active/completed/failed/skipped --
+                    # never re-queue or double-build.
+                    continue
+                if existing.content_hash != content_hash:
+                    # spec.md was edited before pickup -- refresh the
+                    # snapshot in place rather than silently building the
+                    # stale version or attempting a duplicate insert.
+                    existing.content_hash = content_hash
+                    existing.size_bytes = size_bytes
+                    existing.modified_at = utc_now()
+                    db.commit()
+                    logger.info(f"[SPECKIT-AUTOSCAN] refreshed pending design {existing.id[:8]} for {feat.dir_name!r} (spec.md changed before pickup)")
+                continue
+
+            max_ordinal = db.query(func.max(AutopilotDesign.ordinal)).filter_by(project_id=project.id).scalar() or 0
+            design = AutopilotDesign(
+                id=f"des-{_uuid.uuid4().hex[:12]}",
+                project_id=project.id,
+                filename=filename,
+                name=f"{feat.number}-{feat.slug}",
+                ordinal=max_ordinal + 1,
+                size_bytes=size_bytes,
+                extension=".md",
+                content_hash=content_hash,
+                file_path=str(spec_path),
+                status="pending",
+                workflow_type="feature",
+            )
+            db.add(design)
+            db.commit()
+            logger.info(f"[SPECKIT-AUTOSCAN] queued Spec Kit feature {feat.dir_name!r} (repo={feat.repo_label}) as design {design.id[:8]}")
+        except (IntegrityError, OperationalError) as e:
+            # Isolate this feature's failure from every other feature in
+            # this same sync pass -- a failure here must not discard rows
+            # already committed for sibling features above, and must not
+            # abort the scan for features still to come below.
+            db.rollback()
+            logger.warning(f"[SPECKIT-AUTOSCAN] failed to sync {feat.dir_name!r}: {e}")
+            continue
+        except Exception:
+            # Not an expected transient DB error -- log the full traceback
+            # at ERROR so a genuine bug is visible, but isolate it to this
+            # one feature rather than raising (see this function's
+            # docstring for why a raise here is unsafe).
+            db.rollback()
+            logger.error(f"[SPECKIT-AUTOSCAN] unexpected error syncing {feat.dir_name!r}", exc_info=True)
+            continue
+
+
 def pick_next_design(
     queue_dir: Path,
     processed_hashes: Set[str],
@@ -424,6 +561,8 @@ def pick_next_design(
                     f"over budget (${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}) — skipping"
                 )
                 return None
+
+            _sync_speckit_designs(db, project)
 
             logger.info(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
