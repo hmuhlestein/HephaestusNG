@@ -516,7 +516,28 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
         derived = WorkflowStatus.ACTIVE
     elif TaskStatus.FAILED in task_statuses:
         if task_statuses == {TaskStatus.FAILED}:
-            derived = WorkflowStatus.FAILED
+            failed_tasks = [t for t in tasks if t.status == TaskStatus.FAILED]
+            if all((t.failure_reason or "").startswith("Orphaned:") for t in failed_tasks):
+                # Every failed task is tagged "Orphaned:" -- self-heal's own
+                # transient artifact from _create_phase_task's orphan-
+                # detection (mark the stale task failed, then immediately
+                # create a fresh replacement in the same pass), not a
+                # genuine failure. A write_back=True caller landing in the
+                # split-second gap between those two steps used to derive/
+                # persist "failed" here, which _advance_phases then treats
+                # as terminal (every case requires status in
+                # ("active","paused")) and other self-heal sweeps read as
+                # "this workflow needs recovery," racing the fresh
+                # replacement task/agent _create_phase_task is about to
+                # create. Confirmed live: this exact race flipped workflow
+                # e35be066 to "failed" less than a minute before a
+                # legitimate, freshly-dispatched agent for the same phase
+                # was killed. Trust the existing DB status instead of
+                # deriving a fresh one, same as the plain-PENDING case
+                # below.
+                derived = workflow.status
+            else:
+                derived = WorkflowStatus.FAILED
         else:
             derived = WorkflowStatus.ACTIVE
     elif task_statuses == {TaskStatus.PENDING}:
