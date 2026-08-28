@@ -1046,8 +1046,21 @@ class TestInputManifest:
         out = self._manifest(
             "development", tmp_path, {"development": {"required": ["architecture.md"]}}
         )
-        assert "[present]  architecture.md" in out
         assert "./.hephaestus/architecture_design/architecture.md" in out
+
+    def test_present_line_omits_the_bare_declared_name(self, tmp_path):
+        """The bare declared name (e.g. "challenge.md") never exists on
+        disk under that name -- every producing phase writes its report
+        under a task-id-suffixed filename -- so pairing "[present]
+        challenge.md -> .../challenge-de343171.md" read as pointing at an
+        old/different file, not this codebase's normal per-task naming.
+        Only the resolved path is shown now."""
+        self._seed(tmp_path, [".hephaestus/architecture_design/architecture.md"])
+        out = self._manifest(
+            "development", tmp_path, {"development": {"required": ["architecture.md"]}}
+        )
+        assert "architecture.md  ->" not in out
+        assert "[present]" not in out
 
     def test_marks_a_missing_required_input_and_explains_why(self, tmp_path):
         self._seed(tmp_path, [".hephaestus/requirements.md"])
@@ -1057,7 +1070,7 @@ class TestInputManifest:
             {"development": {"required": ["architecture.md", "requirements.md"]}},
         )
         assert "[MISSING]  architecture.md  (required)" in out
-        assert "[present]  requirements.md" in out
+        assert "./.hephaestus/requirements.md" in out
         # The agent is told what to do about it rather than left to invent.
         assert "rewound by a goto" in out
         assert "invent their contents" in out

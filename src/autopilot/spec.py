@@ -830,18 +830,13 @@ def resolve_phase_input(
     if old_name:
         names.append(old_name)
     producers = input_producer_phases(workflow_id, filename)
-    for name in names:
-        candidates = [base / CONTEXT_DIR_NAME / producer / name for producer in producers]
-        candidates.append(base / CONTEXT_DIR_NAME / name)
-        candidates.append(base / name)
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-    # Suffixed fallback -- never the worktree root, same reasoning as
-    # resolve_declared_output_path's own newest-glob fallback: only
-    # .hephaestus/ is exclusively Hephaestus's own output, so a wildcard
-    # glob there can't collide with an unrelated real project file the way
-    # one at the worktree root could.
+    # Suffixed match tried FIRST, not last: every producing phase writes
+    # its report under a task-id-suffixed filename (suffixed_output_name),
+    # never the bare declared name -- see this function's own docstring.
+    # A bare-named file, if one exists at all, can only be a stale
+    # leftover (pre-suffixing convention, or debris from something that
+    # doesn't follow it) and must not outrank the real, current-run
+    # suffixed file just because the exact-name check used to run first.
     for name in names:
         for producer in producers:
             newest = _newest_glob_match(base / CONTEXT_DIR_NAME / producer, name)
@@ -850,6 +845,18 @@ def resolve_phase_input(
         newest = _newest_glob_match(base / CONTEXT_DIR_NAME, name)
         if newest:
             return newest
+    # Bare-name fallback -- never the worktree root, same reasoning as
+    # resolve_declared_output_path's own newest-glob fallback: only
+    # .hephaestus/ is exclusively Hephaestus's own output, so a wildcard
+    # glob there can't collide with an unrelated real project file the way
+    # one at the worktree root could.
+    for name in names:
+        candidates = [base / CONTEXT_DIR_NAME / producer / name for producer in producers]
+        candidates.append(base / CONTEXT_DIR_NAME / name)
+        candidates.append(base / name)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
     return None
 
 
@@ -885,7 +892,13 @@ def build_input_manifest(
                     rel = rel.relative_to(Path(working_directory))
                 except ValueError:
                     pass
-                lines.append(f"  [present]  {filename}  ->  ./{rel}")
+                # Path only, not "[present] <declared name> -> ": the
+                # declared name (e.g. "challenge.md") never exists on disk
+                # under that bare name -- every producing phase writes its
+                # report under a task-id-suffixed filename -- so pairing it
+                # with the real path read as "an old/different file," not
+                # this codebase's normal per-task naming convention.
+                lines.append(f"  ./{rel}")
             else:
                 lines.append(f"  [MISSING]  {filename}  ({kind})")
                 if kind == "required":

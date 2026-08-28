@@ -158,7 +158,13 @@ def _retry_failed_tasks_with_done(db, phase, workflow_id, execution, logger,
     if retryable_tasks:
         logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {len(retryable_tasks)} failed tasks to retry")
         for task in retryable_tasks:
-            if task.failure_reason:
+            # "Orphaned: ..." means no agent ever actually received this
+            # task (a scheduling/claim-race artifact, not a real attempt)
+            # -- see phase_transitions.py's own _maybe_retry_failed_tasks
+            # for the fuller reasoning. Skip the RETRY banner for this
+            # case; from the next agent's point of view this is genuinely
+            # its first prompt for the task.
+            if task.failure_reason and "orphaned" not in task.failure_reason.lower():
                 # Use raw_description as base to avoid accumulating retry messages
                 base = task.raw_description or ""
                 task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed ---\n{task.failure_reason}"
