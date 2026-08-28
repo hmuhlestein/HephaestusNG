@@ -1385,6 +1385,167 @@ class TestVerifyDevelopmentProducedACommit:
         assert task.status == "done"
 
 
+class TestVerifyRequirementsCoverScopeCliFlags:
+    """Regression: scope.md named `--design-doc` as one of the CLI args
+    to wire up (alongside `--feature`/`--repo`); requirements.md's own
+    intro prose mentioned it too while summarizing scope, but no REQ-XX
+    row was ever created for it -- so development.yaml's own REQ-XX
+    tracking loop (which only iterates rows that exist) never saw it as
+    something to implement. product_requirements.yaml's own MANDATORY
+    traceability rule already says this in prose ("every source ID that
+    never appears in a Source citation is a silent drop") -- this is the
+    hard floor that actually enforces it."""
+
+    def _task(self, **overrides):
+        defaults = dict(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        defaults.update(overrides)
+        return Mock(**defaults)
+
+    def _session_with_workflow(self, working_directory, feature_scope):
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
+            working_directory=working_directory,
+            launch_params={"feature_scope": feature_scope} if feature_scope else {},
+        )
+        return mock_session
+
+    def test_returns_none_for_arbitration_task(self):
+        phase = Mock(name="product_requirements", id="phase-1")
+        phase.name = "product_requirements"
+        task = self._task(created_by_agent_id="arbitration")
+        mock_session = Mock()
+
+        result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+        mock_session.query.assert_not_called()
+
+    def test_returns_none_for_non_product_requirements_phase(self):
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = self._task()
+
+        result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_returns_none_when_no_workflow_id(self):
+        phase = Mock(name="product_requirements", id="phase-1")
+        phase.name = "product_requirements"
+        task = self._task(workflow_id=None)
+
+        result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_returns_none_when_no_feature_scope_in_launch_params(self, tmp_path):
+        phase = Mock(name="product_requirements", id="phase-1")
+        phase.name = "product_requirements"
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=None)
+
+        result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
+    def test_returns_none_when_scope_has_no_cli_flags(self, tmp_path):
+        phase = Mock(name="product_requirements", id="phase-1")
+        phase.name = "product_requirements"
+        scope_md = tmp_path / "scope.md"
+        scope_md.write_text("# Feature: Auth\nAdd login and logout endpoints.\n")
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
+
+        result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
+    def test_rejects_when_flag_mentioned_only_in_prose_not_in_req_row(self, tmp_path):
+        """The exact live incident: --design-doc appears in requirements.md's
+        own intro prose (summarizing scope) but never got its own REQ-XX
+        table row -- a whole-document substring check would have missed
+        this; the check must be scoped to REQ-XX/NFR-XX rows."""
+        phase = Mock(name="product_requirements", id="phase-1")
+        phase.name = "product_requirements"
+        scope_md = tmp_path / "scope.md"
+        scope_md.write_text(
+            "# Feature: Spec Kit CLI\n"
+            "Extend `heph autopilot start` with `--feature`/`--repo`/`--design-doc`.\n"
+        )
+        req_md = tmp_path / "requirements-task-1.md"
+        req_md.write_text(
+            "# Requirements\n"
+            "Scope: extend start with `--feature`/`--repo`/`--design-doc`.\n\n"
+            "| REQ ID | Requirement | Source |\n"
+            "|--------|-------------|--------|\n"
+            "| REQ-01 | `--feature`/`--repo` resolve a Spec Kit feature | design.md |\n"
+        )
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
+
+        with patch(
+            "src.autopilot.spec.resolve_declared_output_path",
+            return_value=req_md,
+        ):
+            result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "--design-doc" in result["message"]
+        assert task.status == "failed"
+        assert "--design-doc" in task.failure_reason
+
+    def test_passes_when_every_flag_has_its_own_req_row(self, tmp_path):
+        phase = Mock(name="product_requirements", id="phase-1")
+        phase.name = "product_requirements"
+        scope_md = tmp_path / "scope.md"
+        scope_md.write_text("Extend start with `--feature`/`--repo`/`--design-doc`.\n")
+        req_md = tmp_path / "requirements-task-1.md"
+        req_md.write_text(
+            "| REQ ID | Requirement | Source |\n"
+            "|--------|-------------|--------|\n"
+            "| REQ-01 | `--feature`/`--repo` resolve a Spec Kit feature | design.md |\n"
+            "| REQ-02 | `--design-doc` pins an explicit design document path | design.md |\n"
+        )
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
+
+        with patch(
+            "src.autopilot.spec.resolve_declared_output_path",
+            return_value=req_md,
+        ):
+            result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is None
+        assert task.status == "done"  # untouched
+
+    def test_returns_none_when_requirements_file_not_found(self, tmp_path):
+        phase = Mock(name="product_requirements", id="phase-1")
+        phase.name = "product_requirements"
+        scope_md = tmp_path / "scope.md"
+        scope_md.write_text("Extend start with `--design-doc`.\n")
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
+
+        with patch("src.autopilot.spec.resolve_declared_output_path", return_value=None):
+            result = TaskCompletionService.verify_requirements_cover_scope_cli_flags(
+                session=mock_session, task=task, phase=phase
+            )
+        assert result is None  # verify_output_artifact already surfaces this case
+
+
 class TestRecordLearnings:
     """Tests for record_learnings method."""
 
