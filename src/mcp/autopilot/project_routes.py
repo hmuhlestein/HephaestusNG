@@ -624,6 +624,7 @@ async def delete_project(
     from sqlalchemy.exc import IntegrityError
 
     from src.core.database import (
+        Agent,
         AgentResult,
         AgentWorktree,
         AutopilotDesign,
@@ -706,6 +707,15 @@ async def delete_project(
                 db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
                 db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
+                # Agent.current_task_id -> tasks.id is also an enforced FK --
+                # a belt-and-suspenders null-out alongside the termination
+                # above (repair_service.py's rerun does the same): an agent
+                # that crashed/was killed without going through the normal
+                # terminate path (which clears this) can leave it dangling
+                # at one of these tasks, failing the Task delete below.
+                db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).update(
+                    {"current_task_id": None}, synchronize_session=False
+                )
 
             db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
             db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
