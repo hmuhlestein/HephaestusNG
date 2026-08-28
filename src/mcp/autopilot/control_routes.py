@@ -406,6 +406,8 @@ def _resolve_and_enqueue_speckit_feature(
     reuses the existing continuous-queue machinery."""
     import uuid as _uuid
 
+    from sqlalchemy.exc import IntegrityError, OperationalError
+
     from src.autopilot.orchestrator.speckit import (
         SpecKitSelectionError,
         discover_speckit_features,
@@ -429,10 +431,14 @@ def _resolve_and_enqueue_speckit_feature(
                 detail={"code": e.code, "message": e.message, "candidates": [c.label() for c in e.candidates]},
             )
 
-        spec_path = str(selected.spec_path)
-        existing = db.query(AutopilotDesign).filter_by(project_id=project_id, file_path=spec_path).first()
-        min_ordinal = db.query(AutopilotDesign).filter_by(project_id=project_id).count()
-        top_ordinal = -(min_ordinal + 1)  # sorts before every existing row
+        # Dedup by source_dir (REQ-02/NFR-02), not filename/file_path --
+        # every discovered feature's spec_path.name is the literal string
+        # "spec.md" (speckit.py:87), so keying on file_path/filename would
+        # collide across every feature in the same project past the first.
+        source_dir = str(selected.dir_path)
+        existing = db.query(AutopilotDesign).filter_by(project_id=project_id, source_dir=source_dir).first()
+        existing_row_count = db.query(AutopilotDesign).filter_by(project_id=project_id).count()
+        top_ordinal = -(existing_row_count + 1)  # sorts before every existing row
 
         if existing is not None:
             existing.status = "pending"
@@ -442,15 +448,27 @@ def _resolve_and_enqueue_speckit_feature(
                 AutopilotDesign(
                     id=f"des-{_uuid.uuid4().hex[:12]}",
                     project_id=project_id,
-                    filename=selected.spec_path.name,
+                    filename=None,
                     name=f"{selected.number}-{selected.slug}",
                     ordinal=top_ordinal,
                     extension=".md",
-                    file_path=spec_path,
+                    source_dir=source_dir,
+                    repo_id=selected.repo_id,
                     status="pending",
                 )
             )
-        db.commit()
+        try:
+            db.commit()
+        except (IntegrityError, OperationalError) as e:
+            db.rollback()
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "SELECTION_CONFLICT",
+                    "message": f"Could not enqueue {selected.number}-{selected.slug}: {e}",
+                    "candidates": [],
+                },
+            )
         logger.info(f"[SPECKIT] Selected feature {selected.number}-{selected.slug} for project {project_id}, enqueued at ordinal={top_ordinal}")
 
 

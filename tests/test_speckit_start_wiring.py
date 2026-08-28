@@ -52,7 +52,8 @@ class TestResolveAndEnqueueSpeckitFeature:
         with get_db() as db:
             rows = db.query(AutopilotDesign).filter_by(project_id=project_id).all()
             assert len(rows) == 1
-            assert rows[0].file_path == str(tmp_path / "specs" / "001-x" / "spec.md")
+            assert rows[0].source_dir == str(tmp_path / "specs" / "001-x")
+            assert rows[0].filename is None
             assert rows[0].status == "pending"
             assert rows[0].ordinal < 0
 
@@ -117,6 +118,30 @@ class TestResolveAndEnqueueSpeckitFeature:
         with get_db() as db:
             rows = db.query(AutopilotDesign).filter_by(project_id=project_id).all()
             assert len(rows) == 1
+
+    def test_second_distinct_feature_does_not_collide_on_filename(self, tmp_path, monkeypatch):
+        """Regression: every feature's spec_path.name is the literal string
+        "spec.md" -- selecting a second, distinct feature in the same
+        project must not collide with the first feature's row (it must dedup
+        by source_dir, not filename/file_path)."""
+        from src.mcp.autopilot.control_routes import _resolve_and_enqueue_speckit_feature
+
+        project_id = _setup_db(tmp_path, monkeypatch, tmp_path)
+        _make_feature_dir(tmp_path, "001-x")
+        _make_feature_dir(tmp_path, "002-y")
+
+        _resolve_and_enqueue_speckit_feature(project_id, str(tmp_path), "001-x", None)
+        _resolve_and_enqueue_speckit_feature(project_id, str(tmp_path), "002-y", None)
+
+        from src.core.database import get_db
+
+        with get_db() as db:
+            rows = db.query(AutopilotDesign).filter_by(project_id=project_id).all()
+            assert len(rows) == 2
+            assert {r.source_dir for r in rows} == {
+                str(tmp_path / "specs" / "001-x"),
+                str(tmp_path / "specs" / "002-y"),
+            }
 
 
 class TestProjectScopedSpeckitFeaturesRoute:

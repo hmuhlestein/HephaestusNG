@@ -85,7 +85,7 @@ from src.autopilot.orchestrator.state import (
     _delete_project_context,
     _workflow_belongs_to_project,
 )
-from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree, copy_speckit_feature
+from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree, copy_design_source, copy_speckit_feature
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, HEPHAESTUS_INSTALL_DIR, PHASE0_DEFINITION_IDS
 from src.core.database import DatabaseManager, Workflow, get_db, get_default_db_manager, utc_now
 from src.core.simple_config import get_config
