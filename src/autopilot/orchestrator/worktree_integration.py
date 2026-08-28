@@ -71,6 +71,30 @@ def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directo
     return dest
 
 
+def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str = "design.md") -> Path:
+    """Copy design_entry's backing content into heph_dir. Directory-sourced
+    entries (design_entry.source_dir set, REQ-02/NFR-02) recursively copy the
+    whole tree via _copy_design_content; file-sourced entries copy
+    design_entry.path to heph_dir/filename. Raises FileNotFoundError if the
+    source vanished (race: deleted between detection and copy)."""
+    if design_entry.source_dir is not None:
+        source = Path(design_entry.source_dir)
+        if not source.is_dir():
+            raise FileNotFoundError(f"Design source directory vanished: {source}")
+        return _copy_design_content(source, heph_dir, filename, is_directory=True)
+    source = Path(design_entry.path)
+    if not source.is_file():
+        raise FileNotFoundError(f"Design source file vanished: {source}")
+    return _copy_design_content(source, heph_dir, filename, is_directory=False)
+
+
+def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
+    """Back-compat wrapper over copy_design_source: copies design_entry into
+    feature_folder/CONTEXT_DIR_NAME/, preserving the default 'design.md'
+    filename for file-sourced entries."""
+    return copy_design_source(design_entry, feature_folder / CONTEXT_DIR_NAME)
+
+
 def copy_speckit_feature(dir_path: Path, feature_folder: Path) -> Path:
     """Copy dir_path (a SpecKitFeature.dir_path / DesignEntry.speckit_feature_dir)
     -> feature_folder/CONTEXT_DIR_NAME/specs/<NNN-name>/ recursively -- ALL
