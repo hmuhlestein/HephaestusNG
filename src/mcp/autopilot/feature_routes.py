@@ -322,7 +322,9 @@ async def delete_feature(feature_id: str):
         DiagnosticRun,
         Feature,
         Memory,
+        Phase,
         PhaseExecution,
+        PhasePromptVersion,
         Task,
         TaskPromptOverride,
         Ticket,
@@ -387,7 +389,13 @@ async def delete_feature(feature_id: str):
                 db.query(BoardConfig).filter(BoardConfig.workflow_id == workflow_id).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.workflow_id == workflow_id).delete(synchronize_session=False)
                 db.query(CostEntry).filter(CostEntry.workflow_id == workflow_id).delete(synchronize_session=False)
-                db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id == workflow_id).delete(synchronize_session=False)
+
+                phase_ids = [p.id for p in db.query(Phase.id).filter(Phase.workflow_id == workflow_id).all()]
+                if phase_ids:
+                    db.query(PhaseExecution).filter(PhaseExecution.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+                    db.query(PhasePromptVersion).filter(PhasePromptVersion.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+                db.query(Phase).filter(Phase.workflow_id == workflow_id).delete(synchronize_session=False)
+
                 db.query(Task).filter(Task.workflow_id == workflow_id).delete(synchronize_session=False)
                 db.query(Workflow).filter_by(id=workflow_id).delete(synchronize_session=False)
 
