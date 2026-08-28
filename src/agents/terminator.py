@@ -247,8 +247,48 @@ class Terminator:
             # path during agent *creation*, not completion. Observed live:
             # validator/diagnostic agents' worktrees accumulating under
             # .worktrees/ indefinitely, each one a full checkout of the repo.
+            #
+            # BUT: skip it if this agent's own AgentBranch worktree_path is
+            # ALSO the still-in-use Workflow.working_directory -- a task
+            # resumed via _resolve_worktree's legacy fallback (no existing
+            # shared worktree to reuse) forks a fresh per-agent worktree
+            # exactly like a real isolated agent would, and that path can
+            # go on to become the workflow's own working_directory for
+            # every later phase. Unconditional cleanup here doesn't know
+            # the difference and deletes it the moment THIS agent's task
+            # finishes, even though the workflow has more phases left --
+            # every later phase's agent creation then hits _resolve_worktree's
+            # own "shared worktree is missing, refuse to silently recover
+            # it" guard and fails forever. Confirmed live: workflow e35be066
+            # (feature speckit-cli-integration) crash-looped on exactly
+            # this after its product_requirements phase completed normally.
+            # Mirrors sweep_completed_workflow_worktrees's identical
+            # "skip if this worktree is still needed" protection for the
+            # proper shared-worktree case.
+            skip_worktree_cleanup = False
+            if agent.current_task_id:
+                task_for_cleanup = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if task_for_cleanup and task_for_cleanup.workflow_id:
+                    from src.core.database import AgentBranch, Workflow
+
+                    wf_for_cleanup = session.query(Workflow).filter_by(id=task_for_cleanup.workflow_id).first()
+                    branch_record = session.query(AgentBranch).filter_by(agent_id=agent_id).first()
+                    if (
+                        wf_for_cleanup
+                        and branch_record
+                        and branch_record.worktree_path
+                        and wf_for_cleanup.working_directory == branch_record.worktree_path
+                        and wf_for_cleanup.status in ("active", "paused")
+                    ):
+                        skip_worktree_cleanup = True
+                        logger.info(
+                            f"[TERMINATE] Skipping worktree cleanup for agent {agent_id[:8]} -- "
+                            f"{branch_record.worktree_path} is workflow {wf_for_cleanup.id[:8]}'s "
+                            "own working_directory, still needed by later phases"
+                        )
             try:
-                self.branch_manager.cleanup_worktree(agent_id, delete_branch=False)
+                if not skip_worktree_cleanup:
+                    self.branch_manager.cleanup_worktree(agent_id, delete_branch=False)
             except Exception as e:
                 logger.debug(f"[TERMINATE] Worktree cleanup skipped for {agent_id[:8]}: {e}")
 
