@@ -758,6 +758,16 @@ async def remove_project_design(
                         lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
                         worktrees_to_clean.append((wf.working_directory, lp))
 
+                # Agent.current_task_id -> tasks.id is also an enforced FK --
+                # a belt-and-suspenders null-out alongside the termination
+                # loop above (only covers "working"/"starting"/"idle"
+                # agents): an agent already in some OTHER state that never
+                # had this cleared (e.g. a prior termination that partially
+                # failed) would otherwise still block the Task delete below.
+                db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).update(
+                    {"current_task_id": None}, synchronize_session=False
+                )
+
                 # Delete tasks -- must happen before Phase/PhaseExecution
                 # below: Task.phase_id is a FK to phases.id, so deleting
                 # Phase rows first (as an earlier version of this fix did)
