@@ -942,7 +942,14 @@ def run_bugfix_single_feature(
     # isn't safe as a directory name component on every filesystem.
     feature_key = re.sub(r"[^a-z0-9\-_]", "", (design_entry.name or "fix").lower().replace(" ", "-"))[:40] or "fix"
 
-    assert design_entry.source_dir is None, f"bugfix workflow received a directory-sourced design: {design_entry.source_dir}"
+    # Explicit raise, not assert: this is a load-bearing data-integrity
+    # invariant (REQ-02/NFR-02), not a debug-only sanity check -- an assert
+    # here would be silently compiled out under -O/PYTHONOPTIMIZE, letting a
+    # directory-sourced entry fall into the read_text() below, which raises
+    # IsADirectoryError (an OSError subclass), gets swallowed by the except
+    # OSError below, and silently writes an empty scope.md.
+    if design_entry.source_dir is not None:
+        raise ValueError(f"bugfix workflow received a directory-sourced design: {design_entry.source_dir}")
 
     design_content = ""
     try:
@@ -1155,7 +1162,11 @@ def run_phase0(
     # stranding otherwise-good work.
     _update_design_status(design_entry.db_id, "decomposing", designs_folder=str(designs_folder), logger=logger)
 
-    # Copy design document to permanent storage
+    # Copy design document to permanent storage. filename is only used by
+    # _copy_design_content's file-sourced branch -- for a directory-sourced
+    # entry (design_entry.source_dir set) it's computed but ignored, since
+    # the directory branch derives its own destination name from the source
+    # directory itself.
     dest = copy_design_source(design_entry, designs_folder, filename=design_entry.path.name)
     logger.info(f"Copied design document to: {dest}")
 
