@@ -4067,9 +4067,11 @@ class TestDeleteFeature:
         on the unused workflow_execution_id column instead of joining
         through Phase.workflow_id -- both left phases.workflow_id (and
         phase_executions.phase_id) FK rows behind, so DELETE FROM workflows
-        failed with an IntegrityError."""
+        failed with an IntegrityError. tasks.phase_id also FKs to phases.id,
+        so Task (via its own phase_id, not just workflow_id) must be
+        deleted before Phase or DELETE FROM phases fails the same way."""
         client, dirs = project_client
-        from src.core.database import Feature, Phase, PhaseExecution, Workflow, get_db
+        from src.core.database import Feature, Phase, PhaseExecution, Task, Workflow, get_db
 
         with get_db() as db:
             db.add(
@@ -4095,6 +4097,12 @@ class TestDeleteFeature:
                     id="phase-exec-del-1", phase_id="phase-del-1", status="completed",
                 )
             )
+            db.add(
+                Task(
+                    id="task-del-phase", workflow_id="wf-del-phase", phase_id="phase-del-1",
+                    raw_description="r", done_definition="d", status="done",
+                )
+            )
 
         resp = client.delete("/api/autopilot/features/feat-phase")
         assert resp.status_code == 200, resp.text
@@ -4104,6 +4112,7 @@ class TestDeleteFeature:
             assert db.query(Workflow).filter_by(id="wf-del-phase").first() is None
             assert db.query(Phase).filter_by(id="phase-del-1").first() is None
             assert db.query(PhaseExecution).filter_by(id="phase-exec-del-1").first() is None
+            assert db.query(Task).filter_by(id="task-del-phase").first() is None
 
     def test_terminates_assigned_agent_before_deleting(self, project_client, monkeypatch):
         client, dirs = project_client
