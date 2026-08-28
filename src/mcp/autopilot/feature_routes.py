@@ -390,13 +390,18 @@ async def delete_feature(feature_id: str):
                 db.query(Ticket).filter(Ticket.workflow_id == workflow_id).delete(synchronize_session=False)
                 db.query(CostEntry).filter(CostEntry.workflow_id == workflow_id).delete(synchronize_session=False)
 
+                # tasks.phase_id and tickets.phase_id both FK to phases.id
+                # -- Task must be deleted (Ticket already was, above) before
+                # Phase, not after, or DELETE FROM phases fails the same
+                # FK-violation way the original workflow_execution_id bug did.
+                db.query(Task).filter(Task.workflow_id == workflow_id).delete(synchronize_session=False)
+
                 phase_ids = [p.id for p in db.query(Phase.id).filter(Phase.workflow_id == workflow_id).all()]
                 if phase_ids:
                     db.query(PhaseExecution).filter(PhaseExecution.phase_id.in_(phase_ids)).delete(synchronize_session=False)
                     db.query(PhasePromptVersion).filter(PhasePromptVersion.phase_id.in_(phase_ids)).delete(synchronize_session=False)
                 db.query(Phase).filter(Phase.workflow_id == workflow_id).delete(synchronize_session=False)
 
-                db.query(Task).filter(Task.workflow_id == workflow_id).delete(synchronize_session=False)
                 db.query(Workflow).filter_by(id=workflow_id).delete(synchronize_session=False)
 
             db.delete(feature)
