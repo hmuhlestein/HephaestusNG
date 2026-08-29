@@ -727,3 +727,66 @@ class TestReadTranscriptLogReal:
         assert "\x1b[32m" in result
         assert "Coverage HTML written to dir htmlcov" in result
         assert "FAIL Required test coverage of 80% not reached." in result
+
+
+class TestReadTranscriptLogCursorReconstruction:
+    """Real terminals redraw in place using CSI cursor-movement sequences
+    (G/C/D/B/A/H/f), not just \\r/\\n -- Claude Code and pi rely on this
+    heavily. Regression: those sequences used to be stripped outright
+    (same blanket "strip everything but SGR" the launch_pipeline.py pipe-
+    pane filter itself used to apply), discarding the position information
+    they carry -- text written before and after one got concatenated as if
+    always adjacent. Observed live (agent 8389d7e0): "The adversarial
+    review identified\\"" + CSI 81G (jump to column 81, skipping an
+    unchanged prefix) + "with no findings listed" collapsed into
+    "...identified\\"withnofindingslisted"."""
+
+    def _run(self, tmp_path, content, lines=200):
+        return TestReadTranscriptLogReal()._run(tmp_path, content, lines)
+
+    def test_csi_g_absolute_column_jump_preserves_the_gap(self, tmp_path):
+        content = 'The adversarial review identified"\x1b[81Gwith no findings listed.\n'
+        result = self._run(tmp_path, content)
+        line = [l for l in result.split("\n") if "adversarial" in l][0]
+        # Column 81 (1-indexed) is index 80 -- "with" must land exactly
+        # there, not get concatenated directly onto "identified\"".
+        assert not line.startswith('The adversarial review identified"with')
+        assert line.index("with no findings") == 80
+
+    def test_csi_b_cursor_down_starts_a_new_row(self, tmp_path):
+        """A live-redrawn multi-row status block moves between its rows
+        via CSI B/A, not \\n -- treating it as a row boundary (like \\n)
+        instead of silently deleting it keeps those rows from being
+        flattened into one unreadable line."""
+        content = "row one\r\x1b[1Brow two\n"
+        result = self._run(tmp_path, content)
+        lines = [l for l in result.split("\n") if l.strip()]
+        assert "row one" in lines
+        assert "row two" in lines
+
+    def test_csi_h_cursor_position_moves_to_absolute_row_and_column(self, tmp_path):
+        content = "first\n\x1b[1;1Hoverwritten\n"
+        result = self._run(tmp_path, content)
+        lines = result.split("\n")
+        assert lines[0] == "overwritten"
+
+    def test_auto_wraps_at_the_pane_width_instead_of_one_giant_row(self, tmp_path):
+        """Without auto-wrap, a long paragraph with no explicit \\n or CSI
+        B between its visual rows (the terminal's own implicit wrap)
+        collapses into one enormous row -- observed live, 706KB/711KB of
+        one real session's transcript was a single \\n-less span. A CSI G
+        column jump meant for a short wrapped row then gets misapplied
+        against that whole accumulated blob instead."""
+        from src.core.constants import TMUX_PANE_WIDTH
+
+        content = ("x" * (TMUX_PANE_WIDTH + 20)) + "\n"
+        result = self._run(tmp_path, content)
+        lines = [l for l in result.split("\n") if l]
+        assert len(lines) >= 2
+        assert len(lines[0]) <= TMUX_PANE_WIDTH
+
+    def test_csi_k_erase_in_line_truncates_stale_tail(self, tmp_path):
+        content = "hello world\r\x1b[Khi\n"
+        result = self._run(tmp_path, content)
+        first = result.split("\n")[0]
+        assert first == "hi"
