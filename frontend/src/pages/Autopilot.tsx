@@ -406,13 +406,13 @@ const Autopilot: React.FC = () => {
               </button>
             ))}
           </div>
-          <ReviewModeToggle
-            projectId={projectId}
-            reviewMode={status?.review_mode ?? false}
-          />
           <SpeckitAutoScanToggle
             projectId={projectId}
             enabled={status?.speckit_auto_scan_enabled ?? false}
+          />
+          <ReviewModeToggle
+            projectId={projectId}
+            reviewMode={status?.review_mode ?? false}
           />
         </nav>
       </div>

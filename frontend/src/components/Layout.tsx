@@ -75,7 +75,7 @@ const Layout: React.FC = () => {
       <AnimatePresence mode="wait">
         <motion.div
           initial={false}
-          animate={{ width: sidebarCollapsed ? 64 : 256 }}
+          animate={{ width: sidebarCollapsed ? 64 : 240 }}
           transition={{ duration: 0.2, ease: 'easeInOut' }}
           className="bg-white dark:bg-gray-800 shadow-lg flex flex-col relative"
         >

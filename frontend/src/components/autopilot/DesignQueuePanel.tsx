@@ -420,7 +420,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       </div>
       <p className="text-xs text-gray-400">
         Sorted by filename by default. Drag to reorder manually. Or add to&nbsp;
-        <code>docs/spec-queue</code> which finds them automatically.
+        <code>specs/</code>, which Spec Auto Scan finds automatically.
       </p>
 
       {isLoading ? (
