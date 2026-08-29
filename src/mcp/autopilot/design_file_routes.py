@@ -65,9 +65,10 @@ class DesignAddRequest(BaseModel):
     # "Load from Remote" (the file already lives somewhere in the project,
     # nothing new is being introduced). Any other value is a real,
     # git-tracked folder path relative to the project root -- "docs"
-    # (legacy literal), DESIGN_SUBDIR/BUGFIX_SUBDIR (New Feature/Report
-    # Bug flow defaults), or an arbitrary folder the user picked.
-    # Validated server-side (_safe_path) to stay within the project root.
+    # (legacy literal), "docs/spec"/"docs/bugfix" (LoadDesignModal.tsx's
+    # New Feature/Report Bug flow defaults), or an arbitrary folder the
+    # user picked. Validated server-side (_safe_path) to stay within the
+    # project root.
     destination: str = "queue"
     # "feature" / "bugfix" -- which pipeline this design runs through (see
     # docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md). None (default): auto-detect via
@@ -286,9 +287,9 @@ async def add_project_design(
         design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
     else:
         # Any other destination is a real, git-tracked folder -- "docs"
-        # (legacy literal), DESIGN_SUBDIR/BUGFIX_SUBDIR (the New Feature/
-        # Report Bug flows' defaults), or an arbitrary folder the user
-        # picked via the destination-folder browser. Resolves under the
+        # (legacy literal), "docs/spec"/"docs/bugfix" (LoadDesignModal.tsx's
+        # New Feature/Report Bug flow defaults), or an arbitrary folder the
+        # user picked via the destination-folder browser. Resolves under the
         # PRIMARY ProjectRepo's path (REQ-12), not the workspace root: a
         # multi-repo project's base_dir need not itself be a git repo, so
         # writing there wouldn't be tracked by anything; single-repo

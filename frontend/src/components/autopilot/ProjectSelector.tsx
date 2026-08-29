@@ -232,7 +232,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({ projectId, onProjectC
                     className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
                   />
                   <p className="text-xs text-gray-400 mt-1">
-                    Designs will be loaded from <code className="bg-gray-100 px-1 rounded">{newPath || '…'}/docs/spec/</code>
+                    Designs will be loaded from <code className="bg-gray-100 px-1 rounded">{newPath || '…'}/docs/specs/</code>
                   </p>
                 </div>
                 <div className="flex justify-end gap-3 pt-2">
