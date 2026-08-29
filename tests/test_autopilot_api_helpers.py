@@ -294,3 +294,69 @@ class TestStartPipelineConcurrencyCap:
 
         assert exc_info.value.status_code == 409
         fake_service.stop.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_archived_design_does_not_trigger_zombie_warning(self, db_manager):
+        """pending_designs (the zombie-vs-"all designs done" decision)
+        filtered only on status, not archived_at -- an archived design
+        (archived_at set, status left at "pending" by design_file_routes.py's
+        archive toggle) was still counted, so a queue whose only design has
+        been archived logged a misleading "Zombie pipeline detected"
+        warning instead of the correct "all designs are done" info line.
+        Mirrors queue.py's pending_designs/active_designs, which already
+        pair status with archived_at=None."""
+        import datetime
+
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.mcp.autopilot.control_routes import start_pipeline
+
+        session = db_manager.get_session()
+        try:
+            session.add(
+                AutopilotProject(
+                    id="proj-zombie-archived",
+                    name="Zombie Archived Test",
+                    base_dir="/tmp/proj-zombie-archived",
+                    is_active=True,
+                )
+            )
+            session.add(
+                AutopilotDesign(
+                    id="des-archived-zombie",
+                    project_id="proj-zombie-archived",
+                    filename="d.md",
+                    name="D",
+                    status="pending",
+                    archived_at=datetime.datetime.utcnow(),
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        fake_registry = Mock()
+        fake_registry.try_reserve.return_value = (True, "")
+
+        fake_service = Mock()
+        fake_service.running = True
+        fake_service._start_time = time.time() - 999  # past the 45s grace period
+        fake_service.stop = AsyncMock()
+        fake_service.start = AsyncMock(return_value={"started": True})
+
+        with patch(
+            "src.autopilot.orchestrator.state._get_or_create_project_id",
+            return_value="proj-zombie-archived",
+        ), patch(
+            "src.autopilot.service.get_registry", return_value=fake_registry
+        ), patch(
+            "src.autopilot.service.get_autopilot_service", return_value=fake_service
+        ), patch(
+            "src.mcp.autopilot.control_routes._invalidate"
+        ), patch(
+            "src.mcp.autopilot.control_routes.logger"
+        ) as mock_logger:
+            result = await start_pipeline("/some/proj-zombie-archived")
+
+        assert result == {"started": True}
+        mock_logger.warning.assert_not_called()
+        assert any("all designs are done" in str(c) for c in mock_logger.info.call_args_list)

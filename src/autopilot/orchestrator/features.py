@@ -438,7 +438,7 @@ def _sync_stale_design_statuses(logger: "OrchestratorLogger") -> int:
 
     repaired = 0
     with get_db() as db:
-        active_designs = db.query(AutopilotDesign).filter_by(status="active").all()
+        active_designs = db.query(AutopilotDesign).filter_by(status="active", archived_at=None).all()
         for design in active_designs:
             total = db.query(Feature).filter(Feature.design_id == design.id).count()
             if total == 0:
