@@ -70,7 +70,7 @@ const SpeckitAutoScanToggle: React.FC<SpeckitAutoScanToggleProps> = ({ projectId
           layout
           transition={{ type: 'spring', stiffness: 500, damping: 35 }}
           className="absolute top-[3px] w-[20px] h-[20px] rounded-full bg-white shadow-md"
-          style={{ left: enabled ? 3 : 25 }}
+          style={{ left: enabled ? 25 : 3 }}
         />
       </button>
     </div>
