@@ -824,3 +824,108 @@ def verify_requirements_cover_scope_cli_flags(session, task, phase=None) -> Opti
             "update_task_status(done) again."
         ),
     }
+
+
+def verify_scope_cli_flags_are_implemented(session, task, phase=None) -> Optional[Dict[str, Any]]:
+    """Final hard floor, at git_expert -- the literal last phase before a
+    feature merges to main: reject 'done' if a CLI flag named in the
+    feature's own scope.md never actually appears in the real code diff
+    being merged.
+
+    verify_requirements_cover_scope_cli_flags (product_requirements) and
+    verify_development_produced_a_commit (development) both catch this
+    class of drop earlier in the pipeline, but neither is a substitute for
+    checking the actual shipped diff: a flag can get a REQ-XX row AND a
+    real commit and still never be implemented, if the commit was for
+    something else entirely (e.g. an adversarial-review code-quality
+    fix unrelated to the original scope). Observed live: workflow
+    e9019930's speckit-cli-integration merged to main at commit e6b45184
+    with --design-doc, queue_routes.py's directory-registration logic,
+    and the whole tests/test_cli_autopilot_speckit.py file all still
+    missing -- product_requirements had already run (before this gate
+    existed) and development's own commits were real, just never actually
+    implementing the missing pieces. This is the last chokepoint before
+    the gap ships.
+
+    Diffs main...HEAD (three-dot, i.e. against the merge-base) rather
+    than a plain two-dot diff -- git_expert's own STEP 2 merges main into
+    the feature branch before this runs, so a two-dot diff would conflate
+    this feature's actual changes with everything upstream on main it
+    just pulled in.
+    """
+    from pathlib import Path
+
+    from src.core.database import Phase, Workflow
+
+    if phase is None:
+        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+    if not phase or phase.name != "git_expert":
+        return None
+    if not task.workflow_id:
+        return None
+
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
+        return None
+
+    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+    if not (wf and wf.working_directory):
+        return None  # verify_output_artifact already surfaces this case.
+
+    launch_params = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+    scope_path_str = launch_params.get("feature_scope")
+    if not scope_path_str:
+        return None
+
+    scope_path = Path(scope_path_str)
+    if not scope_path.is_file():
+        return None
+
+    try:
+        scope_text = scope_path.read_text(errors="replace")
+    except Exception as e:
+        logger.warning(f"Could not read scope doc {scope_path} for task {task.id}: {e}")
+        return None
+
+    scope_flags = set(_CLI_FLAG_RE.findall(scope_text))
+    if not scope_flags:
+        return None
+
+    if not Path(wf.working_directory).is_dir():
+        return None
+
+    try:
+        from git import Repo
+
+        repo = Repo(wf.working_directory)
+        diff_text = repo.git.diff("main...HEAD")
+    except Exception as e:
+        logger.warning(f"git diff main...HEAD failed for task {task.id} in {wf.working_directory}: {e}")
+        return None  # Fail open -- a git error here shouldn't block a real merge.
+
+    missing_flags = sorted(flag for flag in scope_flags if flag not in diff_text)
+    if not missing_flags:
+        return None
+
+    logger.warning(
+        f"Task {task.id[:8]} (git_expert) claimed done but {missing_flags} from scope.md "
+        f"never appear in the diff being merged — rejecting"
+    )
+    task.status = "failed"
+    task.failure_reason = (
+        f"CLI flag(s) {', '.join(missing_flags)} are named in scope.md but never appear "
+        "in the actual code diff (main...HEAD) about to be merged."
+    )
+    session.commit()
+    return {
+        "status": "failed",
+        "message": (
+            f"Cannot mark done: {', '.join(missing_flags)} {'is' if len(missing_flags) == 1 else 'are'} "
+            "named in this feature's scope.md but never appear in the diff about to be merged "
+            "(git diff main...HEAD) -- a REQ-XX row or a commit message mentioning it is not the "
+            "same as actually implementing it. Route back to development, implement the missing "
+            "piece(s), and confirm they show up in the diff before calling "
+            "update_task_status(done) again."
+        ),
+    }
