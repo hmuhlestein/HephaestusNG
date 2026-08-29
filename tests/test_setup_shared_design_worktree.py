@@ -75,3 +75,40 @@ def test_project_path_already_a_worktree_is_used_directly():
     # No feature-branch/worktree creation calls in this path -- the
     # no-nested-worktrees guard short-circuits before those.
     mock_wt_mgr_cls.return_value.main_repo.git.worktree.assert_not_called()
+
+
+def test_db_manager_still_returned_when_worktree_creation_fails(tmp_path):
+    """db (now db_manager) is created before the worktree-creation branch
+    below it and is NOT reset in the except block -- if worktree creation
+    itself fails partway through, run_single_workflow's later final-merge
+    call must still get the already-created DatabaseManager instance
+    instead of a silently reintroduced None (which would just mean a
+    second DatabaseManager gets created there -- harmless but wasteful,
+    and worth pinning explicitly since it's easy to regress silently)."""
+    project_path = tmp_path / "project"
+    project_path.mkdir()
+    worktree_base = tmp_path / "worktrees"
+    worktree_base.mkdir()
+
+    with (
+        patch("src.core.simple_config.get_config"),
+        patch("src.core.database.DatabaseManager") as mock_db_cls,
+        patch("src.core.worktree_manager.WorktreeManager") as mock_wt_mgr_cls,
+    ):
+        mock_wt_mgr = mock_wt_mgr_cls.return_value
+        mock_wt_mgr.worktree_base = worktree_base
+        mock_wt_mgr.main_repo.git.branch = MagicMock()
+        mock_wt_mgr.main_repo.git.worktree = MagicMock(side_effect=RuntimeError("git worktree add failed"))
+
+        design_worktree_path, design_branch_name, db_manager = _setup_shared_design_worktree(
+            project_path=str(project_path),
+            launch_params={},
+            design_name="my design",
+            logger=MagicMock(),
+        )
+
+    # Falls back to project_path (pre-existing behavior for any failure)...
+    assert design_worktree_path == str(project_path)
+    assert design_branch_name is None
+    # ...but db_manager, created before the failure, is NOT discarded.
+    assert db_manager is mock_db_cls.return_value
