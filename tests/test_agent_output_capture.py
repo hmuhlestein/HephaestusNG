@@ -268,6 +268,44 @@ class TestAgentOutputCapture:
         expected_lines = ["Line 6", "Line 7", "Line 8", "Line 9", "Line 10"]
         assert output == "\n".join(expected_lines)
 
+    def test_terminated_agent_evicts_live_backfill_cache_entry(
+        self, agent_manager, mock_db_manager
+    ):
+        """Adversarial-review BLOCKER: _live_backfill_cache is a process-
+        lifetime dict keyed by agent_id with no eviction -- a long-running
+        backend accumulates one full transcript string per agent forever
+        (textbook slow OOM). Once an agent is terminated its cache entry
+        is never read again (only the live path reads it), so
+        get_agent_output's terminated branch must evict it."""
+        agent_id = str(uuid.uuid4())
+
+        mock_agent = Mock(spec=Agent)
+        mock_agent.id = agent_id
+        mock_agent.status = "terminated"
+        mock_agent.current_task_id = None
+        mock_agent.tmux_session_name = None
+
+        mock_log_query = Mock()
+        mock_log_query.filter_by.return_value.order_by.return_value.first.return_value = None
+        mock_recent_logs_query = Mock()
+        mock_recent_logs_query.filter_by.return_value.order_by.return_value.limit.return_value.all.return_value = []
+
+        mock_db_session = Mock()
+        mock_agent_query = Mock()
+        mock_agent_query.filter_by.return_value.first.return_value = mock_agent
+        mock_db_session.query.side_effect = [
+            mock_agent_query,       # Agent query
+            mock_log_query,         # termination AgentLog query
+            mock_recent_logs_query,  # recent AgentLog fallback query
+        ]
+        mock_db_manager.get_session.return_value = mock_db_session
+
+        agent_manager._output_capture._live_backfill_cache[agent_id] = "stale cached transcript"
+
+        agent_manager.get_agent_output(agent_id)
+
+        assert agent_id not in agent_manager._output_capture._live_backfill_cache
+
     def test_get_agent_output_from_tmux_for_active_agent(
         self, agent_manager, mock_db_manager, mock_tmux_server
     ):
@@ -500,6 +538,10 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         session.commit()
         session.close()
 
+        transcript_dir_on_disk = Path(working_directory) / ".hephaestus" / "tmux"
+        transcript_dir_on_disk.mkdir(parents=True)
+        (transcript_dir_on_disk / "agent_test.transcript.log").write_text("hi")
+
         capture = AgentOutputCapture(db_manager, tmux_server=Mock())
         agent = db_manager.get_session().query(Agent).filter_by(id=agent_id).first()
 
@@ -539,6 +581,10 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         ))
         session.commit()
         session.close()
+
+        transcript_dir_on_disk = Path(working_directory) / ".hephaestus" / "tmux"
+        transcript_dir_on_disk.mkdir(parents=True)
+        (transcript_dir_on_disk / "agent_test.transcript.log").write_text("hi")
 
         capture = AgentOutputCapture(db_manager, tmux_server=Mock())
         agent = db_manager.get_session().query(Agent).filter_by(id=agent_id).first()

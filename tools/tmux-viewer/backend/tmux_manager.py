@@ -422,17 +422,26 @@ class TmuxSessionManager:
         Returns:
             True if session was killed, False if not found.
         """
-        session = self._find_session(session_name)
-        if not session:
-            return False
-
         try:
-            session.kill_session()
-            logger.info(f"Killed tmux session: {session_name}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to kill session '{session_name}': {e}")
-            return False
+            session = self._find_session(session_name)
+            if not session:
+                return False
+
+            try:
+                session.kill_session()
+                logger.info(f"Killed tmux session: {session_name}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to kill session '{session_name}': {e}")
+                return False
+        finally:
+            # Evict this session's backfill entry -- it's process-lifetime
+            # with no other eviction path (see _get_raw_transcript_backfill)
+            # and is never read again once the session is gone, regardless
+            # of whether _find_session still located it (e.g. the tmux
+            # session already died via some other path -- external kill,
+            # server crash -- before this cleanup call ran).
+            self._transcript_backfill_cache.pop(session_name, None)
 
     def list_sessions(self, prefix_filter: Optional[str] = None) -> List[Dict]:
         """List all tmux sessions, optionally filtered by prefix.
