@@ -459,6 +459,18 @@ class AgentOutputCapture:
             # sgr_at_end_re further down already cleans up analogous
             # trailing-code debris.
             token_re = re.compile(r'\x1b\[([0-9;?]*)([A-Za-z])|([^\x1b])', re.DOTALL)
+            # Bounds on how far a single CSI move can push the cursor --
+            # not a real terminal limit, just a safety clamp against a
+            # corrupted/truncated escape sequence (e.g. a partial write
+            # split mid-parameter across two pipe-pane reads) whose
+            # numeric parameter comes out absurdly large. Without this, a
+            # single \x1b[999999999G would try to pad one row to a
+            # billion elements -- confirmed live to exhaust multiple GB
+            # and hang within a second. Generous relative to any real
+            # terminal (width) or realistic session length (rows), so
+            # legitimate content is never affected.
+            _MAX_COL = 100_000
+            _MAX_ROW = 100_000
             rows: List[List[str]] = [[]]
             cursor_row = 0
             cursor_col = 0
@@ -491,22 +503,22 @@ class AgentOutputCapture:
                     parts = [int(p) for p in params.split(';') if p.isdigit()] if params else []
                     n = parts[0] if parts else None
                     if letter == 'G':  # CHA -- move to absolute column n
-                        cursor_col = max(0, (n or 1) - 1)
+                        cursor_col = min(max(0, (n or 1) - 1), _MAX_COL)
                     elif letter == 'C':  # CUF -- move forward n columns
-                        cursor_col += (n or 1)
+                        cursor_col = min(cursor_col + (n or 1), _MAX_COL)
                     elif letter == 'D':  # CUB -- move back n columns
                         cursor_col = max(0, cursor_col - (n or 1))
                     elif letter == 'B':  # CUD -- move down n rows
-                        cursor_row += (n or 1)
+                        cursor_row = min(cursor_row + (n or 1), _MAX_ROW)
                         _ensure_row(cursor_row)
                     elif letter == 'A':  # CUU -- move up n rows
                         cursor_row = max(0, cursor_row - (n or 1))
                     elif letter in ('H', 'f'):  # CUP -- absolute row;col (1-indexed)
                         row_n = parts[0] if len(parts) > 0 else 1
                         col_n = parts[1] if len(parts) > 1 else 1
-                        cursor_row = max(0, row_n - 1)
+                        cursor_row = min(max(0, row_n - 1), _MAX_ROW)
                         _ensure_row(cursor_row)
-                        cursor_col = max(0, col_n - 1)
+                        cursor_col = min(max(0, col_n - 1), _MAX_COL)
                     elif letter == 'K':  # EL -- erase in line
                         mode = n or 0
                         row = rows[cursor_row]

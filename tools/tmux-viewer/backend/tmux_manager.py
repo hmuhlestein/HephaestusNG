@@ -57,6 +57,13 @@ def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_
     text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)  # Charset selection
     text = re.sub(r'\x1b(?!\[)[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC (not CSI)
 
+    # Safety clamp against a corrupted/truncated escape sequence (e.g. a
+    # partial write split mid-parameter) whose numeric parameter comes
+    # out absurdly large -- without this, a single \x1b[999999999G would
+    # try to pad one row to a billion elements. Generous relative to any
+    # real terminal (width) or realistic session length (rows).
+    _MAX_COL = 100_000
+    _MAX_ROW = 100_000
     rows: List[List[str]] = [[]]
     cursor_row = 0
     cursor_col = 0
@@ -84,22 +91,22 @@ def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_
             parts = [int(p) for p in params.split(';') if p.isdigit()] if params else []
             n = parts[0] if parts else None
             if letter == 'G':
-                cursor_col = max(0, (n or 1) - 1)
+                cursor_col = min(max(0, (n or 1) - 1), _MAX_COL)
             elif letter == 'C':
-                cursor_col += (n or 1)
+                cursor_col = min(cursor_col + (n or 1), _MAX_COL)
             elif letter == 'D':
                 cursor_col = max(0, cursor_col - (n or 1))
             elif letter == 'B':
-                cursor_row += (n or 1)
+                cursor_row = min(cursor_row + (n or 1), _MAX_ROW)
                 _ensure_row(cursor_row)
             elif letter == 'A':
                 cursor_row = max(0, cursor_row - (n or 1))
             elif letter in ('H', 'f'):
                 row_n = parts[0] if len(parts) > 0 else 1
                 col_n = parts[1] if len(parts) > 1 else 1
-                cursor_row = max(0, row_n - 1)
+                cursor_row = min(max(0, row_n - 1), _MAX_ROW)
                 _ensure_row(cursor_row)
-                cursor_col = max(0, col_n - 1)
+                cursor_col = min(max(0, col_n - 1), _MAX_COL)
             elif letter == 'K':
                 mode = n or 0
                 row = rows[cursor_row]
