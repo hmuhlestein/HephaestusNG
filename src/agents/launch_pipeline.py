@@ -20,7 +20,7 @@ from src.agents._create_agent_for_task_steps import (
     _run_launch_preparations,
     _send_launch_command_and_record_agent,
 )
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, TMUX_PANE_WIDTH
 from src.core.database import (
     Agent,
     AgentLog,
@@ -877,12 +877,33 @@ class LaunchPipeline:
         """Deliver initial prompt with confirmation keys, goal, retry, and verification.
 
         Shared — unifies the confirmation-key loop + call ordering.
+
+        Initial prompt sent BEFORE /goal, not after (see _send_goal_command's
+        own docstring for why this used to be reversed, and why that
+        assumption was wrong): /goal is a real chat turn to the CLI, not a
+        side-channel the CLI consumes out-of-band -- it goes through the
+        same UserPromptSubmit hook pipeline as any other message. Observed
+        live: a UserPromptSubmit hook timed out and its output (context
+        establishing "this is Hephaestus's own goal-tracking mechanism, not
+        a user request") was discarded, so a freshly-launched agent's very
+        FIRST input was a bare, unframed AND-chain of done_definition
+        clauses with nothing yet telling it this was an autonomous task
+        dispatch -- it read as an ambiguous standalone request and the
+        agent stopped to ask for clarification, deadlocking the task (no
+        human was watching that pane to answer). Sending the task-pointer
+        message first establishes "you are an autonomous agent, read your
+        instructions file, begin working" as context BEFORE /goal ever
+        arrives, so the same hook failure can't strand /goal with no frame
+        of reference. The wait below (mirroring _send_goal_command's own
+        post-send sleep) gives the agent a moment to actually start
+        processing the initial prompt before /goal lands, to avoid the
+        opposite interleaving problem chunked delivery already works
+        around -- not a guaranteed idle-check, but the same class of flat
+        wait already used throughout this dispatch sequence.
         """
         for key in cli_agent.post_launch_confirmation_keys():
             pane.send_keys(key)
             await asyncio.sleep(1.5)
-
-        await self._send_goal_command(pane, cli_agent, task, agent_type)
 
         await self._send_initial_prompt_with_retry(
             pane=pane,
@@ -893,6 +914,9 @@ class LaunchPipeline:
             task_id=task.id,
             max_retries=3,
         )
+
+        await asyncio.sleep(3)
+        await self._send_goal_command(pane, cli_agent, task, agent_type)
 
     def _wait_for_shell_ready(self, pane, timeout: float = 2.0, poll_interval: float = 0.1) -> None:
         """Block until a freshly-created tmux pane's shell has actually
@@ -1076,11 +1100,28 @@ class LaunchPipeline:
             #    survives unstripped in the transcript -- a rare cosmetic
             #    imperfection, not a functional blocker, unlike minutes of
             #    frozen scrollback.
+            # CSI sequences ending in one of ABCDGHJKf (cursor up/down/
+            # forward/back/absolute-column/absolute-position, erase
+            # display/line) carry the row/column information a TUI's
+            # in-place redraws depend on -- Claude Code and pi redraw via
+            # these, not just \r/\n. Stripping them (the old behavior,
+            # matching output_capture.py's own now-superseded strip regex)
+            # silently destroyed that information before it ever reached
+            # disk: two pieces of text written before and after a stripped
+            # CSI G (jump to column N, skipping an unchanged prefix) end up
+            # directly concatenated with no separation. output_capture.py's
+            # _read_transcript_log now reconstructs rows FROM these
+            # sequences (plus \r/\n), so they need to survive here to be
+            # reconstructable at all. Only m (SGR/color, already kept) and
+            # these position/erase codes are excluded from the strip --
+            # everything else (cursor visibility, bracketed paste, alt-
+            # screen toggles, etc.) has no bearing on text layout and stays
+            # stripped.
             _pty_filter = (
                 r"$|=1; while (sysread(STDIN, my $buf, 65536)) { "
                 r"$buf =~ s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
                 r"$buf =~ s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
-                r"$buf =~ s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
+                r"$buf =~ s/\x1b\[[?]?[0-9;]*[^0-9;mABCDGHJKf]//g; "  # All CSI/DEC except color + cursor/erase
                 r"$buf =~ s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
                 r"$buf =~ s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
                 r"print $buf; }"
@@ -1092,12 +1133,17 @@ class LaunchPipeline:
 
         # Use a wide terminal so captured output isn't hard-wrapped at 80 columns.
         # This matches what a developer would see in a full-width terminal.
+        # TMUX_PANE_WIDTH is shared with output_capture.py's raw-transcript
+        # row reconstruction, which auto-wraps at this same fixed width to
+        # match where the terminal itself wrapped -- it can't observe the
+        # pane's actual width later (usually long gone by the time a
+        # terminated agent's transcript is read), so the two must agree.
         try:
             pane = session.attached_window.attached_pane
             # Try both methods for reliability
-            pane.set_width(150)
+            pane.set_width(TMUX_PANE_WIDTH)
             try:
-                pane.resize_pane(width=150)
+                pane.resize_pane(width=TMUX_PANE_WIDTH)
             except Exception:
                 pass
         except Exception:
@@ -1195,13 +1241,19 @@ class LaunchPipeline:
         `/goal <condition>`, via cli_agent.format_goal_command -- a no-op
         empty string for CLIs with no such mechanism) so the agent keeps
         working until task.done_definition is actually met, instead of
-        stopping on its own judgment. Sent BEFORE the task pointer (see
-        _build_instructions_pointer) since a command like /goal is consumed
-        by the CLI itself rather than as a chat turn, so ordering relative
-        to the task description doesn't matter -- but sending it after
-        would risk landing while the agent is mid-tool-call reading its
-        instructions file, the same interleaving problem chunked delivery
-        already works around.
+        stopping on its own judgment.
+
+        Sent AFTER the task pointer now (see _deliver_initial_prompt's own
+        docstring for the incident this fixes) -- /goal is a real chat
+        turn the CLI's own UserPromptSubmit hook pipeline processes like
+        any other message, not a side-channel exempt from it. Sending it
+        first used to mean a freshly-launched agent's very FIRST input,
+        with zero established context, was a bare AND-chain of
+        done_definition clauses -- if the hook that would normally frame
+        it (e.g. injecting "this is Hephaestus's own goal-tracking
+        mechanism") ever failed or timed out, the agent had nothing telling
+        it this wasn't an ambiguous standalone user request, and stopped to
+        ask for clarification with no human present to answer.
 
         Only meaningful for phase agents: validator/result_validator/
         diagnostic/arbitration agents work from a specialized
