@@ -114,12 +114,13 @@ additional_notes: |
      - Commit and PR conventions
      - Security and configuration tips
 
-  2. Check for existing project docs:
-      - requirements.md (from previous features)
-      - architecture.md (existing system design)
-      - features/ directory (previously completed features)
-      - README.md (project overview)
-      - Any existing source code
+  2. Read existing project docs and incorporate their content — not just
+     confirm they exist:
+      - requirements.md (from previous features) — read fully; avoid REQ-XX ID collisions
+      - architecture.md (existing system design) — read fully; needed for STEP 4B's dependency mapping
+      - features/ directory (previously completed features) — read each feature's docs
+      - README.md (project overview) — read fully for project purpose and conventions
+      - Any existing source code — read enough to confirm what's actually already built, not just its presence
 
   3. If previous features exist, read their docs:
       - features/*/docs/ (design docs for previous features)
@@ -200,8 +201,11 @@ additional_notes: |
      - If new: document the full scope
 
   B. What existing components does it depend on?
-     - Reference existing architecture.md
-     - Note which existing modules need modification
+     - Read existing architecture.md in full and resolve every dependency
+       against its actual component list — do not just cite that
+       architecture.md exists
+     - Note which existing modules need modification, citing the specific
+       architecture.md section each dependency comes from
 
   C. What does it enable for the future?
      - How does this feature enable subsequent features?
