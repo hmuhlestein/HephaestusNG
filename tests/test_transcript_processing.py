@@ -791,3 +791,21 @@ class TestReadTranscriptLogCursorReconstruction:
         result = self._run(tmp_path, content)
         first = result.split("\n")[0]
         assert first == "hi"
+
+    def test_absurd_csi_parameter_does_not_hang_or_exhaust_memory(self, tmp_path):
+        """A corrupted/truncated escape sequence (e.g. a partial write
+        split mid-parameter across two pipe-pane reads) can produce a
+        numeric CSI parameter far beyond anything a real terminal would
+        ever send. Without a clamp, a single \\x1b[999999999G tries to
+        pad one row to a billion elements -- confirmed to exhaust
+        multiple GB and hang within a second. Must complete quickly
+        regardless of what garbage the parameter contains."""
+        import time
+
+        content = "hello\x1b[999999999Gworld\n" + "x\x1b[888888888B" * 5 + "\n"
+        t0 = time.time()
+        result = self._run(tmp_path, content)
+        elapsed = time.time() - t0
+        assert elapsed < 5, f"took {elapsed:.2f}s -- clamp not applied"
+        assert "hello" in result
+        assert "world" in result
