@@ -143,3 +143,58 @@ class TestQueueOrder:
             "/api/autopilot/queue/order", json={"order": ["a.md", "b.md"]}
         )
         assert resp.status_code in (200, 201, 404, 405)
+
+
+# ── Queue depth vs archived designs ────────────────────────────────
+# Uses db_manager (a real, file-backed test DB) instead of the `client`
+# fixture's mocked get_db, since this checks an actual SQL filter.
+
+
+class TestQueueDepthExcludesArchived:
+    async def test_archived_designs_do_not_count_toward_queue_depth(self, db_manager):
+        """The Spec Queue badge (PipelineStatus.queue_depth) must not count
+        a design the user has archived. _count_queue_depth_sync only
+        filtered on status, not archived_at, so archiving a design (which
+        sets archived_at but leaves status untouched) left it still
+        counted -- the same status-filter/archived_at inconsistency already
+        fixed in queue.py's pending_designs/active_designs queries."""
+        import datetime
+
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.mcp.autopilot.control_routes import get_pipeline_status
+
+        session = db_manager.get_session()
+        try:
+            session.add(
+                AutopilotProject(
+                    id="proj-queue-depth-archive",
+                    name="Queue Depth Archive Test",
+                    base_dir="/tmp/queue-depth-archive",
+                    is_active=True,
+                )
+            )
+            session.add(
+                AutopilotDesign(
+                    id="des-archived-1",
+                    project_id="proj-queue-depth-archive",
+                    filename="archived.md",
+                    name="Archived Design",
+                    status="pending",
+                    archived_at=datetime.datetime.utcnow(),
+                )
+            )
+            session.add(
+                AutopilotDesign(
+                    id="des-not-archived-1",
+                    project_id="proj-queue-depth-archive",
+                    filename="active.md",
+                    name="Active Design",
+                    status="pending",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        status = await get_pipeline_status(project_id="proj-queue-depth-archive")
+        assert status.queue_depth == 1
