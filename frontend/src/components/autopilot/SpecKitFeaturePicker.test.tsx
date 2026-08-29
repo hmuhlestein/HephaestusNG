@@ -14,10 +14,12 @@ const MULTI_REPO_FEATURES = [
 ];
 
 const mockGetFeatures = vi.fn();
+const mockGetReadiness = vi.fn();
 
 vi.mock('@/services/api', () => ({
   apiService: {
     getAutopilotProjectSpeckitFeatures: (...args: unknown[]) => mockGetFeatures(...args),
+    getAutopilotProjectSpeckitReadiness: (...args: unknown[]) => mockGetReadiness(...args),
   },
 }));
 
@@ -57,7 +59,7 @@ describe('SpecKitFeaturePicker', () => {
     const { onSelect } = renderPicker();
 
     const row = await screen.findByText('001-checkout-flow');
-    fireEvent.click(row.closest('button')!);
+    fireEvent.click(row.closest('[role="button"]')!);
 
     expect(onSelect).toHaveBeenCalledWith(SINGLE_REPO_FEATURES[0]);
   });
@@ -66,7 +68,7 @@ describe('SpecKitFeaturePicker', () => {
     mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
     renderPicker();
 
-    const row = (await screen.findByText('001-checkout-flow')).closest('button')!;
+    const row = (await screen.findByText('001-checkout-flow')).closest('[role="button"]')!;
     expect(row).toHaveAttribute('aria-pressed', 'false');
 
     fireEvent.click(row);
@@ -79,6 +81,76 @@ describe('SpecKitFeaturePicker', () => {
     renderPicker();
 
     expect(await screen.findByText('no plan.md')).toBeInTheDocument();
+  });
+
+  it('fetches and renders readiness only after clicking "Check readiness"', async () => {
+    mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
+    mockGetReadiness.mockResolvedValue({
+      features: [
+        {
+          number: '001',
+          slug: 'checkout-flow',
+          repoLabel: null,
+          needsClarification: ['What auth scheme?'],
+          missingFiles: ['tasks.md'],
+        },
+      ],
+    });
+    renderPicker();
+
+    await screen.findByText('001-checkout-flow');
+    expect(mockGetReadiness).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+
+    expect(await screen.findByText('Missing: tasks.md')).toBeInTheDocument();
+    expect(screen.getByText('NEEDS CLARIFICATION: What auth scheme?')).toBeInTheDocument();
+  });
+
+  it('disables "Check readiness" while its own request is pending, re-enables after', async () => {
+    mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
+    let resolveReadiness: (v: unknown) => void;
+    mockGetReadiness.mockReturnValue(
+      new Promise(resolve => {
+        resolveReadiness = resolve;
+      })
+    );
+    renderPicker();
+
+    await screen.findByText('001-checkout-flow');
+    const button = screen.getAllByText('Check readiness')[0].closest('button')!;
+    fireEvent.click(button);
+
+    expect(await screen.findByText('Checking…')).toBeInTheDocument();
+    expect(button).toBeDisabled();
+
+    resolveReadiness!({ features: [{ number: '001', slug: 'checkout-flow', repoLabel: null, needsClarification: [], missingFiles: [] }] });
+
+    const reenabled = await screen.findByText('Check readiness');
+    expect(reenabled.closest('button')!).not.toBeDisabled();
+  });
+
+  it('renders an error state on a failed readiness fetch', async () => {
+    mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
+    mockGetReadiness.mockRejectedValue(new Error('boom'));
+    renderPicker();
+
+    await screen.findByText('001-checkout-flow');
+    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+
+    expect(await screen.findByText('Failed to check readiness.')).toBeInTheDocument();
+  });
+
+  it('clicking "Check readiness" never calls onSelect', async () => {
+    mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
+    mockGetReadiness.mockResolvedValue({ features: [{ number: '001', slug: 'checkout-flow', repoLabel: null, needsClarification: [], missingFiles: [] }] });
+    const { onSelect } = renderPicker();
+
+    await screen.findByText('001-checkout-flow');
+    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+
+    await screen.findByText('Check readiness');
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('renders nothing when the project has no Spec Kit features', async () => {

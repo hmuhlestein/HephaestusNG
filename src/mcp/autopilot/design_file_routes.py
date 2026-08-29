@@ -538,6 +538,53 @@ async def list_project_speckit_features(project_id: str):
     ]
 
 
+@router.get("/projects/{project_id}/speckit/check")
+async def check_project_speckit_readiness(
+    project_id: str,
+    number: Optional[str] = Query(None),
+    repo_label: Optional[str] = Query(None),
+):
+    """REQ-01: project-id-keyed voluntary readiness check, mirroring
+    control_routes.speckit_check's shape. `number` optional -- omitted
+    checks every discovered feature; provided, scopes to the matching
+    feature(s). No resolve_feature_selection/ambiguity handling needed
+    here (unlike the CLI's --feature/--repo path) -- the dashboard always
+    calls this with an exact (number, repo_label) pair taken straight from
+    a prior features-list response, so "matches" is a plain filter, not a
+    best-guess resolution. Read-only. Never mutates state. Never affects
+    /start.
+    """
+    from src.autopilot.orchestrator.speckit import check_feature_readiness, discover_speckit_features
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        features = discover_speckit_features(db, project_id, proj.base_dir)
+
+    if number is not None:
+        targets = [f for f in features if f.number == number and f.repo_label == repo_label]
+        if not targets:
+            raise HTTPException(404, "Spec Kit feature not found")
+    else:
+        targets = features
+
+    reports = [check_feature_readiness(f) for f in targets]
+    return {
+        "features": [
+            {
+                "number": r.feature.number,
+                "slug": r.feature.slug,
+                "repo_label": r.feature.repo_label,
+                "needs_clarification": r.needs_clarification,
+                "missing_files": r.missing_files,
+            }
+            for r in reports
+        ]
+    }
+
+
 @router.get("/projects/{project_id}/browse/content")
 async def browse_project_file_content(project_id: str, path: str = Query(...)):
     """Read the content of a .md/.txt file under a project's base_dir."""
