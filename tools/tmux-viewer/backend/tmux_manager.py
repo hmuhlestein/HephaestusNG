@@ -177,6 +177,13 @@ class TmuxSessionManager:
         manager.kill_session("my-agent")
     """
 
+    # Cap on _transcript_backfill_cache -- nothing ever evicts an entry, so
+    # this process-lifetime dict would otherwise grow monotonically against
+    # uptime x session volume with no bound at all. FIFO eviction (oldest
+    # entry first, relying on dict insertion order) is enough since each
+    # entry is write-once and never re-read once its session is stale.
+    _TRANSCRIPT_BACKFILL_CACHE_MAX = 200
+
     def __init__(self, session_prefix: str = "agent"):
         """Initialize the tmux session manager.
 
@@ -190,7 +197,8 @@ class TmuxSessionManager:
         # transcript backfill (see _get_raw_transcript_backfill) -- read
         # and filtered ONCE per session, not on every poll, since it can
         # be a large file and its whole purpose is recovering EARLY
-        # content .clean.log missed, not tracking live changes.
+        # content .clean.log missed, not tracking live changes. Bounded by
+        # _TRANSCRIPT_BACKFILL_CACHE_MAX (see that constant's comment).
         self._transcript_backfill_cache: Dict[str, str] = {}
 
     def create_session(
@@ -374,6 +382,9 @@ class TmuxSessionManager:
                 )
                 backfill = ""
 
+        if len(self._transcript_backfill_cache) >= self._TRANSCRIPT_BACKFILL_CACHE_MAX:
+            oldest_session_name = next(iter(self._transcript_backfill_cache))
+            del self._transcript_backfill_cache[oldest_session_name]
         self._transcript_backfill_cache[session_name] = backfill
         return backfill
 
