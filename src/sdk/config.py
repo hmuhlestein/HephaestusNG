@@ -213,18 +213,42 @@ class HephaestusConfig:
 
     def validate(self) -> None:
         """Validate configuration."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        def _missing_key(provider: str, env_var: str) -> None:
+            # CLIFallbackChatModel (langchain_llm_client.py) shells out to
+            # default_cli_tool for a real LLM answer instead of every
+            # caller falling back to its own static default -- but it only
+            # implements Claude's non-interactive `-p` mode today, so it
+            # only actually covers a missing key when default_cli_tool ==
+            # "claude". Without this check, a missing key here made the
+            # WHOLE pipeline refuse to even start (HephaestusSDK.__init__
+            # calls this before anything else), even though every
+            # downstream LLM call already knows how to work around it.
+            # Mirrors SimpleConfig.validate(strict=False)'s identical
+            # "warn, don't crash" behavior in src/core/llm_config.py.
+            if self.default_cli_tool == "claude":
+                logger.warning(
+                    f"{env_var} is not set for {provider} provider -- LLM "
+                    "calls will fall back to the claude CLI (CLIFallbackChatModel)."
+                )
+            else:
+                raise ValueError(f"{env_var} must be set for {provider} provider")
+
         # Check API keys for simple providers
         if self.llm_provider == "openai" and not self.openai_api_key:
-            raise ValueError("OPENAI_API_KEY must be set for OpenAI provider")
+            _missing_key("OpenAI", "OPENAI_API_KEY")
 
         if self.llm_provider == "anthropic" and not self.anthropic_api_key:
-            raise ValueError("ANTHROPIC_API_KEY must be set for Anthropic provider")
+            _missing_key("Anthropic", "ANTHROPIC_API_KEY")
 
         if self.llm_provider == "openrouter" and not self.openrouter_api_key:
-            raise ValueError("OPENROUTER_API_KEY must be set for OpenRouter provider")
+            _missing_key("OpenRouter", "OPENROUTER_API_KEY")
 
         if self.llm_provider == "groq" and not self.groq_api_key:
-            raise ValueError("GROQ_API_KEY must be set for Groq provider")
+            _missing_key("Groq", "GROQ_API_KEY")
 
         # Check provider is valid
         valid_providers = ["openai", "anthropic", "openrouter", "groq"]
