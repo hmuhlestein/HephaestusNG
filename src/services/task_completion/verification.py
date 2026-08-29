@@ -739,7 +739,7 @@ def verify_requirements_cover_scope_cli_flags(session, task, phase=None) -> Opti
 
     Only applies when this workflow's launch_params carries a
     feature_scope path (a Spec Kit per-feature run) -- a hand-written
-    design.md with no such per-feature scope doc has nothing to check
+    spec.md with no such per-feature scope doc has nothing to check
     this against.
     """
     from pathlib import Path

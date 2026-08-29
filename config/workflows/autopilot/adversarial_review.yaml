@@ -95,7 +95,7 @@ additional_notes: |
   hunting for a [MISSING] file elsewhere.
 
   Read:
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth)
   - requirements.md — contains REQ-XX requirement IDs to verify
   - src/ — ALL new or modified source files (read them in full, not excerpts)
   - tests/ — ALL new or modified test files
@@ -259,17 +259,17 @@ additional_notes: |
   Do not report speculative issues ("this could fail"). Show the exact sequence.
 
   DESIGN SCOPE TAGGING: Every finding is ALSO real regardless of scope — but tag
-  each one so product_validation (which checks compliance with ./.hephaestus/design.md)
+  each one so product_validation (which checks compliance with ./.hephaestus/spec.md)
   doesn't treat a legitimate architectural concern the design doc never asked for as
   a release blocker:
   - IN-SCOPE: the design doc specifies behavior this finding shows is violated
   - OUT-OF-SCOPE: a real bug/fragility, but the design doc never specified this
     behavior at all (e.g. hardening a function the design doc only asked to be
     "correct for the happy path"). Still report it as a BLOCKER/WARNING/NIT on
-    its technical merits — just add "(out-of-scope: not specified in design.md)"
+    its technical merits — just add "(out-of-scope: not specified in spec.md)"
     after the title so downstream phases know not to gate release on it.
   Add the tag to each finding's title line, e.g. "### [BLOCKER] Logger swallows
-  IOError (out-of-scope: not specified in design.md)".
+  IOError (out-of-scope: not specified in spec.md)".
 
   ## STEP 14: WRITE adversarial.md
 

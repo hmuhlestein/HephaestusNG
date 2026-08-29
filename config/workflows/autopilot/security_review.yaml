@@ -125,7 +125,7 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" under a phase-named subdirectory: .hephaestus/security_review/security.md, etc. (same .hephaestus/<phase_name>/ convention used by architectural_review, qa_validation, adversarial_review, and product_validation).
   - Code fixes go in "Project Path" (src/, tests/, etc.).
@@ -139,7 +139,7 @@ additional_notes: |
 
   Read:
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth)
   - requirements.md (from Artifacts Path) - What security requirements exist? (contains NFR-XX IDs)
   - architecture.md (from Artifacts Path) - How is security designed?
   - adversarial.md (from Artifacts Path) - Any security concerns from adversarial review?

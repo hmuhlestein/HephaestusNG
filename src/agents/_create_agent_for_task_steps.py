@@ -213,7 +213,7 @@ async def _run_launch_preparations(
                             if dq.is_dir():
                                 cands += sorted(dq.glob("*.md"))
                             cands += [
-                                wd / CONTEXT_DIR_NAME / "design.md",
+                                wd / CONTEXT_DIR_NAME / "spec.md",
                                 wd / CONTEXT_DIR_NAME / "design_document.md",
                                 wd / CONTEXT_DIR_NAME / "requirements.md",
                             ]

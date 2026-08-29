@@ -69,7 +69,7 @@ additional_notes: |
   ═══ STEP 2: FIX CRITICAL DOC ERRORS ═══
 
   This is the bugfix pipeline: there is no requirements.md or architecture.md
-  to check docs against -- read ./.hephaestus/design.md (the bug report), the
+  to check docs against -- read ./.hephaestus/spec.md (the bug report), the
   adversarial review report, README.md, and skim key source files. Look for:
   - Forward-looking language now out of date ("will be implemented", "not yet created")
   - Filenames or paths that don't match the actual filesystem

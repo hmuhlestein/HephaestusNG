@@ -70,13 +70,13 @@ additional_notes: |
     duplicate/concurrent dispatch for this same phase then writes to a
     DIFFERENT suffixed file instead of racing yours, and the gate reads
     your own task's suffixed file specifically, not a bare validation.md.
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" (validation.md, etc.).
   - Code goes in "Project Path" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
-  Read the original design document again from ./.hephaestus/design.md.
+  Read the original design document again from ./.hephaestus/spec.md.
   This is your SOURCE OF TRUTH — not requirements.md, not architecture.md.
   Those documents are derived artifacts and may have expanded beyond the design scope.
 

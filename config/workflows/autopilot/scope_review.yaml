@@ -32,10 +32,10 @@ description: |
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
-  - "Original design doc read from ./.hephaestus/design.md"
+  - "Original design doc read from ./.hephaestus/spec.md"
   - "./.hephaestus/requirements.md read and compared line-by-line against design doc"
-  - "Every requirement in ./.hephaestus/requirements.md traced to a line in design.md"
-  - "Any requirement NOT in design.md flagged as out-of-scope"
+  - "Every requirement in ./.hephaestus/requirements.md traced to a line in spec.md"
+  - "Any requirement NOT in spec.md flagged as out-of-scope"
   - "Any design doc requirement missing from ./.hephaestus/requirements.md flagged"
   - "scope.md written to ./.hephaestus/scope_review/"
   - "Task marked as done with verdict PASS or FAIL"
@@ -100,14 +100,14 @@ additional_notes: |
 
   ```bash
   # Read the original design doc (source of truth)
-  # It is ALWAYS at ./.hephaestus/design.md — the orchestrator places it there.
-  cat ./.hephaestus/design.md
+  # It is ALWAYS at ./.hephaestus/spec.md — the orchestrator places it there.
+  cat ./.hephaestus/spec.md
 
   # Read the extracted requirements
   cat ./.hephaestus/requirements.md
   ```
 
-  If .hephaestus/design.md is missing, run:
+  If .hephaestus/spec.md is missing, run:
   ```bash
   find . -name "*.md" -path "*/design*" | head -5
   find . -path "./.hephaestus/*" | head -10
@@ -129,14 +129,14 @@ additional_notes: |
   a PLAIN repeat of the same FAIL you already gave is not useful -- you
   must actually engage with the stated reasoning:
   - If the justification is a real, specific concern (concrete, not "seems
-    reasonable" or "good practice") that design.md's silence doesn't rule
+    reasonable" or "good practice") that spec.md's silence doesn't rule
     out -- e.g. a security/correctness issue the design doc's scope
     genuinely didn't anticipate -- consider PASS for that item even though
-    it's still not literally in design.md. Note this in summary.
+    it's still not literally in spec.md. Note this in summary.
   - If the justification is vague, generic, or just restates that the item
     seems useful, it does NOT excuse the drift -- FAIL again, and in
     correction_instructions explicitly address why the stated reason
-    doesn't hold (not just re-stating "not in design.md" -- product_
+    doesn't hold (not just re-stating "not in spec.md" -- product_
     requirements already knows that; it needs to know why ITS reasoning
     specifically doesn't hold up).
   - If requirements.md has NO `## Scope Disagreements` section but the
@@ -149,12 +149,12 @@ additional_notes: |
   ## STEP 2: COMPARE LINE BY LINE
 
   For every functional requirement, feature, file, or function in
-  requirements.md, ask: "Is this explicitly in design.md?"
+  requirements.md, ask: "Is this explicitly in spec.md?"
 
   Classify each as:
-  - IN-SCOPE: Directly stated or clearly implied by design.md
-  - OUT-OF-SCOPE: Added by the requirements agent, not in design.md
-  - MISSING: In design.md but absent from requirements.md
+  - IN-SCOPE: Directly stated or clearly implied by spec.md
+  - OUT-OF-SCOPE: Added by the requirements agent, not in spec.md
+  - MISSING: In spec.md but absent from requirements.md
 
   ## STEP 3: WRITE scope.md
 
@@ -193,12 +193,12 @@ additional_notes: |
   Field rules:
   - verdict is your holistic judgment, not a mechanical list-emptiness check.
     FAIL only for REAL scope drift: a new capability, endpoint, table, or
-    workflow not implied anywhere in design.md, or a requirement whose
-    removal means something in design.md doesn't get built. PASS is fine
+    workflow not implied anywhere in spec.md, or a requirement whose
+    removal means something in spec.md doesn't get built. PASS is fine
     even with non-empty out_of_scope/missing when every item is benign: an
-    implementation detail reasonably inferred from design.md (pagination
+    implementation detail reasonably inferred from spec.md (pagination
     defaults, a defensively standard event for a documented flow), or
-    something design.md itself implies inconsistently (e.g. its own code
+    something spec.md itself implies inconsistently (e.g. its own code
     example uses a value its schema comment omits). List every item you
     notice either way — non-empty lists do NOT force FAIL by themselves.
     TECH DEBT flows: almost always PASS — scope naturally expands as more
@@ -206,10 +206,10 @@ additional_notes: |
     RE-REVIEWS: lower the bar — scope increases from discovered gaps are
     legitimate. Only fail for entirely new capabilities.
   - out_of_scope: list of requirement strings present in requirements.md
-    but NOT in design.md (verbatim text from requirements.md), each
+    but NOT in spec.md (verbatim text from requirements.md), each
     still listed even when benign enough not to affect verdict.
-  - missing: list of requirement strings present in design.md but absent from
-    requirements.md (verbatim text from design.md), each still
+  - missing: list of requirement strings present in spec.md but absent from
+    requirements.md (verbatim text from spec.md), each still
     listed even when benign enough not to affect verdict.
   - correction_instructions: empty string if PASS; specific rewrites for the
     product_requirements agent if FAIL.

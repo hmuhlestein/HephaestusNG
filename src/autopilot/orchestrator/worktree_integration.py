@@ -88,7 +88,7 @@ def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directo
     return dest
 
 
-def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str = "design.md") -> Path:
+def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str = "spec.md") -> Path:
     """Copy design_entry's backing content into heph_dir. Directory-sourced
     entries (design_entry.source_dir set, REQ-02/NFR-02) recursively copy the
     whole tree via _copy_design_content; file-sourced entries copy
@@ -107,7 +107,7 @@ def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str 
 
 def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
     """Back-compat wrapper over copy_design_source: copies design_entry into
-    feature_folder/CONTEXT_DIR_NAME/, preserving the default 'design.md'
+    feature_folder/CONTEXT_DIR_NAME/, preserving the default 'spec.md'
     filename for file-sourced entries."""
     return copy_design_source(design_entry, feature_folder / CONTEXT_DIR_NAME)
 

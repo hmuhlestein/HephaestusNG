@@ -86,7 +86,7 @@ additional_notes: |
   - Step 2 (ash scan) — the orchestrator already ran it before you started, so
     "running" it is reading a file, and your report is REJECTED without an
     "## Automated Scan Results" section.
-  - Step 3 (prior context) — design.md and adversarial.md are short reads
+  - Step 3 (prior context) — spec.md and adversarial.md are short reads
     that tell you what this fix was actually supposed to do and what the
     prior reviewer already flagged.
   - Step 5 (input validation) — a parser or formatter is precisely where
@@ -126,7 +126,7 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" under a phase-named subdirectory: .hephaestus/security_review/security.md, etc. (same .hephaestus/<phase_name>/ convention used by qa_validation and adversarial_review).
   - Code fixes go in "Project Path" (src/, tests/, etc.).
@@ -140,7 +140,7 @@ additional_notes: |
 
   Read:
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the security-relevant spec here; there is no separate requirements.md
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the security-relevant spec here; there is no separate requirements.md
   - adversarial.md (from Artifacts Path) - Any security concerns from adversarial review?
 
   ## STEP 4: AUTHENTICATION & AUTHORIZATION

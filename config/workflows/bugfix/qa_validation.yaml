@@ -14,7 +14,7 @@ description: |
   Run comprehensive QA tests and validate the implementation.
 
   Executes unit tests, integration tests, and end-to-end validation.
-  Compares implementation against design.md and generates a final QA
+  Compares implementation against spec.md and generates a final QA
   report with pass/fail status and recommendations.
 
   This is the bugfix pipeline's sole verification phase — there is no
@@ -49,7 +49,7 @@ done_definitions:
   - "Integration tests executed and results captured"
   - "End-to-end validation performed"
   - "Requirements compliance verified"
-  - "Originally reported bug (per design.md) reproduced against pre-fix behavior and confirmed no longer reproducible, with a regression test in place"
+  - "Originally reported bug (per spec.md) reproduced against pre-fix behavior and confirmed no longer reproducible, with a regression test in place"
   - "Security fixes validated"
   - "qa.md created with a YAML frontmatter block (structured pass/fail counts, gate input) followed by the comprehensive narrative report"
   - "Memory saved with QA findings"
@@ -88,7 +88,7 @@ additional_notes: |
   If TESTING.md EXISTS:
     → Read it fully, then execute these steps IN ORDER:
 
-    0. **Scope check** — read ./.hephaestus/design.md and list every function/file
+    0. **Scope check** — read ./.hephaestus/spec.md and list every function/file
        the design requires. Then list what is actually implemented. Flag any
        implemented items NOT in the design as scope violations (critical issue).
        Also verify the seeded test file matches the design doc's test section —
@@ -129,7 +129,7 @@ additional_notes: |
     dispatch for this same phase then writes to a DIFFERENT suffixed file
     instead of racing yours, and the gate reads your own task's suffixed
     file specifically, not a bare qa.md.
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" (qa.md, etc.).
   - Code/tests go in "Project Path" (src/, tests/, etc.).
@@ -144,7 +144,7 @@ additional_notes: |
   Read:
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - TESTING.md — How to run the app and tests
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the spec here; there is no separate requirements.md
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the spec here; there is no separate requirements.md
   - adversarial.md (from Artifacts Path) - What issues were found in adversarial review?
   - security.md (from Artifacts Path) - What security fixes were made?
 
@@ -255,7 +255,7 @@ additional_notes: |
   # If no tests exist, note this and create basic smoke tests
   ```
 
-  If no tests exist, create minimal smoke tests based on design.md to validate the core functionality works.
+  If no tests exist, create minimal smoke tests based on spec.md to validate the core functionality works.
 
   Capture:
   - Pass/fail counts
@@ -278,8 +278,8 @@ additional_notes: |
 
   ## STEP 6: SCOPE COMPLIANCE CHECK
 
-  For EACH concrete behavior design.md describes (the expected behavior it
-  documents, not just the one bug being fixed — a design.md can describe
+  For EACH concrete behavior spec.md describes (the expected behavior it
+  documents, not just the one bug being fixed — a spec.md can describe
   more than one acceptance point):
 
   1. Identify which test(s) validate it
@@ -298,7 +298,7 @@ additional_notes: |
 
   This pipeline has no product_validation phase — you are the ONLY phase
   that verifies the actual bug report is resolved, not just that new tests
-  pass. Read ./.hephaestus/design.md (the bug report: expected vs. actual
+  pass. Read ./.hephaestus/spec.md (the bug report: expected vs. actual
   behavior, reproduction steps) and:
 
   1. Follow the reported reproduction steps exactly against the CURRENT
@@ -438,7 +438,7 @@ additional_notes: |
 
   ## Bug Verification
 
-  - **Reported bug (design.md):** [one-line summary of the original report]
+  - **Reported bug (spec.md):** [one-line summary of the original report]
   - **Reproduction steps followed:** YES/NO
   - **Bug still reproduces on current code:** YES/NO
   - **Regression test in place:** [test file:name] — stash-verified fail-before/pass-after: YES/NO

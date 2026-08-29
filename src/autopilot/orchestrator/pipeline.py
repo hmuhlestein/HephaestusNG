@@ -454,14 +454,14 @@ def _setup_shared_design_worktree(
             design_branch_name = feature_branch
             logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
 
-        # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
+        # Copy design doc into worktree as .hephaestus/spec.md so all phases can read it
         wt_heph = Path(design_worktree_path) / CONTEXT_DIR_NAME
         wt_heph.mkdir(parents=True, exist_ok=True)
         if "design_document" in (launch_params or {}):
             _dd = Path(launch_params["design_document"])
             if _dd.exists():
-                _copy_design_content(_dd, wt_heph, "design.md", is_directory=_dd.is_dir())
-                logger.info(f"Copied design doc to worktree: {wt_heph / 'design.md'}")
+                _copy_design_content(_dd, wt_heph, "spec.md", is_directory=_dd.is_dir())
+                logger.info(f"Copied design doc to worktree: {wt_heph / 'spec.md'}")
     except Exception as e:
         logger.warning(f"Failed to create shared worktree, using project path: {e}")
         design_worktree_path = project_path
@@ -1032,7 +1032,7 @@ def _copy_design_input_into_worktree(design_entry: DesignEntry, worktree: Path) 
     """Populate <worktree>/.hephaestus/ with this run's design input. A
     Spec Kit-selected entry copies its whole feature directory (spec.md,
     plan.md, tasks.md, data-model.md, contracts/, etc -- REQ-03/FR-002a)
-    instead of a single design.md, so every Spec Kit-aware phase prompt has
+    instead of a single spec.md, so every Spec Kit-aware phase prompt has
     what it needs regardless of which phase reads first. Shared by both
     worktree-creation call sites (Phase 0 and per-feature) so they can't
     silently diverge."""
@@ -1047,7 +1047,7 @@ def _copy_design_input_into_worktree(design_entry: DesignEntry, worktree: Path) 
     if feature_dir is not None:
         copy_speckit_feature(Path(feature_dir), worktree)
     else:
-        shutil.copy2(design_entry.path, wt_heph / "design.md")
+        shutil.copy2(design_entry.path, wt_heph / "spec.md")
 
 
 def _copy_feature_scope_into_worktree(
@@ -1060,7 +1060,7 @@ def _copy_feature_scope_into_worktree(
     feature_scope is provided, read it first" with no existence-check of
     its own -- the caller must only put launch_params["feature_scope"] to
     a path this function actually confirms exists, so a missing source
-    correctly reads as "not provided" (falling through to design.md, the
+    correctly reads as "not provided" (falling through to spec.md, the
     documented fallback) instead of silently pointing the agent at a
     promised file that was never delivered. Observed live: scope_src
     didn't exist (a Feature row recreated by hand after a delete/rerun
@@ -1074,7 +1074,7 @@ def _copy_feature_scope_into_worktree(
     if not scope_src.exists():
         logger.warning(
             f"[FEATURE-SCOPE] {scope_src} does not exist -- feature_scope "
-            f"will NOT be set for {feature_key}; agent falls back to design.md"
+            f"will NOT be set for {feature_key}; agent falls back to spec.md"
         )
         return None
     scope_dest.parent.mkdir(parents=True, exist_ok=True)
