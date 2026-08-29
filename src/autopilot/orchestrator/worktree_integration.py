@@ -263,48 +263,61 @@ def _cleanup_worktree(
             # before that bug was fixed.
             if worktree.exists():
                 wt_mgr._remove_worktree(str(worktree), require_clean=True)
-                if worktree.exists():
+                removed = not worktree.exists()
+                if not removed:
                     logger.warning(f"Worktree not removed (uncommitted changes or removal error): {worktree}")
                 else:
                     logger.info(f"Removed worktree: {worktree}")
 
-                # Clear stale working_directory from any workflows pointing to
-                # this worktree -- but never touch a workflow that's still
-                # "active" or "paused" (resumable -- see the same exclusion in
-                # worktree_manager.py's cleanup_all_stale_branches). This
-                # worktree path is deterministic (derived only from design_id,
-                # reused across every retry), so an old, already-finished
-                # attempt's cleanup can otherwise null out a *different*,
-                # currently-active-or-paused workflow that has since
-                # legitimately reused the same path (e.g. after an abrupt
-                # orchestrator kill left an earlier attempt's cleanup
-                # deferred). Once working_directory is wrongly nulled, agent
-                # creation can't find the shared worktree (falls back to an
-                # isolated per-agent one) and output validation can't check
-                # any candidate path at all -- silently breaking a workflow
-                # that's still genuinely in progress or waiting to be resumed.
-                try:
-                    from src.core.database import Workflow
-
-                    _s = db.get_session()
+                # Only clear working_directory if the worktree was actually
+                # removed. If removal was skipped (require_clean=True refusing
+                # to touch uncommitted work) or failed, the workflow row must
+                # keep pointing at it -- otherwise it becomes invisible to
+                # BOTH this function (never called again once the workflow is
+                # "completed") and sweep_completed_workflow_worktrees's backup
+                # sweep (which only looks at working_directory IS NOT NULL),
+                # permanently orphaning the worktree with no automated path
+                # left to find it.
+                #
+                # When it was removed, clear stale working_directory from any
+                # workflows pointing to this worktree -- but never touch a
+                # workflow that's still "active" or "paused" (resumable --
+                # see the same exclusion in worktree_manager.py's
+                # cleanup_all_stale_branches). This worktree path is
+                # deterministic (derived only from design_id, reused across
+                # every retry), so an old, already-finished attempt's cleanup
+                # can otherwise null out a *different*, currently-active-or-
+                # paused workflow that has since legitimately reused the same
+                # path (e.g. after an abrupt orchestrator kill left an
+                # earlier attempt's cleanup deferred). Once working_directory
+                # is wrongly nulled, agent creation can't find the shared
+                # worktree (falls back to an isolated per-agent one) and
+                # output validation can't check any candidate path at all --
+                # silently breaking a workflow that's still genuinely in
+                # progress or waiting to be resumed.
+                if removed:
                     try:
-                        wfs = (
-                            _s.query(Workflow)
-                            .filter(
-                                Workflow.working_directory == str(worktree),
-                                Workflow.status.notin_(["active", "paused"]),
+                        from src.core.database import Workflow
+
+                        _s = db.get_session()
+                        try:
+                            wfs = (
+                                _s.query(Workflow)
+                                .filter(
+                                    Workflow.working_directory == str(worktree),
+                                    Workflow.status.notin_(["active", "paused"]),
+                                )
+                                .all()
                             )
-                            .all()
-                        )
-                        for wf in wfs:
-                            wf.working_directory = None
-                            logger.info(f"Cleared stale working_directory from workflow {wf.id[:8]}")
-                        if wfs:
-                            _s.commit()
-                    finally:
-                        _s.close()
-                except Exception as e:
-                    logger.warning(f"Failed to clear workflow working_directory: {e}")
+                            for wf in wfs:
+                                wf.working_directory = None
+                                logger.info(f"Cleared stale working_directory from workflow {wf.id[:8]}")
+                            if wfs:
+                                _s.commit()
+                        finally:
+                            _s.close()
+                    except Exception as e:
+                        logger.warning(f"Failed to clear workflow working_directory: {e}")
         finally:
             # BLOCKER-3: Only dispose if we created a new DatabaseManager
             if db_manager is None:
