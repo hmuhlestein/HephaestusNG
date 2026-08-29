@@ -234,6 +234,14 @@ class RepairService:
                 )
                 wf_ids = [wf.id for wf in matching_wfs]
 
+                # Captured now, before Phase/Workflow rows are deleted
+                # below -- used to rotate/invalidate these workflows' CLI
+                # sessions after the delete commits (see the cleanup block
+                # further down, alongside the worktree cleanup).
+                from src.autopilot.phases import capture_workflow_session_info
+
+                session_infos = capture_workflow_session_info(db, wf_ids)
+
                 # Get design to find features
                 proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
                 design = db.query(AutopilotDesign).filter_by(project_id=proj.id, filename=filename).first() if proj else None
@@ -322,12 +330,18 @@ class RepairService:
                     if design and design.phase0_workflow_id in wf_ids:
                         design.phase0_workflow_id = None
 
+                    # Delete features before workflows -- features.workflow_id
+                    # is also an enforced FK to workflows.id, so deleting
+                    # Workflow first (as this always did) failed the Workflow
+                    # delete below with the same FOREIGN KEY error Task/Phase
+                    # did above, just one table further out.
+                    if design:
+                        db.query(Feature).filter_by(design_id=design.id).delete(synchronize_session=False)
+
                     # Delete workflows
                     db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
 
-                # Delete features for this design
                 if design:
-                    db.query(Feature).filter_by(design_id=design.id).delete(synchronize_session=False)
                     # Reset design status so orchestrator picks it up fresh
                     design.status = "pending"
                     # Clear retry counter so fresh retry starts at 0
@@ -368,6 +382,19 @@ class RepairService:
                     )
                 except Exception as e:
                     logger.warning(f"[RERUN] Failed to clean up worktree {working_directory}: {e}")
+
+            # Best-effort CLI session cleanup -- see cleanup_workflow_sessions'
+            # docstring (src/autopilot/phases.py) for why this is needed even
+            # though get_session_id is now workflow-scoped.
+            if session_infos:
+                try:
+                    from src.autopilot.phases import cleanup_workflow_sessions
+
+                    removed = cleanup_workflow_sessions(session_infos)
+                    if removed:
+                        logger.info(f"[RERUN] Removed {removed} orphaned CLI session file(s) for {filename}")
+                except Exception as e:
+                    logger.warning(f"[RERUN] Failed to clean up CLI sessions for {filename}: {e}")
         except Exception as e:
             logger.error(f"Error cleaning up design state for rerun: {e}")
 

@@ -761,7 +761,7 @@ class LaunchPipeline:
                         if _pid and _dsl and phase_name:
                             from src.autopilot.phases import get_session_id
 
-                            session_id = get_session_id(_pid, _dsl, phase_name, model=model)
+                            session_id = get_session_id(_pid, _dsl, phase_name, model=model, workflow_id=task.workflow_id)
                 finally:
                     _s.close()
             except Exception as e:

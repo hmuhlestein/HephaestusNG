@@ -119,3 +119,42 @@ class TestPortCleanupWaitsForProcessExit:
             "subsequent `start` never mistakes the old process for still "
             "alive"
         )
+
+
+class TestOrphanSweepWaitsForProcessExit:
+    """The pgrep-based safety-net sweep (for processes missed by the
+    port-cleanup and PID-file steps above) must verify its kill the same
+    way those steps do, instead of firing one SIGTERM and trusting it."""
+
+    def test_escalates_to_sigkill_if_orphan_still_alive_after_poll_window(self):
+        # subprocess.run is the SAME module attribute whether accessed via
+        # src.cli.commands.stop or src.cli.utils.ports -- one fake_run must
+        # handle both call shapes (pgrep here, lsof/ps in get_port_listeners),
+        # or whichever patch context manager applies last silently wins for
+        # both call sites.
+        liveness, calls = _liveness_fake(dies_after=999)
+
+        def fake_run(cmd, **kwargs):
+            if cmd[0] == "pgrep" and cmd[-1] == "run_server.py":
+                return MagicMock(stdout="777\n")
+            return MagicMock(stdout="")
+
+        p1, p2 = _quiet_service_loop()
+        with patch(
+            "src.cli.commands.stop.subprocess.run", side_effect=fake_run
+        ), patch(
+            "src.cli.utils.ports.subprocess.run", side_effect=fake_run
+        ), patch("src.cli.commands.stop.os.kill") as mock_kill, patch(
+            "src.cli.commands.stop.time.sleep"
+        ), patch(
+            "src.cli.commands.stop.is_process_running", side_effect=liveness
+        ), p1, p2:
+            stop.run(_args())
+
+        signals_sent = [
+            call.args[1] for call in mock_kill.call_args_list if call.args[0] == 777
+        ]
+        assert signal.SIGKILL in signals_sent, (
+            "orphan sweep must force-kill a still-alive process after the "
+            "poll window, not just fire one SIGTERM and move on"
+        )

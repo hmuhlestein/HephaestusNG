@@ -624,6 +624,7 @@ async def remove_project_design(
         Memory,
         Phase,
         PhaseExecution,
+        PhasePromptVersion,
         Task,
         TaskPromptOverride,
         Ticket,
@@ -636,6 +637,7 @@ async def remove_project_design(
     # Delete DB record first, then file (atomic rollback if file delete fails)
     found = False
     worktrees_to_clean: List[Tuple[str, dict]] = []
+    session_infos: List[dict] = []
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
@@ -682,6 +684,15 @@ async def remove_project_design(
                     wf_ids.append(wf.id)
 
             if wf_ids:
+                # Captured now, before Phase/Workflow rows are deleted
+                # below -- used to rotate/invalidate these workflows' CLI
+                # sessions after the delete commits (see the cleanup block
+                # near the end of this function, alongside the worktree
+                # cleanup).
+                from src.autopilot.phases import capture_workflow_session_info
+
+                session_infos = capture_workflow_session_info(db, wf_ids)
+
                 # Terminate active agents for these workflows
                 tasks = db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
                 task_ids = [t.id for t in tasks]
@@ -747,6 +758,16 @@ async def remove_project_design(
                         lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
                         worktrees_to_clean.append((wf.working_directory, lp))
 
+                # Agent.current_task_id -> tasks.id is also an enforced FK --
+                # a belt-and-suspenders null-out alongside the termination
+                # loop above (only covers "working"/"starting"/"idle"
+                # agents): an agent already in some OTHER state that never
+                # had this cleared (e.g. a prior termination that partially
+                # failed) would otherwise still block the Task delete below.
+                db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).update(
+                    {"current_task_id": None}, synchronize_session=False
+                )
+
                 # Delete tasks -- must happen before Phase/PhaseExecution
                 # below: Task.phase_id is a FK to phases.id, so deleting
                 # Phase rows first (as an earlier version of this fix did)
@@ -762,6 +783,7 @@ async def remove_project_design(
                 phase_ids = [p.id for p in db.query(Phase.id).filter(Phase.workflow_id.in_(wf_ids)).all()]
                 if phase_ids:
                     db.query(PhaseExecution).filter(PhaseExecution.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+                    db.query(PhasePromptVersion).filter(PhasePromptVersion.phase_id.in_(phase_ids)).delete(synchronize_session=False)
 
                 # Delete phases -- Phase.workflow_id is a NOT NULL FK to
                 # workflows.id, so leaving these behind (as this function
@@ -769,11 +791,17 @@ async def remove_project_design(
                 # FOREIGN KEY constraint error every time.
                 db.query(Phase).filter(Phase.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
+                # Delete features before workflows -- features.workflow_id is
+                # also an enforced FK to workflows.id, so deleting Workflow
+                # first (as this function always did) failed the Workflow
+                # delete below with the same FOREIGN KEY error Phase did
+                # above, just one table further out.
+                db.query(Feature).filter_by(design_id=d.id).delete(synchronize_session=False)
+
                 # Delete workflows
                 db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
-
-            # Delete features
-            db.query(Feature).filter_by(design_id=d.id).delete(synchronize_session=False)
+            else:
+                db.query(Feature).filter_by(design_id=d.id).delete(synchronize_session=False)
 
             # Delete the design itself
             db.delete(d)
@@ -810,6 +838,19 @@ async def remove_project_design(
             )
         except Exception as e:
             logger.warning(f"[DELETE-DESIGN] Failed to clean up worktree {working_directory}: {e}")
+
+    # Best-effort CLI session cleanup -- see cleanup_workflow_sessions'
+    # docstring (src/autopilot/phases.py) for why this is needed even
+    # though get_session_id is now workflow-scoped.
+    if session_infos:
+        try:
+            from src.autopilot.phases import cleanup_workflow_sessions
+
+            removed = cleanup_workflow_sessions(session_infos)
+            if removed:
+                logger.info(f"[DELETE-DESIGN] Removed {removed} orphaned CLI session file(s) for {filename}")
+        except Exception as e:
+            logger.warning(f"[DELETE-DESIGN] Failed to clean up CLI sessions for {filename}: {e}")
 
     design_dir = _get_design_queue_dir(base_dir)
     filepath = _resolve_design_filepath(

@@ -1889,6 +1889,38 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 return result
             continue  # No completed tasks yet
 
+        # If this phase's most recent task is a DONE-but-unresolved
+        # arbitration decision, resolve it directly instead of falling
+        # through to the generic "phase complete, evaluate transition"
+        # path below. That path (_fire_phase_transition -> the engine's
+        # own retry-budget evaluation) has no idea a "done" task here is
+        # itself an arbitration attempt -- it just recomputes "retry
+        # budget exhausted" fresh and requests a BRAND NEW arbitration for
+        # the exact question this one just answered. Mirrors the
+        # equivalent guard fire_spec_gate_if_ready already has for the
+        # event-driven path (this is the periodic-sweep sibling of that
+        # same fix) -- see that function's docstring for the prior
+        # incident (workflow ca539a75) it closed for THAT path only.
+        # Observed live (workflow e9019930, phase design_review): this
+        # sweep tick landed ~0.4-0.7s before fire_spec_gate_if_ready's own
+        # resolution of the same task completion, winning the race twice
+        # in a row and dispatching two redundant arbitration agents before
+        # the retry-budget-exhausted 3-arbitration cap finally forced a
+        # resolution instead of a 4th.
+        latest_task = (
+            db.query(Task)
+            .filter(Task.phase_id == phase.id, *cycle_filter)
+            .order_by(Task.created_at.desc())
+            .first()
+        )
+        if (
+            latest_task
+            and latest_task.created_by_agent_id == ARBITRATION_CREATED_BY
+            and latest_task.status == "done"
+        ):
+            _maybe_resolve_arbitration(workflow_id, logger)
+            continue
+
         # Before marking phase as complete, check if there are failed tasks
         # that should be retried. A phase with done tasks AND failed tasks
         # is NOT complete — the failed tasks need retry first.

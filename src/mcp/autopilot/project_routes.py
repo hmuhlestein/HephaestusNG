@@ -624,17 +624,72 @@ async def delete_project(
     from sqlalchemy.exc import IntegrityError
 
     from src.core.database import (
+        Agent,
+        AgentResult,
         AgentWorktree,
+        AutopilotDesign,
         AutopilotProject,
+        BoardConfig,
+        CostEntry,
+        DiagnosticRun,
         Feature,
+        Memory,
+        Phase,
+        PhaseExecution,
+        PhasePromptVersion,
         ProjectRepo,
         Task,
+        TaskPromptOverride,
         Ticket,
         TicketCommit,
+        ValidationReview,
+        Workflow,
+        WorkflowResult,
         get_db,
     )
 
     replacement_base_dir = None
+
+    # The ORM cascades on AutopilotProject.designs/.repos and
+    # AutopilotDesign.features only reach AutopilotDesign/Feature/
+    # ProjectRepo -- they never touch Workflow or its whole dependent
+    # subtree (Task/Phase/Ticket/etc). features.workflow_id and
+    # autopilot_designs.phase0_workflow_id both FK to workflows.id
+    # (NO ACTION, no cascade), so deleting a project that has ever
+    # actually run a design left every Workflow row behind and the
+    # AutopilotDesign delete failed with a FOREIGN KEY violation --
+    # caught below, but effectively making this endpoint dead for any
+    # used project. Mirrors delete_feature/rerun_design/
+    # remove_project_design's own cascade (same bug class, this is the
+    # project-wide version of it), scoped by every workflow reachable
+    # from this project's designs.
+    agent_ids_to_terminate: List[str] = []
+    with get_db() as db:
+        design_ids = [d.id for d in db.query(AutopilotDesign.id).filter_by(project_id=project_id).all()]
+        wf_ids = [w.id for w in db.query(Workflow.id).filter_by(project_id=project_id).all()]
+        if design_ids:
+            for w in db.query(Workflow.id).filter(Workflow.design_id.in_(design_ids)).all():
+                if w.id not in wf_ids:
+                    wf_ids.append(w.id)
+        if wf_ids:
+            agent_ids_to_terminate = [
+                t.assigned_agent_id
+                for t in db.query(Task).filter(
+                    Task.workflow_id.in_(wf_ids),
+                    Task.assigned_agent_id.isnot(None),
+                )
+                if t.assigned_agent_id
+            ]
+
+    # Terminate before deleting: Agent.current_task_id is a foreign key
+    # (foreign_keys=ON) and terminate_agent is what clears it, same
+    # reasoning as delete_feature.
+    if agent_ids_to_terminate:
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
+        for agent_id in agent_ids_to_terminate:
+            await server_state.agent_manager.terminate_agent(agent_id)
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
@@ -643,13 +698,65 @@ async def delete_project(
 
         was_active = getattr(proj, "is_active", False)
 
+        if wf_ids:
+            task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
+            if task_ids:
+                db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
+                db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
+                db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
+                db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
+                # Agent.current_task_id -> tasks.id is also an enforced FK --
+                # a belt-and-suspenders null-out alongside the termination
+                # above (repair_service.py's rerun does the same): an agent
+                # that crashed/was killed without going through the normal
+                # terminate path (which clears this) can leave it dangling
+                # at one of these tasks, failing the Task delete below.
+                db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).update(
+                    {"current_task_id": None}, synchronize_session=False
+                )
+
+            db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+            db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+            db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+            db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+            db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+
+            # tasks.phase_id and tickets.phase_id both FK to phases.id --
+            # Task (and Ticket, already deleted above) must be gone before
+            # Phase, not after.
+            db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+
+            phase_ids = [p.id for p in db.query(Phase.id).filter(Phase.workflow_id.in_(wf_ids)).all()]
+            if phase_ids:
+                db.query(PhaseExecution).filter(PhaseExecution.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+                db.query(PhasePromptVersion).filter(PhasePromptVersion.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+            db.query(Phase).filter(Phase.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+
+            # autopilot_designs.phase0_workflow_id also FKs to workflows.id.
+            if design_ids:
+                db.query(AutopilotDesign).filter(
+                    AutopilotDesign.id.in_(design_ids), AutopilotDesign.phase0_workflow_id.in_(wf_ids)
+                ).update({"phase0_workflow_id": None}, synchronize_session=False)
+
+            # features.workflow_id also FKs to workflows.id -- must be gone
+            # before DELETE FROM workflows runs, same reasoning as
+            # delete_feature.
+            if design_ids:
+                db.query(Feature).filter(Feature.design_id.in_(design_ids)).delete(synchronize_session=False)
+
+            db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
+
         # BLOCKER fix (adversarial review): repo_id FKs on these five tables
         # have no ondelete clause, so SQLite's FK enforcement rejects the
         # cascade delete of ProjectRepo rows (AutopilotProject.repos,
         # cascade="all, delete-orphan") if any row still references one.
         # Null the FK first, in the same transaction, so the cascade delete
         # below always succeeds — matches repo_id=None's existing meaning
-        # ("use the primary repo").
+        # ("use the primary repo"). Only whatever the cleanup above didn't
+        # already delete outright (e.g. AgentWorktree, TicketCommit, or a
+        # Feature/Task with no linked workflow) can still be here.
         repo_ids = [r.id for r in db.query(ProjectRepo.id).filter_by(project_id=project_id).all()]
         if repo_ids:
             for model in (Task, Ticket, TicketCommit, AgentWorktree, Feature):
