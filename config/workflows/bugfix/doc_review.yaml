@@ -173,10 +173,15 @@ additional_notes: |
   1. Executive Summary — the bug, the root cause, the fix, status
   2. Security — vulnerabilities the security review found and fixed;
      anything it deferred instead of fixing (e.g. outdated dependencies
-     with known CVEs), with the ticket ID and severity. Surface this
-     prominently near the top, not buried under general quality notes —
-     a reader skimming just the top of the report must not miss an open
-     "upgrade this library" ticket.
+     with known CVEs), with the ticket ID and severity, and whether that
+     ticket was since fixed or resolved as won't-fix. Call out won't-fix
+     items by name and reason (e.g. "no upstream patch exists yet",
+     "needs a separate human-supervised major-version pass") — these ship
+     with the feature as a KNOWN, ACCEPTED risk, not a closed issue, and a
+     reader skimming just the top of the report must see that distinction
+     clearly, not read it as equivalent to an already-fixed finding.
+     Surface this whole section prominently near the top, not buried
+     under general quality notes.
   3. Root Cause — what was actually wrong and why
   4. The Fix — files changed, mechanism, edge cases covered
   5. Verification — how the fix was confirmed (regression test, stash-verify)
