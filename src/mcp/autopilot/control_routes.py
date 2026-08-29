@@ -581,6 +581,7 @@ async def _start_pipeline_reserved(project_id: str, project_path: str, design_qu
                     .filter(
                         AutopilotDesign.project_id == project_id,
                         AutopilotDesign.status.in_(["pending", "active"]),
+                        AutopilotDesign.archived_at.is_(None),
                     )
                     .count()
                 )

@@ -5443,6 +5443,46 @@ class TestSyncStaleDesignStatuses:
             design = session.query(AutopilotDesign).filter_by(id="design-1").first()
             assert design.status == "pending"
 
+    def test_leaves_archived_design_alone(self, orch_db_env):
+        """Archiving a design (design_file_routes.py) sets archived_at but
+        leaves status untouched, so a design archived while still "active"
+        with all-done features must not be swept and written back to --
+        "archived" is meant to freeze a design, not just hide it from a
+        list view. Mirrors queue.py's active_designs, which already pairs
+        status="active" with archived_at=None."""
+        import datetime
+
+        from src.autopilot.orchestrator.features import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active", archived_at=datetime.datetime.utcnow(),
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                    name="Feature A", scope="s", status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-2", design_id="design-1", feature_key="feat-b",
+                    name="Feature B", scope="s", status="skipped",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "active"
+
 
 class TestInterruptibleSleep:
     """docs/SAFE_RESTART_DESIGN.md §3.3: run_continuous_pipeline's loop used
