@@ -889,12 +889,51 @@ class AgentOutputCapture:
 
     @staticmethod
     def _append_lines(path: Path, new_lines: List[str]) -> None:
+        """Append newly-stable lines to clean_path, collapsing runs of
+        blank lines to a single one -- mirrors the rule
+        _read_transcript_log's own Spacing pass already applies to the raw-
+        reconstruction path (see that method), which this live-polling path
+        had no equivalent of. Applied here, at the single write choke-point
+        for clean_path, so every reader (this app's get_agent_output, and
+        tools/tmux-viewer's own reader of the same file) benefits without
+        duplicating the rule at each read site.
+
+        _poll_stable_transcript commits newly-stable content in small,
+        separately-timed batches -- often just one or two lines per poll --
+        so a run of blank lines can accumulate one commit at a time over an
+        agent's whole runtime rather than arriving all at once in a single
+        call. Collapsing only WITHIN this call's own new_lines would miss
+        that: a blank line committed by a previous poll, followed by
+        another blank line committed by this one, is still a run of two to
+        the reader. Checking the file's existing tail closes that gap.
+        """
         if not new_lines:
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # Cheap check of whatever's already on disk -- avoids reading a
+            # potentially large clean_path in full on every poll. A blank
+            # line already at the end (or an empty/nonexistent file, where
+            # a leading blank is pointless) must not be immediately
+            # followed by another one from this commit.
+            prev_blank = True
+            if path.exists() and path.stat().st_size > 0:
+                with open(path, "rb") as f:
+                    f.seek(max(0, path.stat().st_size - 4096))
+                    tail = f.read()
+                stripped_tail = tail.rstrip(b"\n")
+                prev_blank = stripped_tail == b"" or tail.endswith(b"\n\n")
+            collapsed: List[str] = []
+            for line in new_lines:
+                blank = not line
+                if blank and prev_blank:
+                    continue
+                collapsed.append(line)
+                prev_blank = blank
+            if not collapsed:
+                return
             with open(path, "a") as f:
-                f.write("\n".join(new_lines) + "\n")
+                f.write("\n".join(collapsed) + "\n")
         except Exception as e:
             logger.warning(f"[STABLE-TRANSCRIPT] Failed to append to {path}: {e}")
 

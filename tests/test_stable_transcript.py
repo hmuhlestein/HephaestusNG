@@ -295,6 +295,64 @@ class TestFlushStableTranscript:
         assert session_name not in getattr(agent_manager, "_pane_stability_cache", {})
 
 
+class TestAppendLinesCollapsesBlankRuns:
+    """Regression (reported live: "development 9c72352b has a large
+    amount of newlines at the bottom"): clean_path is built by
+    _poll_stable_transcript committing small, separately-timed batches --
+    often just one or two newly-stable lines per poll -- and nothing
+    collapsed runs of blank lines on this path, unlike
+    _read_transcript_log's own Spacing pass for the raw-reconstruction
+    path. A blank line committed by one poll followed by another blank
+    line committed by a LATER poll is still a run of two (or many) to the
+    reader, and for a long-lived, actively-watched agent this can
+    accumulate one commit at a time over its whole runtime."""
+
+    def test_collapses_blank_run_within_a_single_call(self, tmp_path):
+        from src.agents.output_capture import AgentOutputCapture
+
+        path = tmp_path / "x.clean.log"
+        AgentOutputCapture._append_lines(path, ["a", "", "", "", "b"])
+        assert path.read_text() == "a\n\nb\n"
+
+    def test_collapses_blank_run_split_across_two_calls(self, tmp_path):
+        """The cross-poll case: a blank line already committed to disk,
+        followed by more blank lines committed by a later, separate call --
+        neither call alone sees the whole run."""
+        from src.agents.output_capture import AgentOutputCapture
+
+        path = tmp_path / "x.clean.log"
+        AgentOutputCapture._append_lines(path, ["a", ""])
+        AgentOutputCapture._append_lines(path, ["", "", "b"])
+        assert path.read_text() == "a\n\nb\n"
+
+    def test_blank_lines_appearing_one_poll_at_a_time_do_not_accumulate(
+        self, agent_manager, tmp_path, monkeypatch
+    ):
+        """End-to-end through the real polling path: a pane that slowly
+        gains one more trailing blank line per poll interval (rather than
+        many at once) must still never leave more than a single blank
+        line in the committed transcript, no matter how many separate
+        poll cycles contributed to the total."""
+        session_name = "sess-growing-blanks"
+        clean_path = tmp_path / f"{session_name}.clean.log"
+        output_capture = agent_manager._output_capture
+
+        base = ["prompt-1", "$ some-command"]
+        for n_blanks in range(1, 12):
+            current = base + [""] * n_blanks
+            monkeypatch.setattr(
+                output_capture, "_capture_pane_lines", lambda _sn, cl=current: cl
+            )
+            # _STABILITY_CONFIRMATIONS consecutive agreeing polls needed
+            # before a newly-appeared position commits.
+            output_capture._poll_stable_transcript(session_name, clean_path)
+            output_capture._poll_stable_transcript(session_name, clean_path)
+            output_capture._poll_stable_transcript(session_name, clean_path)
+
+        content = clean_path.read_text() if clean_path.exists() else ""
+        assert "\n\n\n" not in content
+
+
 class TestGetAgentOutputUsesCleanTranscript:
     def test_live_agent_output_comes_from_clean_transcript(
         self, agent_manager, db_manager, tmux_session, tmp_path
