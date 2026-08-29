@@ -1218,6 +1218,173 @@ class TestVerifyNoOpenTickets:
         assert result is None
 
 
+class TestVerifyDevelopmentProducedACommit:
+    """Regression: a development task claimed 'done' with a memory note
+    reading "verification-only pass, zero new code", while required
+    files/functionality for the feature were still entirely missing from
+    the worktree -- the agent decided nothing needed doing without
+    actually implementing what development was launched to build. This
+    is the hard floor that closes that gap: development must leave at
+    least one real commit behind."""
+
+    def _init_repo(self, tmp_path):
+        from git import Repo
+
+        repo = Repo.init(tmp_path)
+        (tmp_path / "README.md").write_text("# init\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("initial commit")
+        return repo
+
+    def test_returns_none_for_arbitration_task(self):
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id="arbitration",
+        )
+        mock_session = Mock()
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+        mock_session.query.assert_not_called()
+
+    def test_returns_none_for_non_development_phase(self):
+        phase = Mock(name="adversarial_review", id="phase-1")
+        phase.name = "adversarial_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", created_by_agent_id=None)
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_returns_none_when_no_workflow_id(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id=None, created_by_agent_id=None)
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_rejects_when_no_commit_since_task_started(self, tmp_path):
+        from datetime import datetime, timedelta
+
+        self._init_repo(tmp_path)
+
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+            # In the future relative to the init commit above -- nothing
+            # in this repo can satisfy "committed after this" without a
+            # fresh commit, exactly the failure case.
+            started_at=datetime.utcnow() + timedelta(hours=1),
+            created_at=None,
+        )
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=mock_session, task=task, phase=phase
+        )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "no commit" in result["message"].lower()
+        assert task.status == "failed"
+        assert task.failure_reason is not None
+
+    def test_passes_when_a_commit_was_made_since_task_started(self, tmp_path):
+        from datetime import datetime, timedelta
+
+        repo = self._init_repo(tmp_path)
+
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+            # In the past -- the init commit above already satisfies it.
+            started_at=datetime.utcnow() - timedelta(hours=1),
+            created_at=None,
+        )
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=mock_session, task=task, phase=phase
+        )
+
+        assert result is None
+        assert task.status == "done"  # untouched
+
+    def test_counts_a_mid_task_commit_even_if_nothing_dirty_at_completion(self, tmp_path):
+        """An agent that committed its real work partway through the task,
+        then called done with a clean working tree (commit_and_link_ticket's
+        own git add -A finds nothing new), must not be penalized -- any
+        commit landed after the task started counts, not just the final
+        auto-commit."""
+        from datetime import datetime, timedelta
+
+        from git import Repo
+
+        repo = self._init_repo(tmp_path)
+        (tmp_path / "feature.py").write_text("def handler(): pass\n")
+        repo.index.add(["feature.py"])
+        repo.index.commit("phase(development): implement handler")
+
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+            started_at=datetime.utcnow() - timedelta(hours=1),
+            created_at=None,
+        )
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
+    def test_fails_open_when_worktree_is_not_a_git_repo(self, tmp_path):
+        """A git error here (e.g. an invalid/non-repo path) must not block
+        a real completion -- return None rather than raising or rejecting."""
+        from datetime import datetime, timedelta
+
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+            started_at=datetime.utcnow() - timedelta(hours=1),
+            created_at=None,
+        )
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))  # empty dir, not a git repo
+        )
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+        assert task.status == "done"
+
+
 class TestRecordLearnings:
     """Tests for record_learnings method."""
 

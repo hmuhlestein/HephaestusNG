@@ -58,3 +58,31 @@ class TestGetSessionId:
             "proj-1", "my-design", "architectural_review", model="mimo-v2.5-pro"
         )
         assert a == b
+
+    def test_different_workflow_produces_different_id(self):
+        """The other core fix: two workflow attempts for the identical
+        project+design+phase+model (e.g. delete_feature wipes a stuck
+        workflow's rows and a fresh workflow later redoes the same design)
+        must never collide -- the old workflow's CLI session can still
+        exist on disk with a conversation that has nothing to do with the
+        new attempt. Observed live: workflow e35be066's product_requirements
+        session resurfaced under workflow e9019930 after e35be066 was
+        deleted via delete_feature."""
+        old = get_session_id("proj-1", "my-design", "development", model="m", workflow_id="wf-1")
+        new = get_session_id("proj-1", "my-design", "development", model="m", workflow_id="wf-2")
+        assert old != new
+
+    def test_same_workflow_still_resumes_across_gotos(self):
+        """Not a blanket disable of continuity -- retries/gotos within the
+        SAME workflow (workflow_id unchanged for its whole lifetime) must
+        keep resuming, same as before workflow_id was added to the hash."""
+        a = get_session_id("proj-1", "my-design", "development", model="m", workflow_id="wf-1")
+        b = get_session_id("proj-1", "my-design", "development", model="m", workflow_id="wf-1")
+        assert a == b
+
+    def test_default_empty_workflow_id_is_stable(self):
+        """Backward compatible: a caller that doesn't pass workflow_id
+        (omitted here entirely) still gets a consistent, deterministic id."""
+        a = get_session_id("proj-1", "my-design", "development", model="m")
+        b = get_session_id("proj-1", "my-design", "development", model="m")
+        assert a == b

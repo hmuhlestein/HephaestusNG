@@ -126,9 +126,46 @@ def security_review_task(db_manager):
 
 
 @pytest.fixture
-def mock_agent_manager(db_manager):
-    """Create a mock agent manager."""
+def mock_agent_manager(db_manager, monkeypatch, tmp_path):
+    """Create a mock agent manager.
+
+    AgentManager.__init__ unconditionally constructs a real
+    WorktreeManager(db_manager), and create_agent_for_task's
+    _scoped_worktree_manager falls back to it whenever a task's workflow
+    has no project_id (true for every Workflow fixture in this file).
+    Left unmocked, that WorktreeManager opens this checkout's OWN repo via
+    the real get_config() and any test that reaches worktree creation
+    writes a real branch/worktree into this checkout's .worktrees/,
+    tracked only in the test's throwaway db -- an orphan no sweep on the
+    real project ever finds. Point it at an isolated temp repo instead,
+    the same way every other worktree-adjacent test fixture in this repo
+    does.
+    """
+    import src.core.simple_config
+    from git import Repo
+
     from src.agents.manager import AgentManager
+
+    repo_dir = tmp_path / "mock_agent_repo"
+    repo_dir.mkdir()
+    repo = Repo.init(repo_dir)
+    (repo_dir / "README.md").write_text("# Test\n")
+    repo.index.add(["README.md"])
+    repo.index.commit("Initial commit")
+
+    config = src.core.simple_config.Config()
+    config.git.main_repo_path = repo_dir
+    config.paths.worktree_base_path = tmp_path / "worktrees"
+    config.git.base_branch = repo.active_branch.name
+    monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+    monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
+    # AgentManager.__init__ does `from src.core.simple_config import
+    # get_config` -- its own module-local binding, unaffected by patching
+    # src.core.simple_config's attribute. self.config (read here) is the
+    # same object _scoped_worktree_manager's repo_path fallback later reads
+    # via `Path(self.config.git.main_repo_path)`, bypassing repo_path
+    # entirely if this isn't patched too.
+    monkeypatch.setattr("src.agents.manager.get_config", lambda: config)
 
     llm_provider = MagicMock()
     phase_manager = MagicMock()
@@ -2144,6 +2181,102 @@ class TestTerminateAgent:
         # the real code never reaches inside that branch either. Asserting
         # no-crash here; TestWaitForPaneIdle covers the actual behavior.
         assert mock_wait.call_count >= 0
+
+    @pytest.mark.asyncio
+    async def test_phase_log_prefers_clean_transcript_over_capture_pane_snapshot(
+        self, mock_agent_manager, db_manager, tmp_path
+    ):
+        """Regression: the phase-name tmux log (.hephaestus/tmux/
+        {phase}_{agent[:8]}.log) used to be written straight from a fresh
+        live capture-pane snapshot. For a full-screen TUI agent (Claude
+        Code, Codex, pi) running in tmux's alternate screen buffer,
+        capture-pane -S - only ever returns whatever currently fits on the
+        visible pane -- tmux retains no scrollback for the alt screen at
+        all, regardless of history-limit. The already-accumulated
+        stability-tracked clean transcript has no such gap (built
+        incrementally over the agent's whole life), so terminate_agent
+        must prefer it over the snapshot when one is available.
+        """
+        working_dir = tmp_path / "wd"
+        working_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-cleanlog",
+                    name="t",
+                    status="active",
+                    phases_folder_path="/tmp",
+                    definition_id="autopilot",
+                    working_directory=str(working_dir),
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-cleanlog",
+                    workflow_id="wf-cleanlog",
+                    name="architecture_design",
+                    order=1,
+                    description="d",
+                    done_definitions=["done"],
+                )
+            )
+            task = Task(
+                id="task-cleanlog",
+                workflow_id="wf-cleanlog",
+                phase_id="phase-cleanlog",
+                raw_description="r",
+                done_definition="d",
+                status="in_progress",
+            )
+            session.add(task)
+            session.flush()
+            session.add(
+                Agent(
+                    id="agtclean1",
+                    system_prompt="Test",
+                    status="working",
+                    cli_type="claude",
+                    tmux_session_name="test-cleanlog-session",
+                    current_task_id="task-cleanlog",
+                )
+            )
+
+        mock_tmux_session = MagicMock()
+        mock_tmux_session.name = "test-cleanlog-session"
+        pane = mock_tmux_session.attached_window.attached_pane
+        pane.cmd.return_value.stdout = [
+            "truncated snapshot -- alt screen has no scrollback"
+        ]
+        mock_agent_manager.tmux_server.has_session.return_value = True
+        mock_agent_manager.tmux_server.sessions = [mock_tmux_session]
+
+        full_history = "line 1 of a much longer real transcript\n...\nfinal line"
+        transcript_dir = working_dir / ".hephaestus" / "tmux"
+
+        def fake_flush(session_name, clean_path):
+            clean_path.parent.mkdir(parents=True, exist_ok=True)
+            clean_path.write_text(full_history)
+
+        with patch("src.agents.terminator.time.sleep"), patch.object(
+            mock_agent_manager._terminator, "_wait_for_pane_idle"
+        ), patch.object(
+            mock_agent_manager._output_capture,
+            "_resolve_tmux_transcript_dir",
+            return_value=transcript_dir,
+        ), patch.object(
+            mock_agent_manager._output_capture,
+            "_flush_stable_transcript",
+            side_effect=fake_flush,
+        ):
+            await mock_agent_manager.terminate_agent("agtclean1")
+
+        log_file = transcript_dir / "architecture_design_agtclean.log"
+        assert log_file.read_text() == full_history, (
+            "phase-name tmux log must be sourced from the flushed clean "
+            "transcript, not a fresh capture-pane snapshot, when the clean "
+            "transcript is available"
+        )
 
     @pytest.mark.asyncio
     async def test_already_terminated_agent_is_a_no_op(self, mock_agent_manager, db_manager):

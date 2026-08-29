@@ -316,6 +316,7 @@ async def delete_feature(feature_id: str):
 
     from src.core.app_context import get_app_state
     from src.core.database import (
+        Agent,
         AgentResult,
         BoardConfig,
         CostEntry,
@@ -343,6 +344,11 @@ async def delete_feature(feature_id: str):
         working_directory = None
         launch_params: dict = {}
         agent_ids_to_terminate: List[str] = []
+        # Captured now, before Phase/Workflow rows are deleted below --
+        # used to rotate/invalidate this workflow's CLI sessions after the
+        # delete commits (see the cleanup block near the end of this
+        # function).
+        session_infos: List[dict] = []
         if workflow_id:
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
@@ -356,6 +362,9 @@ async def delete_feature(feature_id: str):
                 )
                 if t.assigned_agent_id
             ]
+            from src.autopilot.phases import capture_workflow_session_info
+
+            session_infos = capture_workflow_session_info(db, [workflow_id])
 
     # Terminate before deleting: Agent.current_task_id is a foreign key
     # (foreign_keys=ON) and terminate_agent is what clears it, same
@@ -383,6 +392,16 @@ async def delete_feature(feature_id: str):
                     # feature that ever recorded real LLM cost (the common
                     # case, not the exception) would otherwise fail to delete.
                     db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # Agent.current_task_id -> tasks.id is also an enforced
+                    # FK -- a belt-and-suspenders null-out alongside the
+                    # termination above (repair_service.py's rerun does the
+                    # same): an agent that crashed/was killed without going
+                    # through the normal terminate path (which clears this)
+                    # can leave it dangling at one of these tasks, failing
+                    # the Task delete below.
+                    db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).update(
+                        {"current_task_id": None}, synchronize_session=False
+                    )
 
                 db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id == workflow_id).delete(synchronize_session=False)
                 db.query(WorkflowResult).filter(WorkflowResult.workflow_id == workflow_id).delete(synchronize_session=False)
@@ -452,6 +471,19 @@ async def delete_feature(feature_id: str):
                     )
         except Exception as e:
             logger.warning(f"[DELETE-FEATURE] Failed to clean up worktree for {feature_id}: {e}")
+
+    # Best-effort CLI session cleanup -- see cleanup_workflow_sessions'
+    # docstring (src/autopilot/phases.py) for why this is needed even
+    # though get_session_id is now workflow-scoped.
+    if session_infos:
+        try:
+            from src.autopilot.phases import cleanup_workflow_sessions
+
+            removed = cleanup_workflow_sessions(session_infos)
+            if removed:
+                logger.info(f"[DELETE-FEATURE] Removed {removed} orphaned CLI session file(s) for workflow {workflow_id}")
+        except Exception as e:
+            logger.warning(f"[DELETE-FEATURE] Failed to clean up CLI sessions for {feature_id}: {e}")
 
     _invalidate("queue", "features", "status")
     return {"success": True, "feature_id": feature_id}
