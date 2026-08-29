@@ -9166,3 +9166,72 @@ class TestCheckPhaseSiblingActive:
                 session, "t-new", "phase-1", created_by_filter=False,
             )
             assert sibling is None
+
+
+class TestPersistDesignOutcome:
+    """_persist_design_outcome used to look a design up by
+    (project_id, filename) -- broken for a Spec-Kit directory-sourced
+    design, which has filename=NULL per NFR-02 (source_dir is set
+    instead). The lookup silently found no row and returned, so a design
+    whose run_single_design raised (e.g. Phase 0 producing no
+    features.json) stayed stuck forever at whatever status run_phase0
+    last wrote ("decomposing"), with no owning workflow left to ever move
+    it forward -- observed live in a real project. Must key on
+    design.db_id instead, matching every other writer (queue.py's
+    _update_design_status)."""
+
+    def test_updates_directory_sourced_design_by_id(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator.pipeline import _persist_design_outcome
+        from src.autopilot.orchestrator.state import DesignEntry, DesignStatus
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename=None, name="001-foo",
+                    source_dir=str(tmp_path / "specs" / "001-foo"),
+                    status="decomposing",
+                )
+            )
+
+        spec_path = tmp_path / "specs" / "001-foo" / "spec.md"
+        spec_path.parent.mkdir(parents=True)
+        spec_path.write_text("spec")
+        entry = DesignEntry(
+            path=spec_path, name="001-foo", content_hash="hash", db_id="design-1",
+            source_dir=spec_path.parent,
+        )
+
+        _persist_design_outcome(entry, DesignStatus.FAILED, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "failed"
+
+    def test_updates_filename_sourced_design_by_id(self, orch_db_env, tmp_path):
+        """Sanity check the id-based lookup isn't overbroad: the ordinary
+        (non-Spec-Kit) filename-sourced case must still work."""
+        from src.autopilot.orchestrator.pipeline import _persist_design_outcome
+        from src.autopilot.orchestrator.state import DesignEntry, DesignStatus
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="design.md", name="Design",
+                    status="in_progress",
+                )
+            )
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("design")
+        entry = DesignEntry(path=design_path, name="Design", content_hash="hash", db_id="design-1")
+
+        _persist_design_outcome(entry, DesignStatus.COMPLETED, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "completed"
+            assert design.completed_at is not None

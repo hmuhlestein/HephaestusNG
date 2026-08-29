@@ -2750,7 +2750,7 @@ def _build_and_start_pipeline_sdk(args, project_path: Path, logger: Orchestrator
     return sdk, cli_tool
 
 
-def _persist_design_outcome(design, status, current_project_id: Optional[str], logger: OrchestratorLogger) -> None:
+def _persist_design_outcome(design, status, logger: OrchestratorLogger) -> None:
     """Write a finished design's status back to the DB.
 
     Best-effort: a failure here must not stop the pipeline from moving on to
@@ -2758,17 +2758,22 @@ def _persist_design_outcome(design, status, current_project_id: Optional[str], l
     processed-hashes file the caller has already updated.
     """
     try:
-        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.database import AutopilotDesign
         from src.core.database import get_db as _get_db
 
         with _get_db() as _db:
-            if current_project_id:
-                _proj = _db.query(AutopilotProject).filter_by(id=current_project_id).first()
-            else:
-                _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
-            if not _proj:
-                return
-            _des = _db.query(AutopilotDesign).filter_by(project_id=_proj.id, filename=design.path.name).first()
+            # By id (design.db_id), not project+filename: a Spec-Kit
+            # directory-sourced design (source_dir set) has filename=NULL
+            # per NFR-02, and design.path here points at its spec.md, not
+            # a name that ever matches the DB row -- the old filename
+            # lookup silently found nothing and returned, leaving a failed
+            # design permanently stuck at whatever status run_phase0 last
+            # wrote ("decomposing"), with no owning workflow to ever move
+            # it forward and no failed-workflow retry loop to catch it
+            # either (that loop only scans status="active" designs).
+            # id is what every other writer here (_update_design_status)
+            # already keys on -- see queue.py's _update_design_status.
+            _des = _db.query(AutopilotDesign).filter_by(id=design.db_id).first()
             if not _des:
                 return
             _des.status = status.value if hasattr(status, "value") else str(status)
@@ -3273,7 +3278,7 @@ def run_continuous_pipeline(args) -> None:
                 processed_hashes.add(next_design.content_hash)
                 processed_file.write_text(json.dumps(list(processed_hashes)))
 
-                _persist_design_outcome(next_design, status, current_project_id, logger)
+                _persist_design_outcome(next_design, status, logger)
 
                 state.designs_processed += 1
                 if status == DesignStatus.COMPLETED:
