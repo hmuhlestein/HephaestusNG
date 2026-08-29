@@ -486,9 +486,10 @@ class TestReadTranscriptLogReal:
 
     def test_separators_become_single_blank_lines(self, tmp_path):
         """Separators mark pi's block boundaries -- each run must become
-        exactly ONE blank line (visual spacing), never multiple. Raw
-        stream blanks (pi pads every content line with one) are dropped,
-        or output would double in length."""
+        exactly ONE blank line (visual spacing), never multiple. A blank
+        line between two real content lines (not chrome-adjacent) is now
+        preserved as real content instead of always being treated as pi
+        per-line padding noise -- see TestBlankLinesAreAllowed."""
         sep = "".join("\x1b[38;2;129;162;190m─\x1b[39m" for _ in range(50))
         content = (
             "block one line a\n"
@@ -499,7 +500,7 @@ class TestReadTranscriptLogReal:
         )
         result = self._run(tmp_path, content)
         lines = result.split("\n")
-        assert lines == ["block one line a", "block one line b", "", "block two"]
+        assert lines == ["block one line a", "", "block one line b", "", "block two"]
 
     def test_dedups_midline_growing_redraws_with_constant_tail(self, tmp_path):
         """Observed live (qa_validation agent): pi re-renders a read line
