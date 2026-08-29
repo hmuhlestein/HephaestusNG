@@ -15,14 +15,30 @@ CONTEXT_DIR_NAME = ".hephaestus"
 # Worktrees subdirectory (lives inside each repo root)
 WORKTREES_SUBDIR = ".worktrees"
 
-# Fixed pane width every agent tmux session is created at (launch_pipeline.py's
-# _create_tmux_session) so captured output isn't hard-wrapped at a default
-# 80 columns. output_capture.py's raw-transcript row reconstruction relies on
-# this being the SAME value the pane was actually created at -- it can't
-# observe the real width itself (the pane is usually long gone by the time a
-# terminated agent's transcript is read), so it auto-wraps rows at this fixed
-# width to match where the terminal itself would have wrapped.
+# Fixed pane width/height every agent tmux session is created at
+# (launch_pipeline.py's _create_tmux_session), applied via
+# `set-option window-size manual` + `resize-window` (NOT resize-pane, which
+# is a no-op on a single-pane window -- there's no sibling to redistribute
+# space from -- so the pane silently stayed at tmux's 80x24 default despite
+# the resize calls that used to be here).
+#
+# Width: so captured output isn't hard-wrapped at 80 columns.
+# output_capture.py's raw-transcript row reconstruction relies on this being
+# the SAME value the pane was actually created at -- it can't observe the
+# real width itself (the pane is usually long gone by the time a terminated
+# agent's transcript is read), so it auto-wraps rows at this fixed width to
+# match where the terminal itself would have wrapped.
+#
+# Height: Ink-based TUIs (Claude Code, pi) size their live-rendering
+# viewport off the pane's reported terminal height (process.stdout.rows) and
+# redraw-in-place via absolute cursor positioning once content exceeds it --
+# anything scrolled out of that viewport is never retransmitted to the pty
+# and so can never be recovered from the transcript, no matter how the
+# transcript is parsed. A tall pane gives the TUI far more room before it
+# needs to start discarding rows this way. Kept well under
+# output_capture.py's _MAX_ROW safety clamp (100_000).
 TMUX_PANE_WIDTH = 150
+TMUX_PANE_HEIGHT = 2000
 
 # Marks a Task.raw_description as synthetic monitor-created diagnostic work
 # (see src.monitoring.diagnostic_agent.WorkflowStuckDiagnostics.create_diagnostic_agent) that must never count
