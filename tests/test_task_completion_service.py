@@ -1385,6 +1385,303 @@ class TestVerifyDevelopmentProducedACommit:
         assert task.status == "done"
 
 
+class TestVerifyGitExpertMergedAndPushed:
+    """Regression: a feature (tech-debt, workflow a7695dc5) was marked
+    'completed' in the DB while its own worktree still had real,
+    uncommitted changes sitting on disk -- git_expert.yaml's prompt
+    already walks through commit -> merge main in -> push feature branch
+    -> merge to main -> push main, but nothing had ever verified the
+    finish line was actually crossed. This is the hard floor that closes
+    that gap."""
+
+    def _init_repo_with_feature_branch(self, tmp_path):
+        """A repo with 'main' as the initial branch and a checked-out
+        'feature' branch one commit ahead of it -- the shape git_expert's
+        own worktree is always in (already on the feature branch)."""
+        from git import Repo
+
+        repo = Repo.init(tmp_path, initial_branch="main")
+        (tmp_path / "README.md").write_text("# init\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("initial commit")
+        feature = repo.create_head("feature", repo.head.commit)
+        feature.checkout()
+        (tmp_path / "feature.py").write_text("def handler(): pass\n")
+        repo.index.add(["feature.py"])
+        repo.index.commit("feat: implement handler")
+        return repo
+
+    def _mock_session_for(self, working_directory, project_id=None, review_mode=False):
+        """Two distinct session.query(...) call chains (Workflow, then
+        AutopilotProject only if project_id is set) need two distinct
+        return values -- a single blanket .return_value (as the sibling
+        development test class uses, which only ever queries Workflow)
+        isn't enough here."""
+        wf = Mock(working_directory=working_directory, project_id=project_id)
+        project = Mock(review_mode=review_mode)
+        session = Mock()
+
+        def _query(model):
+            q = Mock()
+            if getattr(model, "__name__", "") == "AutopilotProject":
+                q.filter_by.return_value.first.return_value = project
+            else:
+                q.filter_by.return_value.first.return_value = wf
+            return q
+
+        session.query.side_effect = _query
+        return session
+
+    def test_returns_none_for_arbitration_task(self):
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id="arbitration",
+        )
+        mock_session = Mock()
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+        mock_session.query.assert_not_called()
+
+    def test_returns_none_for_non_git_expert_phase(self):
+        phase = Mock(id="phase-1")
+        phase.name = "development"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", created_by_agent_id=None)
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_returns_none_when_no_workflow_id(self):
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(phase_id="phase-1", workflow_id=None, created_by_agent_id=None)
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_rejects_when_worktree_has_uncommitted_changes(self, tmp_path):
+        repo = self._init_repo_with_feature_branch(tmp_path)
+        (tmp_path / "feature.py").write_text("def handler(): pass  # dirty\n")
+
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(tmp_path))
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "uncommitted" in result["message"].lower()
+        assert task.status == "failed"
+
+    def test_rejects_when_not_merged_into_main(self, tmp_path):
+        """The worktree is clean and on a feature branch ahead of main --
+        but git_expert never actually merged it in."""
+        self._init_repo_with_feature_branch(tmp_path)
+
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(tmp_path))
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "not yet merged into main" in result["message"]
+        assert task.status == "failed"
+
+    def test_passes_when_merged_into_main_with_no_remote(self, tmp_path):
+        repo = self._init_repo_with_feature_branch(tmp_path)
+        main = repo.heads["main"]
+        main.checkout()
+        repo.git.merge("feature", "--no-ff", "-m", "Merge feature into main")
+        repo.heads["feature"].checkout()  # git_expert's worktree stays on the feature branch
+
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(tmp_path))
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+
+        assert result is None
+        assert task.status == "done"
+
+    def test_rejects_when_main_merged_but_not_pushed(self, tmp_path):
+        """Merged locally, but the remote's main is still behind -- the
+        push step (STEP 5's final push) never actually happened."""
+        from git import Repo
+
+        remote_path = tmp_path / "remote.git"
+        Repo.init(remote_path, bare=True)
+
+        repo_path = tmp_path / "work"
+        repo_path.mkdir()
+        repo = self._init_repo_with_feature_branch(repo_path)
+        origin = repo.create_remote("origin", str(remote_path))
+        # Push feature only -- main is merged locally below but never
+        # reaches the remote, the exact gap this floor exists to catch.
+        origin.push("feature")
+
+        main = repo.heads["main"]
+        main.checkout()
+        repo.git.merge("feature", "--no-ff", "-m", "Merge feature into main")
+        repo.heads["feature"].checkout()
+
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(repo_path))
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "not yet pushed" in result["message"]
+        assert task.status == "failed"
+
+    def test_passes_when_merged_and_pushed(self, tmp_path):
+        from git import Repo
+
+        remote_path = tmp_path / "remote.git"
+        Repo.init(remote_path, bare=True)
+
+        repo_path = tmp_path / "work"
+        repo_path.mkdir()
+        repo = self._init_repo_with_feature_branch(repo_path)
+        origin = repo.create_remote("origin", str(remote_path))
+        origin.push("feature")
+
+        main = repo.heads["main"]
+        main.checkout()
+        repo.git.merge("feature", "--no-ff", "-m", "Merge feature into main")
+        origin.push("main")
+        repo.heads["feature"].checkout()
+
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(repo_path))
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+
+        assert result is None
+        assert task.status == "done"
+
+    def test_review_mode_requires_feature_branch_pushed_but_not_merged(self, tmp_path):
+        """In review_mode the merge-to-main step is deliberately deferred
+        to a human via the dashboard -- only "clean and pushed" is this
+        phase's own responsibility. Rejects if the feature branch itself
+        was never pushed (the PR wouldn't reflect real work)."""
+        from git import Repo
+
+        remote_path = tmp_path / "remote.git"
+        Repo.init(remote_path, bare=True)
+
+        repo_path = tmp_path / "work"
+        repo_path.mkdir()
+        repo = self._init_repo_with_feature_branch(repo_path)
+        repo.create_remote("origin", str(remote_path))
+        # Deliberately never pushed.
+
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(repo_path), project_id="proj-1", review_mode=True)
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+
+        assert result is not None
+        assert "not yet pushed" in result["message"]
+        assert task.status == "failed"
+
+    def test_review_mode_passes_once_feature_branch_pushed(self, tmp_path):
+        from git import Repo
+
+        remote_path = tmp_path / "remote.git"
+        Repo.init(remote_path, bare=True)
+
+        repo_path = tmp_path / "work"
+        repo_path.mkdir()
+        repo = self._init_repo_with_feature_branch(repo_path)
+        origin = repo.create_remote("origin", str(remote_path))
+        origin.push("feature")
+        # main is NOT merged -- must not matter in review_mode.
+
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(repo_path), project_id="proj-1", review_mode=True)
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+
+        assert result is None
+        assert task.status == "done"
+
+    def test_fails_open_when_worktree_is_not_a_git_repo(self, tmp_path):
+        """A git error here (e.g. an invalid/non-repo path) must not
+        block a real completion -- return None rather than raising or
+        rejecting."""
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(tmp_path))  # empty dir, not a git repo
+
+        result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+            session=session, task=task, phase=phase
+        )
+        assert result is None
+        assert task.status == "done"
+
+
 class TestVerifyRequirementsCoverScopeCliFlags:
     """Regression: scope.md named `--design-doc` as one of the CLI args
     to wire up (alongside `--feature`/`--repo`); requirements.md's own

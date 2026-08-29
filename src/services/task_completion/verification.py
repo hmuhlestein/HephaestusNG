@@ -729,6 +729,127 @@ def verify_development_produced_a_commit(session, task, phase=None) -> Optional[
     }
 
 
+def verify_git_expert_merged_and_pushed(session, task, phase=None) -> Optional[Dict[str, Any]]:
+    """Hard floor for git_expert: reject 'done' unless the feature branch
+    is actually clean, merged into main, and pushed -- not just claimed as
+    such in a completion summary.
+
+    git_expert.yaml's own prompt already walks through commit -> merge main
+    in -> push feature branch -> merge to main -> push main, in that order
+    -- a prompt instruction alone is compliance-dependent, same reasoning
+    as every other hard floor in this module. Observed live: a feature
+    (tech-debt, workflow a7695dc5) was marked "completed" while its own
+    worktree still had real, uncommitted changes sitting on disk -- nothing
+    had ever verified the finish line was actually crossed.
+
+    In review_mode (a human approves and merges later via the dashboard),
+    checks only that the worktree is clean and the feature branch reached
+    the remote -- the merge-to-main and push-main checks don't apply since
+    that step is deliberately deferred to the human review flow.
+    """
+    from pathlib import Path
+
+    from src.core.database import AutopilotProject, Phase, Workflow
+
+    if phase is None:
+        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+    if not phase or phase.name != "git_expert":
+        return None
+    if not task.workflow_id:
+        return None
+
+    # Same exemption as the other hard floors here -- an arbitration
+    # task's job is a goto/fail/continue decision, not finishing the merge.
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
+        return None
+
+    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+    if not (wf and wf.working_directory):
+        return None  # verify_output_artifact already surfaces this case.
+    if not Path(wf.working_directory).is_dir():
+        return None
+
+    def _reject(message: str) -> Dict[str, Any]:
+        logger.warning(f"Task {task.id[:8]} (git_expert) claimed done but {message} — rejecting")
+        task.status = "failed"
+        task.failure_reason = message
+        session.commit()
+        return {"status": "failed", "message": f"Cannot mark done: {message}"}
+
+    try:
+        from git import Repo
+
+        repo = Repo(wf.working_directory)
+
+        if repo.is_dirty(untracked_files=True):
+            dirty = [d.a_path for d in repo.index.diff(None)] + [d.a_path for d in repo.index.diff("HEAD")] + repo.untracked_files
+            dirty = sorted(set(dirty))
+            return _reject(
+                f"the worktree still has uncommitted changes ({', '.join(dirty[:10])}). "
+                "Stage and commit everything (git add -A && git commit) before retrying."
+            )
+
+        feature_commit = repo.head.commit
+        remotes = list(repo.remotes)
+        remote = remotes[0] if remotes else None
+        if remote:
+            try:
+                remote.fetch()
+            except Exception as e:
+                logger.warning(f"git_expert hard floor: fetch failed for task {task.id}, checking against local refs only: {e}")
+                remote = None
+
+        review_mode = False
+        if wf.project_id:
+            project = session.query(AutopilotProject).filter_by(id=wf.project_id).first()
+            review_mode = bool(project and project.review_mode)
+
+        if review_mode:
+            # The merge-to-main step is deliberately deferred to a human
+            # via the dashboard's review flow -- only the feature branch's
+            # own state (clean, and on the remote for the PR to reflect)
+            # is this phase's responsibility.
+            if remote:
+                try:
+                    remote_feature = repo.commit(f"{remote.name}/{repo.active_branch.name}")
+                except Exception:
+                    remote_feature = None
+                if remote_feature is None or feature_commit.hexsha != remote_feature.hexsha:
+                    return _reject(
+                        f"the feature branch has commits not yet pushed to {remote.name if remote else 'the remote'}. "
+                        "Push the feature branch before calling update_task_status(done)."
+                    )
+            return None
+
+        try:
+            main_commit = repo.commit("main")
+        except Exception:
+            main_commit = None
+        if main_commit is None or not repo.is_ancestor(feature_commit, main_commit):
+            return _reject(
+                "this branch's work is not yet merged into main. Merge the feature branch into "
+                "main before calling update_task_status(done)."
+            )
+
+        if remote:
+            try:
+                remote_main = repo.commit(f"{remote.name}/main")
+            except Exception:
+                remote_main = None
+            if remote_main is None or not repo.is_ancestor(main_commit, remote_main):
+                return _reject(
+                    f"main has commits not yet pushed to {remote.name}. Push main "
+                    f"(git push {remote.name} main) before calling update_task_status(done)."
+                )
+    except Exception as e:
+        logger.warning(f"git_expert merged/pushed check failed for task {task.id} in {wf.working_directory}: {e}")
+        return None  # Fail open -- a git error here shouldn't block a real completion.
+
+    return None
+
+
 _CLI_FLAG_RE = re.compile(r"--[a-zA-Z][\w-]*")
 
 

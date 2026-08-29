@@ -76,6 +76,11 @@ class TaskCompletionService:
         return verify_development_produced_a_commit(session, task, phase)
 
     @staticmethod
+    def verify_git_expert_merged_and_pushed(session, task, phase=None):
+        from src.services.task_completion.verification import verify_git_expert_merged_and_pushed
+        return verify_git_expert_merged_and_pushed(session, task, phase)
+
+    @staticmethod
     def verify_requirements_cover_scope_cli_flags(session, task, phase=None):
         from src.services.task_completion.verification import verify_requirements_cover_scope_cli_flags
         return verify_requirements_cover_scope_cli_flags(session, task, phase)
