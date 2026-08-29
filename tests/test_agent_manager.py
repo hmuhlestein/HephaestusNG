@@ -1432,6 +1432,45 @@ class TestCreateAgentForTaskFallback:
         mock_agent_manager.branch_manager.discard_agent.assert_called_once()
 
 
+class TestDeliverInitialPromptOrdering:
+    """Regression: /goal used to be sent BEFORE the task-pointer initial
+    prompt, on the assumption that /goal is consumed by the CLI itself
+    rather than as a real chat turn. Observed live: it goes through the
+    same UserPromptSubmit hook pipeline as any other message -- when that
+    hook timed out and its context (framing /goal as Hephaestus's own
+    goal-tracking mechanism) was discarded, a freshly-launched agent's
+    very FIRST input was a bare AND-chain of done_definition clauses with
+    nothing establishing it as an autonomous task dispatch. The agent
+    read it as an ambiguous standalone request and stopped to ask for
+    clarification, deadlocking the task with no human present to answer.
+    The initial prompt (which establishes "read your instructions file,
+    begin working") must now be sent first."""
+
+    @pytest.mark.asyncio
+    async def test_initial_prompt_sent_before_goal_command(self, mock_agent_manager):
+        from src.core.database import Task
+
+        call_order = []
+        mock_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(
+            side_effect=lambda **kwargs: call_order.append("initial_prompt")
+        )
+        mock_agent_manager._launch._send_goal_command = AsyncMock(
+            side_effect=lambda *args, **kwargs: call_order.append("goal_command")
+        )
+
+        with patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
+            await mock_agent_manager._launch._deliver_initial_prompt(
+                pane=MagicMock(),
+                cli_agent=MagicMock(post_launch_confirmation_keys=lambda: []),
+                cli_type="claude",
+                initial_message="Task ID: task-1\n\nYour instructions are in ...",
+                agent_id="agent-1",
+                task=Task(id="task-1", raw_description="r", done_definition="d"),
+            )
+
+        assert call_order == ["initial_prompt", "goal_command"]
+
+
 class TestCreateAgentForTaskSessionLimitPause:
     """A Claude session-limit rejection with no working fallback will keep
     failing identically until the limit resets on its own -- retrying
