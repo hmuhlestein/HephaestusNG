@@ -66,6 +66,23 @@ additional_notes: |
   Sweep ./docs/ for known agent report filenames left there by mistake (stale reports from before the .hephaestus/ migration, or an agent that ignored these instructions): architecture.md, requirements.md, qa.md, validation.md, scope.md, review.md, adversarial.md, forensics.md, docs.md, feature_report.html, summary.md, pipeline_metrics.json, run_health.json, arbitration_result.json. Same copy-then-`git rm` rule as above (never `git mv`), keeping the same relative path if it's under a phase-named subdirectory (e.g. copy docs/qa_validation/qa.md to .hephaestus/qa_validation/qa.md, then `git rm docs/qa_validation/qa.md`). Leave everything else in ./docs/ alone -- it's human-authored project documentation.
   Delete scratch/temp files agents left behind (*_draft*, *_temp*, *.tmp, *.bak, empty dirs).
 
+  ## ASH SECURITY SCANNER FRESHNESS CHECK
+
+  scripts/ash pins a specific version of the Automated Security Helper that
+  security_review's mandatory scan depends on -- that pin never moves on its
+  own. Check its age:
+  ```bash
+  python3 scripts/update_ash.py --check
+  ```
+  Exit code 1 means it's stale (older than the script's threshold, default
+  90 days) -- run it for real to update the pin:
+  ```bash
+  python3 scripts/update_ash.py
+  ```
+  Note the result (fresh, or updated from X to Y) in docs.md's Housekeeping
+  section (STEP 5). If GitHub is unreachable (exit code 2), note that
+  instead and move on -- not a doc review blocker.
+
   ═══ STEP 2: FIX CRITICAL DOC ERRORS ═══
 
   Read requirements.md (contains REQ-XX requirement IDs), architecture.md,
@@ -202,7 +219,8 @@ additional_notes: |
   ```
 
   Brief: documents reviewed, critical issues fixed, scratch files deleted,
-  overall quality rating.
+  overall quality rating. Housekeeping section: ash freshness check result
+  (fresh / updated X->Y / GitHub unreachable).
 
   ═══ MARK DONE ═══
 
