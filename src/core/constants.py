@@ -15,6 +15,15 @@ CONTEXT_DIR_NAME = ".hephaestus"
 # Worktrees subdirectory (lives inside each repo root)
 WORKTREES_SUBDIR = ".worktrees"
 
+# Fixed pane width every agent tmux session is created at (launch_pipeline.py's
+# _create_tmux_session) so captured output isn't hard-wrapped at a default
+# 80 columns. output_capture.py's raw-transcript row reconstruction relies on
+# this being the SAME value the pane was actually created at -- it can't
+# observe the real width itself (the pane is usually long gone by the time a
+# terminated agent's transcript is read), so it auto-wraps rows at this fixed
+# width to match where the terminal itself would have wrapped.
+TMUX_PANE_WIDTH = 150
+
 # Marks a Task.raw_description as synthetic monitor-created diagnostic work
 # (see src.monitoring.diagnostic_agent.WorkflowStuckDiagnostics.create_diagnostic_agent) that must never count
 # toward phase/workflow completion checks -- an orphaned diagnostic task left

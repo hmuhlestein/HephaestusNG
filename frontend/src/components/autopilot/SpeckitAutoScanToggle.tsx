@@ -29,12 +29,12 @@ const SpeckitAutoScanToggle: React.FC<SpeckitAutoScanToggleProps> = ({ projectId
       return { prev };
     },
     onSuccess: (_, next) => {
-      toast.success(next ? 'Spec Kit auto-scan on — ready features build automatically' : 'Spec Kit auto-scan off');
+      toast.success(next ? 'Spec auto-scan on — ready features build automatically' : 'Spec auto-scan off');
     },
     onError: (_err, next, ctx: any) => {
       setEnabled(!next);
       if (ctx?.prev) queryClient.setQueryData(['autopilot-status', projectId], ctx.prev);
-      toast.error('Failed to update Spec Kit auto-scan setting');
+      toast.error('Failed to update Spec auto-scan setting');
     },
   });
 
@@ -55,13 +55,13 @@ const SpeckitAutoScanToggle: React.FC<SpeckitAutoScanToggleProps> = ({ projectId
       <div className={`flex items-center gap-1.5 text-sm font-medium transition-colors duration-150 ${
         enabled ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-700 dark:text-slate-400'
       }`}>
-        {enabled ? <><Search className="w-4 h-4" />Spec Kit Auto-Scan</> : <><Ban className="w-4 h-4" />Spec Kit Auto-Scan Off</>}
+        {enabled ? <><Search className="w-4 h-4" />Spec Auto Scan</> : <><Ban className="w-4 h-4" />Spec Auto Scan</>}
       </div>
       <button
         disabled={disabled}
         onClick={() => mutation.mutate(!enabled)}
         aria-pressed={enabled}
-        aria-label="Toggle Spec Kit Auto-Scan"
+        aria-label="Toggle Spec Auto Scan"
         className={`relative w-[48px] h-[26px] rounded-full transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
           enabled ? 'bg-emerald-500' : 'bg-slate-400'
         } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
