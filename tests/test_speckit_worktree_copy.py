@@ -1,6 +1,7 @@
 """Tests for copy_speckit_feature (REQ-03/FR-002a) and regression for
 copy_design_document (Gotcha #3 in the architecture doc)."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,27 @@ def test_raises_file_not_found_if_source_vanished(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         copy_speckit_feature(feature.dir_path, tmp_path / "feature_folder")
+
+
+def test_symlinked_file_inside_a_legitimate_feature_dir_is_not_copied(tmp_path):
+    """Adjacent to ticket-84a86e68 (which guards the top-level specs/
+    entry itself): a symlinked FILE inside an already-legitimate feature
+    directory (e.g. spec.md -> /etc/passwd) must not have its out-of-tree
+    target's content silently copied into the worktree/designs_folder."""
+    feature = _make_feature(tmp_path)
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("leaked content")
+
+    try:
+        os.symlink(outside, feature.dir_path / "leaked.md")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform/filesystem")
+
+    dest = copy_speckit_feature(feature.dir_path, tmp_path / "feature_folder")
+
+    assert not (dest / "leaked.md").exists()
+    # Legitimate files are still copied.
+    assert (dest / "spec.md").read_text() == "# spec"
 
 
 def test_does_not_break_existing_copy_design_document(tmp_path):
