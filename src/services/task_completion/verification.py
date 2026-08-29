@@ -16,9 +16,30 @@ duplication (section 4.4).
 
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def get_open_bug_tickets(session, workflow_id: str) -> List[Any]:
+    """Every unresolved bug ticket for a workflow -- the medium/low
+    findings security_review (and QA) deliberately ticket instead of
+    fixing or blocking on. Shared by verify_no_open_tickets (the hard
+    floor at development/git_expert/doc_review) and
+    phase_transitions._fire_phase_transition's security_review-specific
+    redirect (skips qa_validation/product_validation entirely when tickets
+    are already open, instead of only catching it at the next hard floor)."""
+    from src.core.database import Ticket
+
+    return (
+        session.query(Ticket)
+        .filter(
+            Ticket.workflow_id == workflow_id,
+            Ticket.ticket_type == "bug",
+            Ticket.is_resolved.is_(False),
+        )
+        .all()
+    )
 
 
 def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]]:
@@ -413,7 +434,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     that CREATE these tickets in the first place and must not be blocked
     by their own findings.
     """
-    from src.core.database import Phase, Ticket
+    from src.core.database import Phase
 
     if phase is None:
         phase = session.query(Phase).filter_by(id=task.phase_id).first()
@@ -430,15 +451,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     if task.created_by_agent_id == ARBITRATION_CREATED_BY:
         return None
 
-    open_tickets = (
-        session.query(Ticket)
-        .filter(
-            Ticket.workflow_id == task.workflow_id,
-            Ticket.ticket_type == "bug",
-            Ticket.is_resolved.is_(False),
-        )
-        .all()
-    )
+    open_tickets = get_open_bug_tickets(session, task.workflow_id)
     if not open_tickets:
         return None
 

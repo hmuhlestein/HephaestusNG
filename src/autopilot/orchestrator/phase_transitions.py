@@ -2433,42 +2433,90 @@ def _fire_phase_transition(
     that ran for hours with design_review never actually re-reviewed again.
     """
     try:
-        # Build phase output for gated phases -- skipped entirely for a
-        # forced continue, which doesn't read it (_handle_force_continue
-        # takes no phase_output) and shouldn't pay for computing it.
-        phase_output = {}
-        if not force_continue and phase_name in get_gated_phases():
-            with get_db() as db:
-                wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                # Path is already imported at module level -- a redundant
-                # local "from pathlib import Path" here previously made
-                # Python treat Path as local to this whole function, so the
-                # EARLIER use on this same line raised UnboundLocalError
-                # every time, silently caught by this function's own
-                # try/except and logged as "[PHASE-ADVANCE] Transition
-                # error" -- which meant a gated phase (scope_review,
-                # architecture_design, etc.) could never advance past
-                # completion, forever, since the exception fired before
-                # mark_phase_complete ever got called.
-                if wf and wf.working_directory and Path(wf.working_directory).exists():
-                    phase_output = build_phase_output(
-                        phase_name, Path(wf.working_directory),
-                        skip_independent_verification=True,
-                        workflow_id=workflow_id,
-                    )
-
-        # Mark phase complete and get engine decision
-
         pm = PhaseManager(get_default_db_manager(), workflow_id=workflow_id)
-        result = (
-            pm.mark_phase_complete(phase_id, completion_summary, force_action="continue")
-            if force_continue
-            else pm.mark_phase_complete(
-                phase_id,
-                completion_summary,
-                phase_output=phase_output,
+
+        # security_review's own gate (score_security_review) only scores
+        # unresolved_count -- critical/high left unfixed -- by design;
+        # medium/low findings it deliberately tickets instead of fixing
+        # are NOT gate input, so a clean pass here says nothing about
+        # whether an open bug ticket still exists. Without this, that
+        # ticket rides through qa_validation and product_validation
+        # untouched (neither phase's own "done" claim is gated on open
+        # tickets either -- verify_no_open_tickets deliberately excludes
+        # them, see its own docstring) and only gets caught once doc_review
+        # tries to mark done, two full review passes later than the ticket
+        # was already known. Checked BEFORE the normal evaluation runs,
+        # forcing the exact same goto machinery (_handle_force_goto) a
+        # real gate decision uses -- not a post-hoc override of mark_
+        # phase_complete's return value. The normal "continue" path
+        # (_handle_force_continue -> _start_next_phase) already flips the
+        # NEXT phase BY ORDER (qa_validation) to "in_progress" as part of
+        # its own bookkeeping before this function would ever see the
+        # result to override; patching target_phase_id afterward would
+        # leave qa_validation's PhaseExecution stuck in_progress with no
+        # task while development also starts, exactly the concurrent-
+        # phase state _start_next_phase's own in-progress guard exists to
+        # prevent. Skipping the normal evaluation entirely and going
+        # straight to force_action="goto" avoids that path altogether.
+        forced_ticket_goto = False
+        if phase_name == "security_review":
+            from src.services.task_completion.verification import get_open_bug_tickets
+
+            with get_db() as _ticket_db:
+                open_tickets = get_open_bug_tickets(_ticket_db, workflow_id)
+            if open_tickets:
+                titles = [f"{t.id}: {t.title}" for t in open_tickets[:5]]
+                reason = (
+                    f"{len(open_tickets)} open bug ticket(s) left by security review: "
+                    + "; ".join(titles)
+                )
+                logger.warning(
+                    f"[PHASE-ADVANCE] security_review passed its own gate but "
+                    f"{len(open_tickets)} bug ticket(s) remain open -- routing to "
+                    f"development instead of continuing ({'; '.join(titles)})"
+                )
+                result = pm.mark_phase_complete(
+                    phase_id, completion_summary,
+                    force_action="goto", force_target_phase="development",
+                    force_reason=reason,
+                )
+                forced_ticket_goto = True
+
+        if not forced_ticket_goto:
+            # Build phase output for gated phases -- skipped entirely for a
+            # forced continue, which doesn't read it (_handle_force_continue
+            # takes no phase_output) and shouldn't pay for computing it.
+            phase_output = {}
+            if not force_continue and phase_name in get_gated_phases():
+                with get_db() as db:
+                    wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                    # Path is already imported at module level -- a redundant
+                    # local "from pathlib import Path" here previously made
+                    # Python treat Path as local to this whole function, so the
+                    # EARLIER use on this same line raised UnboundLocalError
+                    # every time, silently caught by this function's own
+                    # try/except and logged as "[PHASE-ADVANCE] Transition
+                    # error" -- which meant a gated phase (scope_review,
+                    # architecture_design, etc.) could never advance past
+                    # completion, forever, since the exception fired before
+                    # mark_phase_complete ever got called.
+                    if wf and wf.working_directory and Path(wf.working_directory).exists():
+                        phase_output = build_phase_output(
+                            phase_name, Path(wf.working_directory),
+                            skip_independent_verification=True,
+                            workflow_id=workflow_id,
+                        )
+
+            # Mark phase complete and get engine decision
+            result = (
+                pm.mark_phase_complete(phase_id, completion_summary, force_action="continue")
+                if force_continue
+                else pm.mark_phase_complete(
+                    phase_id,
+                    completion_summary,
+                    phase_output=phase_output,
+                )
             )
-        )
 
         action = result.get("action", "continue")
         target_phase_id = result.get("target_phase_id")
