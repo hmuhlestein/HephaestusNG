@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from src.core.constants import TMUX_PANE_HEIGHT, TMUX_PANE_WIDTH
 from src.core.database import (
     Agent,
     AgentBranch,
@@ -728,6 +729,69 @@ class TestCreateAgentForTask:
         assert "pty_filter.py" in pipe_cmd
         assert sys.executable in pipe_cmd
         assert pipe_cmd.startswith("cd ")
+
+    @pytest.mark.asyncio
+    async def test_tmux_pane_is_resized_via_resize_window_not_resize_pane(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: the pane used to be resized with pane.set_width() /
+        pane.resize_pane(width=...), which is a no-op on a single-pane
+        window -- resize-pane only redistributes space among SIBLING panes,
+        and a freshly created session has none. The pane silently stayed at
+        tmux's 80x24 default the whole time, under the server's default
+        `window-size latest`. Confirmed empirically: only
+        `set-option window-size manual` followed by `resize-window` actually
+        changes a single-pane window's size (verified via a real tmux
+        session and os.get_terminal_size() from inside the pane). This
+        matters beyond cosmetics: Ink-based TUIs (Claude Code, pi) size
+        their live-rendering viewport off the pane's reported height and
+        permanently discard content via in-place redraw once it's exceeded
+        -- a pane stuck at 24 rows starves them of room almost immediately.
+        """
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-1"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"description": "Implement feature X"},
+                memories=[],
+                project_context="Test project context",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+            )
+
+        mock_session.set_option.assert_any_call("window-size", "manual")
+        resize_calls = [
+            call
+            for call in mock_session.attached_window.cmd.call_args_list
+            if call.args and call.args[0] == "resize-window"
+        ]
+        assert len(resize_calls) == 1
+        assert resize_calls[0].args == (
+            "resize-window", "-x", str(TMUX_PANE_WIDTH), "-y", str(TMUX_PANE_HEIGHT),
+        )
+        mock_session.attached_window.attached_pane.set_width.assert_not_called()
+        mock_session.attached_window.attached_pane.resize_pane.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_session_id_uses_feature_model_launch_params(
