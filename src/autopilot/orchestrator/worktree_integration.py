@@ -48,6 +48,22 @@ def create_feature_folder(project_path: Path, design_name: str, logger: "Orchest
     return feature_folder
 
 
+def _reject_symlinks(directory: str, names: list) -> set:
+    """shutil.copytree `ignore` callback: skip any symlinked entry found
+    anywhere in the tree being copied. Security (adjacent to
+    ticket-84a86e68, which guards the top-level specs/<NNN>-<name>/ entry
+    itself): shutil.copytree's default symlinks=False FOLLOWS symlinks
+    found INSIDE an already-vetted directory, so a symlinked file within a
+    legitimate feature dir (e.g. specs/001-x/spec.md -> /etc/passwd) would
+    otherwise have its out-of-tree target's content copied into the
+    worktree/designs_folder. Same trust boundary as ticket-84a86e68
+    (requires filesystem write access to the project repo)."""
+    skipped = {name for name in names if (Path(directory) / name).is_symlink()}
+    if skipped:
+        logger.warning(f"[SECURITY] skipping symlinked entr{'y' if len(skipped) == 1 else 'ies'} in {directory}: {sorted(skipped)}")
+    return skipped
+
+
 def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directory: bool) -> Path:
     """Shared copy primitive behind copy_design_source and every call site
     that only has a raw path (not a DesignEntry) available -- e.g.
@@ -57,14 +73,15 @@ def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directo
     recursively copies the entire tree to heph_dir / "specs" / source.name,
     replacing any existing destination wholesale (rmtree + copytree) rather
     than merging, so a file deleted from the source between runs does not
-    silently survive at the destination.
+    silently survive at the destination. Symlinked entries anywhere in the
+    tree are skipped (_reject_symlinks) rather than followed or preserved.
     """
     heph_dir.mkdir(parents=True, exist_ok=True)
     if is_directory:
         dest = heph_dir / "specs" / source.name
         if dest.exists():
             shutil.rmtree(dest)
-        shutil.copytree(source, dest)
+        shutil.copytree(source, dest, ignore=_reject_symlinks)
         return dest
     dest = heph_dir / filename
     shutil.copy2(source, dest)
@@ -100,13 +117,16 @@ def copy_speckit_feature(dir_path: Path, feature_folder: Path) -> Path:
     -> feature_folder/CONTEXT_DIR_NAME/specs/<NNN-name>/ recursively -- ALL
     files, not just spec.md/plan.md/tasks.md (REQ-03/FR-002a). Raises
     FileNotFoundError if dir_path no longer exists (race: the source specs/
-    dir was deleted between detection and worktree creation)."""
+    dir was deleted between detection and worktree creation).
+
+    Delegates to _copy_design_content for the same replace (rmtree +
+    copytree) semantics copy_design_source uses for the permanent
+    designs_folder copy -- a file deleted/renamed in the source between runs
+    must not silently survive at a deterministic-path worktree destination
+    from a prior run (merge semantics via dirs_exist_ok=True would let it)."""
     if not dir_path.is_dir():
         raise FileNotFoundError(f"Spec Kit feature directory vanished: {dir_path}")
-    dest = feature_folder / CONTEXT_DIR_NAME / "specs" / dir_path.name
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(dir_path, dest, dirs_exist_ok=True)
-    return dest
+    return _copy_design_content(dir_path, feature_folder / CONTEXT_DIR_NAME, filename="", is_directory=True)
 
 
 def _create_integration_worktree(
