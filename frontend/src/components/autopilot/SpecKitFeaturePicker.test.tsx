@@ -130,6 +130,18 @@ describe('SpecKitFeaturePicker', () => {
     expect(reenabled.closest('button')!).not.toBeDisabled();
   });
 
+  it('passes the feature\'s real (non-null) repoLabel through to the readiness call for a multi-repo feature', async () => {
+    mockGetFeatures.mockResolvedValue(MULTI_REPO_FEATURES);
+    mockGetReadiness.mockResolvedValue({ features: [{ number: '001', slug: 'api-change', repoLabel: 'backend', needsClarification: [], missingFiles: [] }] });
+    renderPicker();
+
+    await screen.findByText('001-api-change');
+    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+
+    await screen.findByText('Check readiness');
+    expect(mockGetReadiness).toHaveBeenCalledWith('proj-1', { number: '001', repoLabel: 'backend' });
+  });
+
   it('renders an error state on a failed readiness fetch', async () => {
     mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
     mockGetReadiness.mockRejectedValue(new Error('boom'));
