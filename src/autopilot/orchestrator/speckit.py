@@ -78,8 +78,28 @@ def _scan_one_repo(specs_root: Path, repo_id: Optional[str], repo_label: Optiona
     try:
         if not specs_root.is_dir():
             return []
+        specs_root_resolved = specs_root.resolve()
         for entry in sorted(specs_root.iterdir()):
             if not entry.is_dir():
+                continue
+            # Security: entry.is_dir() follows symlinks. A top-level
+            # symlink under specs/ (e.g. specs/999-x -> /etc or -> ~/.ssh)
+            # would otherwise be enumerated as a legitimate SpecKitFeature
+            # and later copied wholesale into the agent's worktree by
+            # _copy_design_content's shutil.copytree, exposing out-of-tree
+            # content to phase prompts (ticket-84a86e68). Reject any entry
+            # that is itself a symlink, or whose resolved real path escapes
+            # specs_root, before it's ever treated as a candidate feature.
+            if entry.is_symlink():
+                logger.warning(f"[SPECKIT] skipping symlinked specs/ entry (not a real feature directory): {entry}")
+                continue
+            try:
+                entry_resolved = entry.resolve()
+            except OSError as e:
+                logger.warning(f"[SPECKIT] failed to resolve {entry}: {e}")
+                continue
+            if entry_resolved.parent != specs_root_resolved:
+                logger.warning(f"[SPECKIT] skipping specs/ entry outside specs root: {entry} -> {entry_resolved}")
                 continue
             match = _DIR_NAME_RE.match(entry.name)
             if not match:

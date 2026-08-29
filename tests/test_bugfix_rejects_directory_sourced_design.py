@@ -1,8 +1,10 @@
 """A directory-sourced DesignEntry must never reach the bugfix workflow's
-content-read path (REQ-09/NFR-04 scope guard). Without the assertion, the
-existing `except OSError` around Path(design_entry.path).read_text()
+content-read path (REQ-09/NFR-04 scope guard). Without the explicit guard,
+the existing `except OSError` around Path(design_entry.path).read_text()
 silently swallows IsADirectoryError and writes an empty scope.md instead
-of failing loudly -- see architecture.md's Gotchas item 1.
+of failing loudly -- see architecture.md's Gotchas item 1. The guard is an
+explicit `raise ValueError`, not a bare `assert`, so it can't be silently
+compiled out under -O/PYTHONOPTIMIZE (adversarial review WARNING).
 """
 
 import pytest
@@ -40,11 +42,11 @@ def test_directory_sourced_design_raises_before_reading_content(bugfix_db, tmp_p
         source_dir=feature_dir,
     )
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="directory-sourced design"):
         run_bugfix_single_feature(entry, tmp_path, _NullLogger())
 
     # The scope.md that the (unreached) content-read block would otherwise
-    # have written must not exist -- confirms the assert fires BEFORE that
+    # have written must not exist -- confirms the guard fires BEFORE that
     # write, not merely somewhere in the same function.
     scope_candidates = list((tmp_path / ".hephaestus" / "specs").rglob("scope.md"))
     assert scope_candidates == []

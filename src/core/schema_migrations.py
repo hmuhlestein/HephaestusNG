@@ -987,10 +987,43 @@ def migrate_speckit_design_source_dir_unique(engine):
     first -- keep the oldest row per (project_id, source_dir), drop the rest
     (mirrors pick_next_design's own "oldest wins" ordering).
 
-    Idempotent - safe to call on every startup.
+    Idempotent - safe to call on every startup. Also resumable: if a prior
+    run of this migration was interrupted (process killed, OOM, host
+    restart) between the RENAME and the final DROP TABLE below,
+    autopilot_designs_old can be left behind -- possibly with
+    autopilot_designs missing entirely (crash before CREATE), or present but
+    not yet populated/fully populated (crash after CREATE, before/mid
+    INSERT). Treating "autopilot_designs missing" as "fresh DB" in that
+    state would permanently break every AutopilotDesign query on the next
+    startup instead of finishing the rebuild -- so autopilot_designs_old's
+    presence is checked FIRST and always resumed/finished before any other
+    branch runs.
     """
     try:
         with engine.connect() as conn:
+            old_info = conn.execute(text("PRAGMA table_info(autopilot_designs_old)")).fetchall()
+            if old_info:
+                logger.warning(
+                    "autopilot_designs_old found -- resuming a source_dir-unique "
+                    "migration interrupted mid-rebuild"
+                )
+                info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+                if not info:
+                    from src.core.database import AutopilotDesign
+
+                    AutopilotDesign.__table__.create(engine)
+                col_list = ", ".join(row[1] for row in old_info)
+                # OR IGNORE: a prior interrupted run may have already copied
+                # some/all rows before crashing -- re-inserting an
+                # already-present id would otherwise raise IntegrityError.
+                conn.execute(
+                    text(f"INSERT OR IGNORE INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
+                )
+                conn.execute(text("DROP TABLE autopilot_designs_old"))
+                conn.commit()
+                logger.info("Resumed and completed autopilot_designs source_dir-unique rebuild")
+                return
+
             info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
             if not info:
                 return  # table missing (fresh DB, create_all already declares the constraint)
