@@ -16,7 +16,7 @@ bad spawn.
 
 from unittest.mock import MagicMock, patch
 
-from src.cli.commands.start import _start_backend, _start_monitor
+from src.cli.commands.start import _start_backend, _start_monitor, _tail_backend_log_error
 
 
 class TestStartBackendPidTracking:
@@ -51,6 +51,53 @@ class TestStartBackendPidTracking:
 
         assert result is False
         mock_save.assert_not_called()
+
+    def test_immediate_exit_reports_the_real_error_not_a_port_guess(self, tmp_path):
+        """Regression: an immediate exit used to be blindly diagnosed as
+        "another instance already owns the port" -- a guess, not a check.
+        A missing/misconfigured provider API key produces the identical
+        symptom (fast exit, code 1) but a completely different real
+        cause, logged to backend.log by run_server.py's own logging_config
+        (stdout/stderr are both redirected to DEVNULL, so that log file is
+        the only place the crashing process's reason actually lands).
+        _start_backend must surface THAT reason instead of the old guess
+        when it's available."""
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        (log_dir / "backend.log").write_text(
+            "2026-08-29 07:11:12,059 - __main__ - INFO - Starting Hephaestus MCP Server\n"
+            "2026-08-29 07:11:12,060 - __main__ - ERROR - Configuration error: "
+            "OPENROUTER_API_KEY is required when using OpenRouter provider\n"
+        )
+
+        mock_proc = MagicMock(pid=12345)
+        mock_proc.poll.return_value = 1
+        mock_proc.returncode = 1
+
+        with patch("subprocess.Popen", return_value=mock_proc), patch(
+            "src.cli.commands.start.save_pid"
+        ), patch("src.cli.commands.start.time.sleep"), patch(
+            "src.cli.commands.start.HEPHAESTUS_LOGS_DIR", str(log_dir)
+        ), patch("src.cli.commands.start.logger") as mock_logger:
+            result = _start_backend("python3", 8300, False)
+
+        assert result is False
+        message = mock_logger.warning.call_args[0][0]
+        assert "OPENROUTER_API_KEY is required" in message
+        assert "already owns the port" not in message
+
+    def test_tail_backend_log_error_falls_back_when_no_error_found(self, tmp_path):
+        log_path = tmp_path / "backend.log"
+        log_path.write_text("2026-08-29 07:11:12,059 - __main__ - INFO - Starting up\n")
+
+        reason = _tail_backend_log_error(log_path)
+
+        assert "no error found in backend.log" in reason
+
+    def test_tail_backend_log_error_falls_back_when_log_missing(self, tmp_path):
+        reason = _tail_backend_log_error(tmp_path / "does-not-exist.log")
+
+        assert "could not read backend.log" in reason
 
 
 class TestStartMonitorPidTracking:

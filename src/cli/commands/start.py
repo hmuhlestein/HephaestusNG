@@ -568,11 +568,11 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
         # indefinitely, once the PID file got poisoned by one bad spawn.
         time.sleep(1.0)
         if proc.poll() is not None:
+            reason = _tail_backend_log_error(log_dir / "backend.log")
             logger.warning(
                 f"Backend process {proc.pid} exited immediately (code "
-                f"{proc.returncode}) -- likely refused to start because "
-                "another instance already owns the port. Not overwriting "
-                "the tracked PID."
+                f"{proc.returncode}) -- {reason}. Not overwriting the "
+                "tracked PID."
             )
             return False
         save_pid("backend", proc.pid)
@@ -580,6 +580,36 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
     except Exception as e:
         print(f"Backend start error: {e}", file=sys.stderr)
         return False
+
+
+def _tail_backend_log_error(log_path: Path) -> str:
+    """Best-effort real reason for an immediate backend exit, read from
+    backend.log itself (stdout/stderr are both redirected to DEVNULL --
+    see the Popen call above -- so this is the only place the crashing
+    process's own logging_config output actually lands).
+
+    Falls back to the previous blind guess ("likely a port conflict") if
+    the log can't be read or has nothing usable -- port conflicts
+    (run_server.py's own _exit_if_port_in_use guard) are real and common,
+    but they're far from the ONLY thing that can make a freshly-spawned
+    backend exit within a second (a missing/misconfigured provider API
+    key produces the identical symptom, and used to get misdiagnosed as
+    a port fight every time, sending troubleshooting in the wrong
+    direction entirely).
+    """
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            tail_lines = f.readlines()[-40:]
+    except Exception:
+        return "likely refused to start because another instance already owns the port (could not read backend.log to confirm)"
+
+    error_lines = [
+        line.strip() for line in tail_lines
+        if " - ERROR - " in line or "Traceback" in line
+    ]
+    if error_lines:
+        return f"backend.log shows: {error_lines[-1]}"
+    return "likely refused to start because another instance already owns the port (no error found in backend.log's tail -- check it directly)"
 
 
 def _start_monitor(python: str) -> bool:
