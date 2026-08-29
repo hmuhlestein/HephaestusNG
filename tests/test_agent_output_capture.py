@@ -538,6 +538,10 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         session.commit()
         session.close()
 
+        transcript_dir_on_disk = Path(working_directory) / ".hephaestus" / "tmux"
+        transcript_dir_on_disk.mkdir(parents=True)
+        (transcript_dir_on_disk / "agent_test.transcript.log").write_text("hi")
+
         capture = AgentOutputCapture(db_manager, tmux_server=Mock())
         agent = db_manager.get_session().query(Agent).filter_by(id=agent_id).first()
 
@@ -577,6 +581,10 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         ))
         session.commit()
         session.close()
+
+        transcript_dir_on_disk = Path(working_directory) / ".hephaestus" / "tmux"
+        transcript_dir_on_disk.mkdir(parents=True)
+        (transcript_dir_on_disk / "agent_test.transcript.log").write_text("hi")
 
         capture = AgentOutputCapture(db_manager, tmux_server=Mock())
         agent = db_manager.get_session().query(Agent).filter_by(id=agent_id).first()
