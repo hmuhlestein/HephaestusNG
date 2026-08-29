@@ -1779,6 +1779,7 @@ def score_adversarial_review(
 def score_design_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
+    prior_warning_count: Optional[int] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score a challenge.md by BLOCKER/WARNING/NIT counts.
 
@@ -1787,11 +1788,28 @@ def score_design_review(
     gap baked into the design, secrets mishandling, unresolved TBD), WARNING
     (unspecified error propagation, scope mismatch), or NIT (minor). Unlike
     score_adversarial_review/score_architectural_review (where only a
-    BLOCKER routes back, a WARNING-only report still passes), ANY finding
-    here routes back to architecture_design: development hasn't run yet, so
-    there's no other phase for a WARNING to be deferred to, and looping
-    architecture_design again is far cheaper than discovering the same gap
-    after code has been built on top of it.
+    BLOCKER routes back, a WARNING-only report still passes), a WARNING here
+    still routes back to architecture_design on its FIRST occurrence:
+    development hasn't run yet, so there's no other phase for a WARNING to
+    be deferred to, and looping architecture_design once is far cheaper than
+    discovering the same gap after code has been built on top of it.
+
+    prior_warning_count: this phase's warning_count from its own last
+    recorded run (get_review_findings_history), or None on a first run /
+    when history isn't available. Same rationale and mechanism as
+    score_adversarial_review's identically-named parameter: without it, a
+    WARNING the architecture_design re-pass legitimately can't fix (e.g. a
+    reviewer-acknowledged, deferred-to-qa_validation cosmetic finding) comes
+    back with the exact same warning_count every re-dispatch, and since
+    "ANY finding routes back" for this phase, that unfixable warning alone
+    burns the entire max_review_runs budget on a goto loop that can never
+    converge -- observed live (ticket-14029d38): architecture_design
+    re-dispatched 4x carrying an identical "2 WARNING/2 NIT" report after
+    the requested fixes were already applied and verified. Same semantics as
+    score_adversarial_review: warnings <= prior_warning_count (no NEW
+    warning beyond what was already outstanding last run) now passes
+    instead of looping; a warning_count that grows still routes back, since
+    that's real signal something changed.
     """
     if not result:
         # The agent may have written the markdown report but failed (or
@@ -1826,6 +1844,16 @@ def score_design_review(
             "reason": reason,
         }
     if warnings > 0:
+        if prior_warning_count is not None and warnings <= prior_warning_count:
+            return 0.9, {
+                "gate": "design_review",
+                "band": "pass",
+                "warning_count": warnings,
+                "reason": (
+                    f"{warnings} WARNING(s) found, unchanged from the prior run's "
+                    f"{prior_warning_count} -- no new findings, passing"
+                ),
+            }
         reason = (
             f"{warnings} WARNING(s) found in design review:\n\n{report_text}"
             if report_text
@@ -2430,10 +2458,11 @@ def build_phase_output(
     heuristic evaluator honours an explicit `score`, so this drives goto/retry/
     continue against the configured thresholds.
 
-    workflow_id: only used to look up adversarial_review's prior_warning_count
-    (see score_adversarial_review) -- optional and harmless to omit for every
-    other phase, but omitting it for adversarial_review means each run is
-    scored with no memory of the last one's warning_count.
+    workflow_id: only used to look up design_review's and adversarial_review's
+    prior_warning_count (see score_design_review/score_adversarial_review) --
+    optional and harmless to omit for every other phase, but omitting it for
+    those two means each run is scored with no memory of the last one's
+    warning_count.
     """
     if phase_name not in get_gated_phases():
         return {}
@@ -2449,7 +2478,14 @@ def build_phase_output(
         result, report_text = read_okf_report(
             working_directory, "challenge.md", phase_name=phase_name
         )
-        score, meta = score_design_review(result, report_text=report_text)
+        prior_warning_count = None
+        if workflow_id:
+            history = get_review_findings_history(workflow_id, phase_name)
+            if history:
+                prior_warning_count = history[-1].get("warning_count")
+        score, meta = score_design_review(
+            result, report_text=report_text, prior_warning_count=prior_warning_count
+        )
     elif phase_name == "architectural_review":
         result, report_text = read_okf_report(
             working_directory, "review.md", phase_name=phase_name
