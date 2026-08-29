@@ -53,6 +53,43 @@ class TestAutopilotService:
             await service.start(str(project))
 
     @pytest.mark.asyncio
+    async def test_start_allows_a_multi_repo_project_whose_workspace_root_is_not_itself_a_git_repo(
+        self, service, tmp_path
+    ):
+        """A multi-repo project's workspace root (AutopilotProject.base_dir)
+        deliberately need not be a git repo itself -- real git operations
+        resolve through registered ProjectRepo rows instead (see
+        repo_resolution.py). Observed live: hitting "start" on a project
+        set up this way ("parent" with git-backed "child" repos under it)
+        raised "Project path is not a git repository" even though every
+        child repo was already registered and valid."""
+        from src.autopilot.orchestrator.state import _get_or_create_project_id
+        from src.core.database import ProjectRepo, get_db
+
+        workspace_root = tmp_path / "parent"
+        workspace_root.mkdir()
+        child = workspace_root / "child"
+        child.mkdir()
+        (child / ".git").mkdir()
+
+        # Register the project and its one child repo the same way the
+        # real "Add Repo" flow would, before ever calling start().
+        project_id = _get_or_create_project_id(str(workspace_root))
+        with get_db() as db:
+            db.add(ProjectRepo(
+                id="repo-child", project_id=project_id, label="child",
+                path=str(child), is_primary=True,
+            ))
+            db.commit()
+
+        with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
+            # Must not raise -- this is the actual regression: the git-repo
+            # check ran before project_id/ProjectRepo rows were ever
+            # consulted, so a registered child repo couldn't satisfy it.
+            await service.start(str(workspace_root))
+            assert service.running is True
+
+    @pytest.mark.asyncio
     async def test_start_rejects_duplicate(self, service, tmp_path):
         project = tmp_path / "project"
         project.mkdir()

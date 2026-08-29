@@ -100,26 +100,43 @@ class AutopilotService:
         if not project.exists():
             raise ValueError(f"Project path does not exist: {project_path}")
 
-        # Verify it's a git repo
-        if not (project / ".git").exists():
-            raise ValueError(f"Project path is not a git repository: {project_path}")
-
-        dq = design_queue or str(project / DESIGN_CONTEXT_SUBDIR)
-        Path(dq).mkdir(parents=True, exist_ok=True)
-
         # Activate the matching project so pick_next_design() finds its
         # designs, auto-creating the AutopilotProject row if none exists,
         # and resume any workflows the user had explicitly paused for it.
         # Extracted to _get_or_create_project_id (orchestrator.py) so
         # callers that need project_id BEFORE starting a pipeline (e.g.
         # POST /start's concurrency-cap check) share this exact logic
-        # instead of a second, divergent copy.
+        # instead of a second, divergent copy. Resolved before the git-repo
+        # check below so a multi-repo project's registered ProjectRepo rows
+        # (see repo_resolution.py) are available to it.
         try:
             from src.autopilot.orchestrator.state import _get_or_create_project_id
 
             self.project_id = _get_or_create_project_id(str(project))
         except Exception as e:
             logger.warning(f"Could not activate project: {e}")
+
+        # Verify there's a real git repo to work against -- either
+        # project_path itself (the traditional single-repo case), or, for a
+        # multi-repo project, at least one registered ProjectRepo (each
+        # already validated as a real git repo when added via
+        # add_project_repo/_validate_repo_path). A multi-repo workspace
+        # root deliberately need not be a git repo itself -- see
+        # repo_resolution.py's resolve_repo_path/get_project_repos, and
+        # design_file_routes.py's own "base_dir need not itself be a git
+        # repo" note.
+        has_registered_repo = False
+        if self.project_id:
+            from src.core.database import get_db
+            from src.core.repo_resolution import get_project_repos
+
+            with get_db() as db:
+                has_registered_repo = bool(get_project_repos(db, self.project_id))
+        if not has_registered_repo and not (project / ".git").exists():
+            raise ValueError(f"Project path is not a git repository: {project_path}")
+
+        dq = design_queue or str(project / DESIGN_CONTEXT_SUBDIR)
+        Path(dq).mkdir(parents=True, exist_ok=True)
 
         # Reset state
         self._stop_event.clear()

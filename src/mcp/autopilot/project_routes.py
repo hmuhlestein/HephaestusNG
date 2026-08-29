@@ -46,7 +46,20 @@ def _apply_active_project(proj):
         raise ValueError(
             f"Cannot activate project — path does not exist: {new_path}"
         )
-    if not (new_path / ".git").exists():
+
+    # Multi-repo project: the workspace root deliberately need not be a
+    # git repo itself -- real git operations resolve through registered
+    # ProjectRepo rows instead (see repo_resolution.py and
+    # AutopilotService.start()'s identical check/rationale).
+    has_registered_repo = False
+    project_id = getattr(proj, "id", None)
+    if project_id:
+        from src.core.database import get_db
+        from src.core.repo_resolution import get_project_repos
+
+        with get_db() as db:
+            has_registered_repo = bool(get_project_repos(db, project_id))
+    if not has_registered_repo and not (new_path / ".git").exists():
         raise ValueError(
             f"Cannot activate project — not a git repository: {new_path}"
         )
@@ -460,7 +473,7 @@ async def activate_project(project_id: str):
 
         # Apply to runtime config
         from types import SimpleNamespace
-        _apply_active_project(SimpleNamespace(base_dir=proj.base_dir))
+        _apply_active_project(SimpleNamespace(base_dir=proj.base_dir, id=proj.id))
 
         count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
 
@@ -649,6 +662,7 @@ async def delete_project(
     )
 
     replacement_base_dir = None
+    replacement_project_id = None
 
     # The ORM cascades on AutopilotProject.designs/.repos and
     # AutopilotDesign.features only reach AutopilotDesign/Feature/
@@ -778,6 +792,7 @@ async def delete_project(
             if next_proj:
                 next_proj.is_active = True
                 replacement_base_dir = next_proj.base_dir
+                replacement_project_id = next_proj.id
 
     if replacement_base_dir:
         try:
@@ -786,7 +801,7 @@ async def delete_project(
             # Pass a plain object, not the ORM instance — its session is
             # already closed here, so touching an attribute on it would
             # raise DetachedInstanceError.
-            _apply_active_project(SimpleNamespace(base_dir=replacement_base_dir))
+            _apply_active_project(SimpleNamespace(base_dir=replacement_base_dir, id=replacement_project_id))
         except Exception as e:
             logger.error(f"Failed to activate replacement project: {e}")
 
