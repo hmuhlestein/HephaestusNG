@@ -27,6 +27,16 @@ class AgentOutputCapture:
     """
 
     _STABILITY_CONFIRMATIONS = 3
+    # Cap on _live_backfill_cache -- nothing evicts an entry when its agent
+    # terminates (termination can happen via paths -- the orphan reaper,
+    # auto-restart -- that never call get_agent_output again for that
+    # agent_id, so a purely reactive evict-on-terminated-poll wouldn't
+    # catch every leak). This process-lifetime dict would otherwise grow
+    # monotonically against uptime x agent volume with no eviction at all,
+    # a slow OOM on a long-running backend. FIFO eviction (oldest entry
+    # first, relying on dict insertion order) is enough since each entry
+    # is write-once and never re-read after an agent goes stale.
+    _LIVE_BACKFILL_CACHE_MAX = 200
 
     def __init__(self, db_manager, tmux_server):
         self.db_manager = db_manager
@@ -36,7 +46,8 @@ class AgentOutputCapture:
         # Lazily-computed, process-lifetime cache of each live agent's raw-
         # transcript backfill -- see _get_live_transcript_backfill. Keyed
         # by agent_id, computed at most once per agent regardless of how
-        # many times get_agent_output is polled for it.
+        # many times get_agent_output is polled for it. Bounded by
+        # _LIVE_BACKFILL_CACHE_MAX (see that constant's comment).
         self._live_backfill_cache: Dict[str, str] = {}
 
     def get_agent_output(self, agent_id: str, lines: int = 200) -> str:
@@ -248,6 +259,9 @@ class AgentOutputCapture:
             logger.debug(f"[LIVE-BACKFILL] Failed for agent {agent_id}: {e}")
             backfill = ""
 
+        if len(self._live_backfill_cache) >= self._LIVE_BACKFILL_CACHE_MAX:
+            oldest_agent_id = next(iter(self._live_backfill_cache))
+            del self._live_backfill_cache[oldest_agent_id]
         self._live_backfill_cache[agent_id] = backfill
         return backfill
 

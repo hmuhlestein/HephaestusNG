@@ -569,6 +569,61 @@ class TestGetAgentOutputUsesCleanTranscript:
         assert "clean-final-line" in output
 
 
+class TestLiveBackfillCacheEviction:
+    """Regression: _live_backfill_cache is a process-lifetime dict with no
+    eviction hook on agent termination -- some kill paths (orphan reaper,
+    auto-restart) never call get_agent_output again for that agent_id, so a
+    purely reactive evict-on-terminated-poll wouldn't catch every leak.
+    Left unbounded, it grows monotonically against uptime x agent volume on
+    a long-running backend with no restart in between. Verifies the FIFO
+    cap directly against the cache dict, without needing a real tmux
+    session -- _read_transcript_log is monkeypatched since only the
+    caching behavior around it is under test here."""
+
+    def test_cache_is_capped_and_evicts_oldest_first(self, agent_manager, monkeypatch):
+        from types import SimpleNamespace
+
+        output_capture = agent_manager._output_capture
+        monkeypatch.setattr(
+            output_capture,
+            "_read_transcript_log",
+            lambda agent, lines=0: f"backfill-for-{agent.tmux_session_name}",
+        )
+
+        cap = output_capture._LIVE_BACKFILL_CACHE_MAX
+        total = cap + 5
+        for i in range(total):
+            agent = SimpleNamespace(tmux_session_name=f"sess-{i}")
+            output_capture._get_live_transcript_backfill(agent, f"agent-{i}")
+
+        assert len(output_capture._live_backfill_cache) == cap
+        # The oldest entries were evicted to make room for the newest ones.
+        for i in range(5):
+            assert f"agent-{i}" not in output_capture._live_backfill_cache
+        for i in range(total - cap, total):
+            assert f"agent-{i}" in output_capture._live_backfill_cache
+
+    def test_cache_hit_does_not_recompute_or_evict(self, agent_manager, monkeypatch):
+        from types import SimpleNamespace
+
+        output_capture = agent_manager._output_capture
+        call_count = 0
+
+        def _fake_read(agent, lines=0):
+            nonlocal call_count
+            call_count += 1
+            return f"backfill-for-{agent.tmux_session_name}"
+
+        monkeypatch.setattr(output_capture, "_read_transcript_log", _fake_read)
+
+        agent = SimpleNamespace(tmux_session_name="sess-x")
+        first = output_capture._get_live_transcript_backfill(agent, "agent-x")
+        second = output_capture._get_live_transcript_backfill(agent, "agent-x")
+
+        assert first == second == "backfill-for-sess-x"
+        assert call_count == 1
+
+
 class TestTmuxHistoryLimit:
     """Regression: history-limit was set to a bare 1000 on the assumption
     that the raw pipe-pane transcript "already captures the full
