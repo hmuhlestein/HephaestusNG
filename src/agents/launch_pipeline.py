@@ -4,6 +4,7 @@ import asyncio
 import functools
 import logging
 import shlex
+import sys
 import time
 import uuid
 from datetime import timedelta
@@ -1066,67 +1067,41 @@ class LaunchPipeline:
             transcript_path = tmux_dir / f"{session_name}.transcript.log"
             # pipe-pane gets the pane's raw pty bytes, unlike capture-pane
             # (which tmux itself renders to plain text). Keep ANSI codes
-            # so the frontend can render colors via ansi-to-html. Only
-            # strip \r to prevent spinner bloat.
-            # Strip terminal control sequences but keep ANSI color codes.
-            # Keep: SGR color sequences (\x1b[...m) and \r (for spinner collapsing)
-            # Strip: everything else aggressively
-            # Perl fully block-buffers STDOUT whenever it isn't a TTY (true
-            # here -- redirected to transcript_path via `>>`), so a plain
-            # `perl -pe '...'` sits on every byte pipe-pane feeds it until
-            # the buffer fills or perl exits. Two fixes needed, not one:
+            # so the frontend can render colors via ansi-to-html; strip
+            # everything else that doesn't carry row/column/color
+            # information. Runs as a subprocess, not imported, so it's a
+            # real standalone script (pty_filter.py) rather than an
+            # inline one-liner -- see that file's own docstring for why
+            # unbuffered true-short-reads matter here (a naive
+            # line-buffered filter can sit frozen for a live TUI's entire
+            # run) and why CSI G/C/D/B/A/H/J/K/f specifically must survive
+            # the strip (output_capture.py's _read_transcript_log
+            # reconstructs rows from them). sys.executable (not a bare
+            # "python3") pins this to the exact interpreter already
+            # running the backend, avoiding any PATH ambiguity.
             #
-            # 1. $|=1 (autoflush) handles the OUTPUT side -- without it,
-            #    even a perl that has processed a line won't push it to
-            #    disk promptly.
-            # 2. sysread() in an explicit loop, not -pe's implicit
-            #    while(<>){...}, handles the INPUT side -- -pe reads one
-            #    "line" (up to $/, "\n" by default) before there's anything
-            #    to flush at all. Modern TUIs (Claude Code's included)
-            #    redraw mostly via \r + cursor-positioning escapes, not
-            #    literal "\n". Confirmed live: a transcript sat frozen at
-            #    exactly the byte offset of the launch command's own
-            #    trailing newline for an agent's entire multi-minute run,
-            #    while tmux capture-pane on the same live session showed
-            #    extensive fresh output the whole time -- $|=1 alone (a
-            #    prior fix) never got the chance to flush anything because
-            #    perl was still blocked waiting for a "\n" that wasn't
-            #    coming. sysread(STDIN, $buf, 65536) returns as soon as
-            #    ANY data is available on the pipe (a true short read),
-            #    exactly like tmux's own pipe-pane delivery, so each
-            #    sysread pairs with an immediate print+flush of whatever
-            #    arrived. A multi-byte escape sequence split across two
-            #    reads won't be matched by either substitution pass and
-            #    survives unstripped in the transcript -- a rare cosmetic
-            #    imperfection, not a functional blocker, unlike minutes of
-            #    frozen scrollback.
-            # CSI sequences ending in one of ABCDGHJKf (cursor up/down/
-            # forward/back/absolute-column/absolute-position, erase
-            # display/line) carry the row/column information a TUI's
-            # in-place redraws depend on -- Claude Code and pi redraw via
-            # these, not just \r/\n. Stripping them (the old behavior,
-            # matching output_capture.py's own now-superseded strip regex)
-            # silently destroyed that information before it ever reached
-            # disk: two pieces of text written before and after a stripped
-            # CSI G (jump to column N, skipping an unchanged prefix) end up
-            # directly concatenated with no separation. output_capture.py's
-            # _read_transcript_log now reconstructs rows FROM these
-            # sequences (plus \r/\n), so they need to survive here to be
-            # reconstructable at all. Only m (SGR/color, already kept) and
-            # these position/erase codes are excluded from the strip --
-            # everything else (cursor visibility, bracketed paste, alt-
-            # screen toggles, etc.) has no bearing on text layout and stays
-            # stripped.
-            _pty_filter = (
-                r"$|=1; while (sysread(STDIN, my $buf, 65536)) { "
-                r"$buf =~ s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
-                r"$buf =~ s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
-                r"$buf =~ s/\x1b\[[?]?[0-9;]*[^0-9;mABCDGHJKf]//g; "  # All CSI/DEC except color + cursor/erase
-                r"$buf =~ s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
-                r"$buf =~ s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
-                r"print $buf; }"
+            # `cd` into this file's own directory first, rather than
+            # trusting the pane's cwd: this pipe-pane command is a plain
+            # shell command tmux execs against whatever cwd the SPAWNING
+            # tmux server process itself has, not necessarily this pane's
+            # working_directory -- and unlike Perl, CPython's interpreter
+            # bootstrap needs a valid getcwd() and fails with a fatal,
+            # silent-to-the-transcript startup error ("OSError: failed to
+            # make path absolute") if it doesn't have one. Confirmed live:
+            # a long-running tmux server whose own cwd had since been
+            # deleted made every pipe-pane invocation of this filter fail
+            # at Python startup, before a single byte was ever captured.
+            # pty_filter.py's own directory is guaranteed to exist for as
+            # long as this code is running at all, unlike the pane's cwd
+            # (a worktree, which can be removed out from under a still-
+            # live pane -- see worktree_removal.py).
+            pty_filter_path = Path(__file__).parent / "pty_filter.py"
+            python_exe = sys.executable or "python3"
+            pipe_cmd = (
+                f"cd {shlex.quote(str(pty_filter_path.parent))} && "
+                f"{shlex.quote(python_exe)} {shlex.quote(str(pty_filter_path))} "
+                f">> {shlex.quote(str(transcript_path))}"
             )
-            pipe_cmd = f"perl -e {shlex.quote(_pty_filter)} >> {shlex.quote(str(transcript_path))}"
             session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
         except Exception as e:
             logger.warning(f"Failed to enable pipe-pane transcript logging: {e}")

@@ -8,6 +8,7 @@ import asyncio
 import json
 import shlex
 import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -667,23 +668,24 @@ class TestCreateAgentForTask:
         mock_send_prompt.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_pipe_pane_transcript_command_autoflushes(
+    async def test_pipe_pane_transcript_command_invokes_the_filter_script(
         self, mock_agent_manager, sample_task, db_manager
     ):
-        """Regression: perl fully block-buffers its STDOUT whenever it isn't
-        a TTY (true here -- pipe-pane redirects it to transcript_path via
-        `>>`), so without $|=1 every byte pipe-pane feeds perl sat in an
-        internal buffer and only reached disk in unpredictable chunks.
-        $|=1 alone still wasn't enough: a plain `perl -pe '...'` also has
-        to finish reading one INPUT "line" (up to "\\n") before there's
-        anything to flush, and modern TUIs (Claude Code's included) redraw
-        mostly via \\r + cursor-positioning escapes, not literal "\\n" --
-        confirmed live, a transcript sat frozen at the byte offset of the
-        launch command's own trailing newline for an agent's entire
-        multi-minute run while tmux capture-pane on the same live session
-        showed extensive fresh output the whole time. sysread() in an
-        explicit loop (not -pe's implicit while(<>)) fixes the input side
-        too: it returns as soon as ANY data is available on the pipe."""
+        """Regression: this used to be an inline `perl -e '...'` one-liner.
+        A naively-buffered filter (block-buffered stdout, or line-based
+        input reading) sits on every byte pipe-pane feeds it until its
+        buffer fills or it exits -- confirmed live, a transcript sat
+        frozen at the byte offset of the launch command's own trailing
+        newline for an agent's entire multi-minute run, because modern
+        TUIs (Claude Code's included) redraw mostly via \\r + cursor-
+        positioning escapes, not literal "\\n", so a line-based reader
+        never had anything to flush. See pty_filter.py itself (and
+        TestPtyFilterScript below) for the actual autoflush/true-short-
+        read behavior this only checks the WIRING for -- the pipe-pane
+        command must invoke that real script with the current
+        interpreter, anchored to a directory guaranteed to exist (not
+        trusting the pane's own cwd, which can be stale -- see
+        launch_pipeline.py's own comment on this)."""
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
@@ -723,9 +725,9 @@ class TestCreateAgentForTask:
         ]
         assert len(pipe_pane_calls) == 1
         pipe_cmd = pipe_pane_calls[0].args[-1]
-        assert "perl" in pipe_cmd
-        assert "$|=1" in pipe_cmd
-        assert "sysread" in pipe_cmd
+        assert "pty_filter.py" in pipe_cmd
+        assert sys.executable in pipe_cmd
+        assert pipe_cmd.startswith("cd ")
 
     @pytest.mark.asyncio
     async def test_session_id_uses_feature_model_launch_params(
