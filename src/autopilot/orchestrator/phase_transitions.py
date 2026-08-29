@@ -106,7 +106,27 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
     that a held claim silently blocks.
 
     Returns True if a stale claim was found and cleared, False otherwise.
+
+    Never clears a claim guarding a still-in-flight arbitration (see
+    _phase_has_arbitration_in_flight), regardless of age. An arbiter is a
+    real LLM-driven agent dispatch -- spawn, read context, reason, write
+    arbitration_result.json -- legitimately taking longer than
+    CLAIM_STALE_TIMEOUT_SECONDS (8 minutes) is not a corner case. Without
+    this, this function reintroduces the exact bug
+    _phase_has_arbitration_in_flight's other two call sites were added to
+    fix, just on this function's own timer instead of an immediate
+    caller's return: the claim vanishes out from under a real, running
+    arbitration, _maybe_resolve_arbitration permanently stops looking at
+    the phase once it's done, and the arbiter's eventual decision is
+    silently dropped. A genuinely dead arbiter agent still gets caught --
+    once its task is marked "failed" by the normal orphan/health-check
+    self-heal, _phase_has_arbitration_in_flight no longer considers it in
+    flight and _maybe_resolve_arbitration's own "failed" branch resolves
+    and clears the claim itself.
     """
+    if _phase_has_arbitration_in_flight(db, phase_id):
+        return False
+
     stale_cutoff = utc_now() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
     cleared = (
         db.query(PhaseExecution)
@@ -1084,6 +1104,18 @@ def _release_stale_task_creation_claims(db, workflow_id: str, logger: "Orchestra
     )
     for execution in stale_executions:
         phase = db.query(Phase).filter_by(id=execution.phase_id).first()
+        # A still-in-flight arbitration legitimately reuses this exact
+        # claim past this staleness window -- an arbiter is a real
+        # LLM-driven agent dispatch, not instantaneous. Clearing it here
+        # would silently drop the arbiter's eventual decision (see
+        # _phase_has_arbitration_in_flight's docstring for the live
+        # incident this guards against); leave it for _maybe_resolve_
+        # arbitration, whose own "still running" comment already covers
+        # this ("self-heal handles a dead agent eventually" -- once the
+        # arbiter's task is marked failed, it's no longer in flight and
+        # this sweep is free to reach it on a later tick).
+        if _phase_has_arbitration_in_flight(db, execution.phase_id):
+            continue
         latest_task = db.query(Task).filter_by(phase_id=execution.phase_id).order_by(Task.created_at.desc()).first()
         logger.warning(
             f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: task_creation_claimed_at held with no release -- clearing stale claim ({'task exists' if latest_task else 'no task yet'})"
