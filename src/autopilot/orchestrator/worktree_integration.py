@@ -100,13 +100,16 @@ def copy_speckit_feature(dir_path: Path, feature_folder: Path) -> Path:
     -> feature_folder/CONTEXT_DIR_NAME/specs/<NNN-name>/ recursively -- ALL
     files, not just spec.md/plan.md/tasks.md (REQ-03/FR-002a). Raises
     FileNotFoundError if dir_path no longer exists (race: the source specs/
-    dir was deleted between detection and worktree creation)."""
+    dir was deleted between detection and worktree creation).
+
+    Delegates to _copy_design_content for the same replace (rmtree +
+    copytree) semantics copy_design_source uses for the permanent
+    designs_folder copy -- a file deleted/renamed in the source between runs
+    must not silently survive at a deterministic-path worktree destination
+    from a prior run (merge semantics via dirs_exist_ok=True would let it)."""
     if not dir_path.is_dir():
         raise FileNotFoundError(f"Spec Kit feature directory vanished: {dir_path}")
-    dest = feature_folder / CONTEXT_DIR_NAME / "specs" / dir_path.name
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(dir_path, dest, dirs_exist_ok=True)
-    return dest
+    return _copy_design_content(dir_path, feature_folder / CONTEXT_DIR_NAME, filename="", is_directory=True)
 
 
 def _create_integration_worktree(

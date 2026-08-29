@@ -139,6 +139,16 @@ heph autopilot queue --project-path ~/my-project
 
 # Add a design document
 heph autopilot add my-feature.md --project-path ~/my-project
+
+# Pin one Spec Kit feature (specs/<NNN>-<name>/) for the next run
+heph autopilot start --project-path ~/my-project --feature 001-my-feature
+
+# Disambiguate --feature across multiple repos in the project
+heph autopilot start --project-path ~/my-project --feature 001 --repo backend
+
+# Check Spec Kit feature readiness (plan.md present, no [NEEDS CLARIFICATION]
+# markers) without starting a run; never fails the command
+heph autopilot check --project-path ~/my-project --feature 001-my-feature
 ```
 
 ### Knowledge Base (Memory)
