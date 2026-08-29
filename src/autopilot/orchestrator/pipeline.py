@@ -397,15 +397,18 @@ def _setup_shared_design_worktree(
     pipeline launch).
 
     Returns (design_worktree_path, design_branch_name, db_manager). On any
-    failure, falls back to (project_path, None, None) -- matching
-    pre-extraction behavior, where design_branch_name stays whatever it
-    already was (None unless the worktree-creation branch above already set
-    it before the failure). db_manager is returned so run_single_workflow
-    can pass the same instance to the later final-merge call instead of
-    creating a second one -- pre-extraction, that reuse was implicit
-    (db was a local variable of run_single_workflow's own frame, visible
-    hundreds of lines later); extracting this block into its own function
-    would otherwise silently drop that reuse.
+    failure, design_worktree_path falls back to project_path -- matching
+    pre-extraction behavior. design_branch_name and db_manager are NOT
+    reset in that case -- they stay whatever they already were: None if the
+    failure happened before this function reached that assignment, or the
+    already-created value if the failure happened later (e.g. `git worktree
+    add` itself failing after `db`/`wt_mgr` were already built). db_manager
+    is returned so run_single_workflow can pass the same instance to the
+    later final-merge call instead of creating a second one -- pre-
+    extraction, that reuse was implicit (db was a local variable of
+    run_single_workflow's own frame, visible hundreds of lines later);
+    extracting this block into its own function would otherwise silently
+    drop that reuse.
     """
     design_worktree_path = None
     design_branch_name = None
