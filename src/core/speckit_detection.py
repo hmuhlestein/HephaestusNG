@@ -33,8 +33,8 @@ class SpecKitFeature:
     dir_path: Path
     number: str
     slug: str
-    repo_id: str
-    repo_label: str
+    repo_id: Optional[str]
+    repo_label: Optional[str]
     has_plan: bool
     has_tasks: bool
     extra_files: List[str] = field(default_factory=list)
@@ -78,53 +78,71 @@ class AmbiguousSpecKitFeatureError(Exception):
         super().__init__(f"{len(candidates)} Spec Kit features match — repo/feature selector required")
 
 
-def find_speckit_features(db: Session, project_id: str) -> List[SpecKitFeature]:
-    """Scan every ProjectRepo of project_id for specs/*/spec.md. Returns
-    all matches across all repos, stably ordered (repo_label, then
-    number) for deterministic CLI/dashboard listings.
+def _scan_one_dir(specs_dir: Path, repo_id: Optional[str], repo_label: Optional[str], label_for_log: str) -> List[SpecKitFeature]:
+    """One specs_dir -> its SpecKitFeature list. Never raises -- an OSError
+    scanning this one directory is caught, logged, and yields []."""
+    features: List[SpecKitFeature] = []
+    try:
+        if not specs_dir.is_dir():
+            return []
+        for spec_file in specs_dir.glob("*/spec.md"):
+            feature_dir = spec_file.parent
+            match = _DIR_RE.match(feature_dir.name)
+            if not match:
+                continue
+            number, slug = match.group(1), match.group(2)
+            extra_files = [name for name in _SPEC_KIT_OPTIONAL_FILES if (feature_dir / name).exists()]
+            extra_files += [name for name in _SPEC_KIT_OPTIONAL_DIRS if (feature_dir / name).is_dir()]
+            features.append(
+                SpecKitFeature(
+                    dir_path=feature_dir,
+                    number=number,
+                    slug=slug,
+                    repo_id=repo_id,
+                    repo_label=repo_label,
+                    has_plan="plan.md" in extra_files,
+                    has_tasks="tasks.md" in extra_files,
+                    extra_files=extra_files,
+                )
+            )
+    except OSError:
+        logger.warning(f"[SPECKIT-DETECTION] failed scanning {label_for_log} ({specs_dir!r}) for Spec Kit features", exc_info=True)
+        return []
+    return features
 
-    ERROR ISOLATION: a filesystem error scanning ONE repo is caught and
-    logged as a WARNING internally, and that repo is simply skipped for
-    this call -- it never aborts the scan of the other repos, and it
-    never raises out of this function for filesystem-level problems. This
-    is all-or-nothing per repo: a repo's partial results (e.g. an error
-    raised after some but not all of its features were found) are
+
+def find_speckit_features(db: Session, project_id: str, project_base_dir: str) -> List[SpecKitFeature]:
+    """Scan every ProjectRepo of project_id for specs/*/spec.md, plus
+    project_base_dir itself -- always when no ProjectRepo rows exist yet,
+    and additionally for a multi-repo project whose workspace root is a
+    genuinely separate directory from every registered repo (a shared/
+    cross-cutting feature spec that doesn't belong to just one child repo,
+    e.g. `specify init` run at the workspace root instead of inside a
+    specific repo -- REQ-02). Skipped when the workspace root already IS
+    one of the registered repos (the traditional single-repo case), which
+    would otherwise double-count that repo's own features. Returns all
+    matches, stably ordered (repo_label, then number) for deterministic
+    CLI/dashboard listings.
+
+    ERROR ISOLATION: a filesystem error scanning ONE location is caught and
+    logged as a WARNING internally, and that location is simply skipped for
+    this call -- it never aborts the scan of the others, and it never
+    raises out of this function for filesystem-level problems. This is
+    all-or-nothing per location: a location's partial results (e.g. an
+    error raised after some but not all of its features were found) are
     discarded entirely rather than silently returned as if complete.
     """
     features: List[SpecKitFeature] = []
-    for repo in get_project_repos(db, project_id):
-        repo_features: List[SpecKitFeature] = []
-        try:
-            specs_dir = Path(repo.path) / "specs"
-            if not specs_dir.is_dir():
-                continue
-            for spec_file in specs_dir.glob("*/spec.md"):
-                feature_dir = spec_file.parent
-                match = _DIR_RE.match(feature_dir.name)
-                if not match:
-                    continue
-                number, slug = match.group(1), match.group(2)
-                extra_files = [name for name in _SPEC_KIT_OPTIONAL_FILES if (feature_dir / name).exists()]
-                extra_files += [name for name in _SPEC_KIT_OPTIONAL_DIRS if (feature_dir / name).is_dir()]
-                repo_features.append(
-                    SpecKitFeature(
-                        dir_path=feature_dir,
-                        number=number,
-                        slug=slug,
-                        repo_id=str(repo.id),
-                        repo_label=str(repo.label),
-                        has_plan="plan.md" in extra_files,
-                        has_tasks="tasks.md" in extra_files,
-                        extra_files=extra_files,
-                    )
-                )
-        except OSError:
-            logger.warning(f"[SPECKIT-DETECTION] failed scanning repo {repo.label!r} ({repo.path!r}) for Spec Kit features", exc_info=True)
-            continue
+    repos = get_project_repos(db, project_id)
+    for repo in repos:
+        features.extend(_scan_one_dir(Path(repo.path) / "specs", str(repo.id), str(repo.label), f"repo {repo.label!r}"))
 
-        features.extend(repo_features)
+    base_dir_resolved = Path(project_base_dir).resolve()
+    already_covered = any(Path(repo.path).resolve() == base_dir_resolved for repo in repos)
+    if not already_covered:
+        features.extend(_scan_one_dir(base_dir_resolved / "specs", None, None, "project workspace root"))
 
-    features.sort(key=lambda f: (f.repo_label, int(f.number), f.number))
+    features.sort(key=lambda f: (f.repo_label or "", int(f.number), f.number))
     return features
 
 

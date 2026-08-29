@@ -435,11 +435,11 @@ class TestSyncSpeckitDesigns:
 
         proj.speckit_auto_scan_enabled = False
         db_session.commit()
-        off_features = find_speckit_features(db_session, proj.id)
+        off_features = find_speckit_features(db_session, proj.id, proj.base_dir)
 
         proj.speckit_auto_scan_enabled = True
         db_session.commit()
-        on_features = find_speckit_features(db_session, proj.id)
+        on_features = find_speckit_features(db_session, proj.id, proj.base_dir)
 
         assert [f.dir_name for f in off_features] == [f.dir_name for f in on_features] == ["001-foo"]
 

@@ -382,7 +382,7 @@ def _sync_speckit_designs(db, project) -> None:
     from src.core.speckit_detection import find_speckit_features
 
     try:
-        features = find_speckit_features(db, project.id)
+        features = find_speckit_features(db, project.id, project.base_dir)
     except Exception:
         logger.error(f"[SPECKIT-AUTOSCAN] detection failed for project {project.id[:8]}", exc_info=True)
         return
@@ -404,7 +404,12 @@ def _sync_speckit_designs(db, project) -> None:
         content_hash = hashlib.sha256(spec_bytes).hexdigest()[:16]  # matches file_hash's truncation
         size_bytes = len(spec_bytes)
 
-        filename = f"speckit/{feat.repo_label}/{feat.number}-{feat.slug}.md"
+        # repo_label is None for a feature detected at the project's
+        # workspace root rather than inside a specific registered repo
+        # (e.g. `specify init` run at the workspace root of a multi-repo
+        # project) -- "_workspace" keeps the filename deterministic and
+        # readable instead of the literal string "None".
+        filename = f"speckit/{feat.repo_label or '_workspace'}/{feat.number}-{feat.slug}.md"
 
         try:
             # REQ-08 dedup key: (project_id, filename) -- the real unique

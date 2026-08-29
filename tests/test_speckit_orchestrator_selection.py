@@ -122,6 +122,60 @@ def test_discover_speckit_features_scans_each_registered_repo(tmp_path, monkeypa
     assert {(f.repo_label, f.number) for f in features} == {("backend", "001"), ("frontend", "002")}
 
 
+def test_discover_speckit_features_also_scans_workspace_root_for_a_multi_repo_project(tmp_path, monkeypatch):
+    """Regression, observed live: project "ParentChat" (workspace root
+    /parent, child repos /parent/back-end and /parent/front-end) had
+    `specify init` run at the workspace root, putting specs/ there rather
+    than inside either child repo -- auto-scan never found it, since
+    neither registered repo's own specs/ nor (pre-fix) the workspace root
+    were ever checked once ProjectRepo rows existed. The workspace-root
+    feature must surface with repo_id=None/repo_label=None (it belongs to
+    no single child repo), alongside each repo's own features."""
+    from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
+
+    backend_dir = tmp_path / "back-end"
+    frontend_dir = tmp_path / "front-end"
+    _make_feature_dir(backend_dir, "001-x", {"spec.md": "# spec"})
+    _make_feature_dir(tmp_path, "002-conversation-history", {"spec.md": "# spec"})
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+        session.add(ProjectRepo(id="repo-a", project_id="proj-1", label="backend", path=str(backend_dir), is_primary=True))
+        session.add(ProjectRepo(id="repo-b", project_id="proj-1", label="frontend", path=str(frontend_dir)))
+        session.flush()
+
+        features = discover_speckit_features(session, "proj-1", str(tmp_path))
+
+    assert {(f.repo_label, f.number) for f in features} == {("backend", "001"), (None, "002")}
+
+
+def test_discover_speckit_features_skips_workspace_root_scan_when_it_equals_the_primary_repo(tmp_path, monkeypatch):
+    """The traditional single-repo case (ProjectRepo.path == base_dir)
+    must not double-count that repo's own features via a second,
+    redundant workspace-root scan."""
+    from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
+
+    _make_feature_dir(tmp_path, "001-x", {"spec.md": "# spec"})
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+        session.add(ProjectRepo(id="repo-a", project_id="proj-1", label="main", path=str(tmp_path), is_primary=True))
+        session.flush()
+
+        features = discover_speckit_features(session, "proj-1", str(tmp_path))
+
+    assert len(features) == 1
+    assert features[0].repo_label == "main"
+
+
 def test_speckit_feature_dir_for_path_recognizes_spec_md(tmp_path):
     d = tmp_path / "specs" / "001-x"
     d.mkdir(parents=True)
