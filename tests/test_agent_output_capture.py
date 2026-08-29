@@ -390,6 +390,39 @@ class TestAgentOutputCapture:
         # Verify
         assert output == "Agent terminated - no output was captured"
 
+    def test_get_agent_output_evicts_live_backfill_cache_on_termination(
+        self, agent_manager, mock_db_manager
+    ):
+        """_live_backfill_cache is keyed by agent_id and bounded by a size
+        cap (_LIVE_BACKFILL_CACHE_MAX), not evicted per-agent -- but
+        get_agent_output's own terminated-agent branch already knows an
+        agent will never again take the live-transcript path this cache
+        backs, so it's the natural place to also proactively drop that
+        agent's entry rather than waiting for the cap's FIFO eviction to
+        get to it eventually."""
+        agent_id = str(uuid.uuid4())
+
+        output_capture = agent_manager._output_capture
+        output_capture._live_backfill_cache[agent_id] = "stale cached backfill"
+
+        mock_agent = Mock(spec=Agent)
+        mock_agent.id = agent_id
+        mock_agent.status = "terminated"
+        mock_agent.current_task_id = None
+        mock_agent.tmux_session_name = None
+
+        mock_db_session = Mock()
+        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
+            mock_agent
+        )
+        mock_db_session.query.return_value.filter_by.return_value.order_by.return_value.first.return_value = None
+        mock_db_session.query.return_value.filter_by.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        mock_db_manager.get_session.return_value = mock_db_session
+
+        agent_manager.get_agent_output(agent_id)
+
+        assert agent_id not in output_capture._live_backfill_cache
+
     @pytest.mark.asyncio
     async def test_terminate_agent_handles_output_capture_failure(
         self, agent_manager, mock_db_manager, mock_tmux_server

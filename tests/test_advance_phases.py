@@ -2525,6 +2525,44 @@ class TestCaseInProgressCompleteResolvesDoneArbitrationInstead:
         mock_fire.assert_not_called()
 
 
+class TestClearStaleTaskCreationClaimArbitrationGuard:
+    """_clear_stale_task_creation_claim is the single shared primitive
+    behind all of its call sites (the sweep, _create_phase_task's target-
+    claim path, _create_corrective_task, and mark_phase_complete's release-
+    only finally block) -- exercise it directly, not just through the sweep
+    (which already short-circuits via its own pre-check in
+    _release_stale_task_creation_claims and never reaches this guard)."""
+
+    def test_leaves_claim_alone_when_arbitration_in_flight(self, db_manager, sample_workflow):
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            _clear_stale_task_creation_claim,
+        )
+        from src.core.database import PhaseExecution
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-arb-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="in_progress",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+            ))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            result = _clear_stale_task_creation_claim(session, "phase-1")
+
+        assert result is False
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+
+
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check
     only ever sees phases already "in_progress" -- but a phase whose claim
