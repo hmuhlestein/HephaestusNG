@@ -1266,6 +1266,40 @@ class LaunchPipeline:
         condition = (task.done_definition or "").strip()
         if not condition:
             return
+
+        # Name this phase's actual resolved input file(s) in the goal
+        # condition itself, not just in the (separately-delivered, best-
+        # effort) "INPUTS AVAILABLE" manifest -- the self-checked-completion
+        # hook re-evaluates the goal on every attempted stop, so a named
+        # file the agent never engaged with keeps failing the check instead
+        # of silently going unread. Same class of enforcement as the
+        # server-side verify_requirements_cover_scope_cli_flags/
+        # verify_development_produced_a_commit hard floors, at the CLI's
+        # own self-check layer instead of only at task-completion time.
+        try:
+            with get_db() as _db:
+                _phase = resolve_task_phase(_db, task)
+                if _phase and task.workflow_id:
+                    from src.autopilot.spec import load_phase_inputs, resolve_phase_input
+                    from src.core.database import Workflow
+
+                    _wf = _db.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if _wf and _wf.working_directory:
+                        declared = load_phase_inputs(task.workflow_id).get(_phase.name) or {}
+                        names = (declared.get("required") or []) + (declared.get("optional") or [])
+                        resolved_names = []
+                        for name in names:
+                            found = resolve_phase_input(_wf.working_directory, name, task.workflow_id)
+                            if found:
+                                resolved_names.append(found.name)
+                        if resolved_names:
+                            condition += (
+                                f" AND actually read and resolved {', '.join(resolved_names)} "
+                                "(a mention in passing does not count -- incorporate its content into your work)"
+                            )
+        except Exception as e:
+            logger.warning(f"Could not resolve input file names for task {task.id[:8]}'s goal condition: {e}")
+
         # done_definition is written as pure success criteria (an AND-chain
         # of what must be true for "done") -- it has no clause for a
         # legitimate give-up. When the task genuinely can't succeed for a

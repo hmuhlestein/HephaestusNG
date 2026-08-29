@@ -328,16 +328,17 @@ def _build_phase_task(db, workflow_id, phase, phase_id, action, source_phase_nam
         # debugging an unrelated timeout in a 5th file for 10+ minutes
         # with nothing pulling it back to the actual assigned list.
         #
-        # Feedback inlined directly (not just referenced) so the condition
-        # is self-contained -- but also points at the instructions file
-        # (see launch_pipeline.py's _write_task_instructions -- same
-        # ".hephaestus/tasks/{task_id}.md" path it writes this task's full
-        # raw_description to) as a fallback in case feedback alone is
-        # ambiguous out of context.
+        # Feedback is NOT inlined here -- /goal is re-sent to the CLI on
+        # every attempted stop, so a long or multi-issue feedback string
+        # bloats every single re-check. Points at the instructions file
+        # instead (see launch_pipeline.py's _write_task_instructions --
+        # same ".hephaestus/tasks/{task_id}.md" path it writes this task's
+        # full raw_description, feedback included, to) and tells the agent
+        # it must fix what that file identifies.
         done_definition = (
-            f"{done_definition} AND this specific issue has been resolved: "
-            f"{feedback} (full detail in .hephaestus/tasks/{task_id}.md if "
-            "unsure)"
+            f"{done_definition} AND the specific issue described in "
+            f".hephaestus/tasks/{task_id}.md has been resolved -- read that "
+            "file and fix what it identifies"
         )
     task = Task(
         id=task_id,
