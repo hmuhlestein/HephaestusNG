@@ -70,7 +70,8 @@ additional_notes: |
 
   This is the bugfix pipeline: there is no requirements.md or architecture.md
   to check docs against -- read ./.hephaestus/spec.md (the bug report), the
-  adversarial review report, README.md, and skim key source files. Look for:
+  adversarial review report, the security review report, README.md, and
+  skim key source files. Look for:
   - Forward-looking language now out of date ("will be implemented", "not yet created")
   - Filenames or paths that don't match the actual filesystem
   - Documented behavior that contradicts the fix just shipped
@@ -168,13 +169,19 @@ additional_notes: |
   Include these sections:
 
   1. Executive Summary — the bug, the root cause, the fix, status
-  2. Root Cause — what was actually wrong and why
-  3. The Fix — files changed, mechanism, edge cases covered
-  4. Verification — how the fix was confirmed (regression test, stash-verify)
-  5. Quality — test coverage, security review, known limitations
-  6. Changelog — files created/modified
+  2. Security — vulnerabilities the security review found and fixed;
+     anything it deferred instead of fixing (e.g. outdated dependencies
+     with known CVEs), with the ticket ID and severity. Surface this
+     prominently near the top, not buried under general quality notes —
+     a reader skimming just the top of the report must not miss an open
+     "upgrade this library" ticket.
+  3. Root Cause — what was actually wrong and why
+  4. The Fix — files changed, mechanism, edge cases covered
+  5. Verification — how the fix was confirmed (regression test, stash-verify)
+  6. Quality — test coverage, known limitations
+  7. Changelog — files created/modified
 
-  The summary.md content (WHAT/WHY/HOW) should feed into sections 2-3.
+  The summary.md content (WHAT/WHY/HOW) should feed into sections 3-4.
   Target 100-250 lines -- a bug fix report is shorter than a feature
   report by nature. Enough for someone to understand the fix without
   reading source code.
