@@ -17,6 +17,8 @@ from typing import Optional
 
 from git import GitCommandError, Repo
 
+from src.core.constants import CONTEXT_DIR_NAME
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,6 +98,8 @@ class WorktreeRemover:
                 )
                 return
 
+        self._archive_tmux_transcripts(main_repo, worktree_path)
+
         # Every refusal branch above logs why -- but until now, a
         # SUCCESSFUL removal (the actually destructive outcome) logged
         # nothing at all. A caller hitting "worktree is missing or not a
@@ -123,6 +127,41 @@ class WorktreeRemover:
                 logger.warning(
                     f"[WORKTREE] Could not remove worktree {worktree_path}: {e}"
                 )
+
+    def _archive_tmux_transcripts(self, main_repo: Repo, worktree_path: str) -> None:
+        """Copy a worktree's .hephaestus/tmux/ (agent .clean.log/
+        .transcript.log, phase-name snapshots) to the main repo's own
+        .hephaestus/tmux/ before this worktree is destroyed.
+
+        This is THE single choke point every worktree removal goes
+        through (see this class's own docstring) -- deliberately, so
+        every caller gets this for free instead of only the ones that
+        remembered to archive first. Before this, only the orchestrator's
+        own end-of-pipeline cleanup (_cleanup_worktree in
+        worktree_integration.py) did this; cleanup_all_stale_branches's
+        periodic sweep and discard_agent/cleanup_worktree called straight
+        into this method with no archival at all. .hephaestus/ is git-
+        excluded, so it doesn't survive the merge like docs/*.md reports
+        do -- once this class deletes the directory, an agent's raw
+        transcript is gone for good, unrecoverable by any later fix to
+        how that transcript gets READ (confirmed live: task 6debd5fa's
+        agent had its .clean.log/.transcript.log destroyed this way when
+        its workflow failed and the periodic stale-worktree sweep reaped
+        it, leaving only the much shorter termination-time snapshot
+        terminator.py writes separately).
+        """
+        try:
+            src_tmux = Path(worktree_path) / CONTEXT_DIR_NAME / "tmux"
+            if not src_tmux.is_dir():
+                return
+            dest_tmux = Path(main_repo.working_dir) / CONTEXT_DIR_NAME / "tmux"
+            dest_tmux.mkdir(parents=True, exist_ok=True)
+            for log_file in src_tmux.glob("*"):
+                if log_file.is_file():
+                    shutil.copy2(log_file, dest_tmux / log_file.name)
+            logger.info(f"[WORKTREE] Archived tmux transcripts from {worktree_path} to {dest_tmux}")
+        except Exception as e:
+            logger.warning(f"[WORKTREE] Failed to archive tmux transcripts for {worktree_path}: {e}")
 
     def orphan_blocker(
         self, main_repo: Repo, base_branch: str, path: Path
