@@ -1512,7 +1512,24 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
             # attempt, so a task committed by another claim-protected path
             # on a separate DB session in that window would otherwise still
             # look like zero here.
-            if db.query(Task).filter(Task.phase_id == phase.id, Task.status != "duplicated", *cycle_filter).count() > 0:
+            #
+            # Deliberately UNSCOPED (no cycle_filter), matching
+            # _case_start_first_phase's own re-check exactly -- this is a
+            # last-resort safety net right before an unconditional create,
+            # not a cycle-correctness decision (that's the job of the
+            # task_count read above, which legitimately needs cycle_filter
+            # to ignore a stale "duplicated" task from a PRIOR cycle). If
+            # task_count's own cycle-scoped read is ever wrong for a
+            # reason not yet understood, this net must not inherit the
+            # same blind spot -- it exists specifically to catch "any task
+            # committed since," full stop. Observed live: workflow
+            # 0be376f2's product_requirements phase got a duplicate task
+            # (abf3f36f) ~15s after the real one (d66b39ab) despite
+            # started_at correctly anchored to d66b39ab's own created_at --
+            # cycle_filter still somehow missed it, and this scoped
+            # re-check inherited the identical miss instead of catching it
+            # independently.
+            if db.query(Task).filter(Task.phase_id == phase.id, Task.status != "duplicated").count() > 0:
                 # We won the claim ourselves -- release it, since
                 # _create_phase_task's own success path (which normally
                 # does so) is never reached for this phase.
