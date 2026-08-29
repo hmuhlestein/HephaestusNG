@@ -160,6 +160,41 @@ def test_secondary_repo_feature_still_requires_its_real_repo_label(db_manager, t
     assert with_label_resp.json()["features"][0]["number"] == "002"
 
 
+def test_same_number_in_two_repos_omitted_repo_label_resolves_only_primary(db_manager, tmp_path):
+    """Re-review property: omitting repo_label must never wildcard-match
+    across repos. Both the primary and a secondary repo have a feature
+    numbered 001 -- omitting repo_label must resolve to the PRIMARY repo's
+    001 only, never merge/ambiguously pick either."""
+    primary_dir = tmp_path / "primary"
+    secondary_dir = tmp_path / "secondary"
+    (primary_dir / "specs" / "001-primary-feature").mkdir(parents=True)
+    (primary_dir / "specs" / "001-primary-feature" / "spec.md").write_text("spec", encoding="utf-8")
+    (secondary_dir / "specs" / "001-secondary-feature").mkdir(parents=True)
+    (secondary_dir / "specs" / "001-secondary-feature" / "spec.md").write_text("spec", encoding="utf-8")
+
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-1", name="proj-1", base_dir=str(primary_dir)))
+        session.add(ProjectRepo(id="repo-1", project_id="proj-1", label="primary-repo", path=str(primary_dir), is_primary=True))
+        session.add(ProjectRepo(id="repo-2", project_id="proj-1", label="secondary-repo", path=str(secondary_dir)))
+
+    client = client_for(db_manager)
+
+    resp = client.get("/api/autopilot/projects/proj-1/speckit/check", params={"number": "001"})
+    assert resp.status_code == 200
+    features = resp.json()["features"]
+    assert len(features) == 1
+    assert features[0]["slug"] == "primary-feature"
+
+    # The secondary repo's same-numbered feature is only reachable with its
+    # real label, never via the omitted-repo_label path above.
+    secondary_resp = client.get(
+        "/api/autopilot/projects/proj-1/speckit/check",
+        params={"number": "001", "repo_label": "secondary-repo"},
+    )
+    assert secondary_resp.status_code == 200
+    assert secondary_resp.json()["features"][0]["slug"] == "secondary-feature"
+
+
 def test_route_never_mutates_project(db_manager, tmp_path):
     base_dir = _make_project(db_manager, tmp_path)
     _write_feature(base_dir, "001", "checkout-flow")
