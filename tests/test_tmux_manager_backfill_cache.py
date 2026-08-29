@@ -42,6 +42,23 @@ def test_kill_session_evicts_backfill_cache_entry(manager):
     assert session_name not in manager._transcript_backfill_cache
 
 
+def test_kill_session_evicts_backfill_cache_entry_when_session_already_gone(manager):
+    """WARNING from adversarial review: the underlying tmux session can
+    disappear through a path other than this manager's own kill_session
+    (external `tmux kill-session`, the tmux server dying, the agent
+    process exiting) -- _find_session then returns None. The cache entry
+    must still be evicted, not just on the found-and-killed path."""
+    session_name = "agent_ghost1234_r"
+    manager._transcript_backfill_cache[session_name] = "stale cached transcript"
+
+    manager._find_session = MagicMock(return_value=None)
+
+    result = manager.kill_session(session_name)
+
+    assert result is False
+    assert session_name not in manager._transcript_backfill_cache
+
+
 def test_kill_session_evicts_backfill_cache_entry_even_on_kill_failure(manager):
     """A failed kill_session() call still means the caller is done with
     this session -- the cache entry must not linger just because the
