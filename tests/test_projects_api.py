@@ -149,5 +149,67 @@ class TestGetActiveProjects:
         assert resp.json() == []
 
 
+class TestApplyActiveProjectMultiRepo:
+    """_apply_active_project (called on every project activation, and when
+    picking a replacement active project after deleting the current one)
+    used to unconditionally require the workspace root itself to be a git
+    repo -- but a multi-repo project's base_dir deliberately need not be
+    one; real git operations resolve through registered ProjectRepo rows
+    instead (see repo_resolution.py). Observed live: activating a project
+    set up this way ("parent" workspace root, git-backed "child" repos
+    registered under it) raised "Cannot activate project — not a git
+    repository" even though a real repo was registered."""
+
+    def _apply(self, base_dir, project_id):
+        from types import SimpleNamespace
+
+        from src.mcp.autopilot.project_routes import _apply_active_project
+
+        _apply_active_project(SimpleNamespace(base_dir=base_dir, id=project_id))
+
+    def test_raises_for_a_plain_non_git_path_with_no_registered_repo(self, db_manager, tmp_path):
+        workspace_root = tmp_path / "plain"
+        workspace_root.mkdir()
+
+        with pytest.raises(ValueError, match="not a git repository"):
+            self._apply(str(workspace_root), project_id=None)
+
+    def test_still_activates_a_traditional_single_repo_project(self, db_manager, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        # Must not raise.
+        self._apply(str(repo), project_id=None)
+
+    def test_activates_a_multi_repo_project_whose_workspace_root_is_not_a_git_repo(self, db_manager, tmp_path):
+        from src.core.database import AutopilotProject, ProjectRepo
+
+        workspace_root = tmp_path / "parent"
+        workspace_root.mkdir()
+        child = workspace_root / "child"
+        child.mkdir()
+        (child / ".git").mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi", name="multi", base_dir=str(workspace_root)))
+            session.add(ProjectRepo(id="repo-child", project_id="proj-multi", label="child", path=str(child), is_primary=True))
+
+        # Must not raise.
+        self._apply(str(workspace_root), project_id="proj-multi")
+
+    def test_still_raises_when_project_has_no_registered_repos_at_all(self, db_manager, tmp_path):
+        from src.core.database import AutopilotProject
+
+        workspace_root = tmp_path / "parent"
+        workspace_root.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-empty", name="empty", base_dir=str(workspace_root)))
+
+        with pytest.raises(ValueError, match="not a git repository"):
+            self._apply(str(workspace_root), project_id="proj-empty")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
