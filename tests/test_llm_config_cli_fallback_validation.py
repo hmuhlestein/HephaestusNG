@@ -33,12 +33,14 @@ class TestOpenRouterMissingKeyFallsBackInsteadOfFailing:
 
         assert cfg.validate() is True
 
-    def test_validate_warns_when_openrouter_key_missing(self, caplog):
+    def test_validate_logs_info_when_openrouter_key_missing(self, caplog):
+        """Informational, not a warning -- the CLI fallback handles this
+        case, so it isn't something gone wrong."""
         import logging
 
         cfg = _llm_config("openrouter")
 
-        with caplog.at_level(logging.WARNING, logger="src.core.simple_config"):
+        with caplog.at_level(logging.INFO, logger="src.core.simple_config"):
             cfg.validate()
 
         assert "OPENROUTER_API_KEY not set" in caplog.text
