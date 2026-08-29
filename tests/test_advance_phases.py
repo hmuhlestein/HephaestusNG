@@ -3868,6 +3868,86 @@ class TestFirePhaseTransition:
 
     @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_security_review_with_open_bug_ticket_forces_goto_to_development(
+        self, mock_create, mock_pm_class, db_manager, sample_workflow
+    ):
+        """security_review's own gate (score_security_review) only scores
+        unresolved critical/high vulnerabilities -- a medium/low finding it
+        deliberately tickets instead of fixing is, by design, invisible to
+        that gate. Without this check, the ticket rides through
+        qa_validation and product_validation untouched (neither phase's own
+        "done" claim is gated on open tickets either) and only gets caught
+        once doc_review's own hard floor rejects it, two full review passes
+        later than the ticket was already known. Must redirect straight to
+        development instead, via the same forced-goto machinery a real gate
+        decision uses -- not a post-hoc override of the normal "continue"
+        result, which would leave qa_validation's PhaseExecution wrongly
+        flipped to in_progress by _start_next_phase's own bookkeeping."""
+        from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
+        from src.core.database import Agent, Ticket
+
+        with db_manager.session_scope() as session:
+            session.add(Agent(id="agent-sec", system_prompt="p", status="idle", cli_type="pi"))
+            session.add(Ticket(
+                id="ticket-1", workflow_id="wf-1", created_by_agent_id="agent-sec",
+                title="[BUG] Outdated dependency", description="d",
+                ticket_type="bug", priority="medium", status="open",
+            ))
+
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "goto",
+            "target_phase_id": "phase-dev",
+            "target_phase": "development",
+            "reason": "forced",
+            "metadata": {},
+        }
+        mock_create.return_value = True
+
+        logger = MagicMock()
+        result = _fire_phase_transition("wf-1", "phase-1", "security_review", logger)
+
+        assert result is True
+        call_kwargs = mock_pm.mark_phase_complete.call_args.kwargs
+        assert call_kwargs.get("force_action") == "goto"
+        assert call_kwargs.get("force_target_phase") == "development"
+        assert "ticket-1" in call_kwargs.get("force_reason", "")
+        args, _ = mock_create.call_args
+        assert args[1] == "phase-dev"
+        assert args[2] == "development"
+        assert args[3] == "goto"
+
+    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_security_review_with_no_open_tickets_continues_normally(
+        self, mock_create, mock_pm_class, db_manager, sample_workflow
+    ):
+        """No open bug tickets -- the normal evaluation path must run
+        unmodified, not the forced-goto branch."""
+        from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
+
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "continue",
+            "target_phase_id": "phase-2",
+            "target_phase": "qa_validation",
+        }
+        mock_create.return_value = True
+
+        logger = MagicMock()
+        result = _fire_phase_transition("wf-1", "phase-1", "security_review", logger)
+
+        assert result is True
+        call_kwargs = mock_pm.mark_phase_complete.call_args.kwargs
+        assert "force_action" not in call_kwargs
+        args, _ = mock_create.call_args
+        assert args[1] == "phase-2"
+        assert args[2] == "qa_validation"
+
+    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     @patch("src.autopilot.orchestrator.phase_transitions.build_phase_output")
     def test_gated_phase_with_working_directory_does_not_raise(
         self, mock_build_output, mock_create, mock_pm_class, db_manager, sample_workflow, tmp_path
