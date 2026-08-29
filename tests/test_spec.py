@@ -576,6 +576,30 @@ class TestBuildPhaseOutput:
         assert result["score"] >= 0.7
         assert result["spec_gate"]["band"] == "pass"
 
+    def test_design_review_warnings_unchanged_from_history_passes(self, tmp_path, db_manager):
+        """ticket-14029d38: same end-to-end wiring as
+        test_adversarial_review_warnings_unchanged_from_history_passes,
+        for design_review's challenge.md gate."""
+        from src.autopilot.spec import record_review_finding
+
+        record_review_finding(
+            "wf-bpo-design-1", "design_review", blocker_count=0,
+            summary="2 pre-existing, deferred-to-qa_validation warnings", warning_count=2,
+        )
+        docs = tmp_path / ".hephaestus" / "design_review"
+        docs.mkdir(parents=True)
+        (docs / "challenge.md").write_text(_okf(
+            "type: design_review_result\n"
+            "blocker_count: 0\n"
+            "warning_count: 2\n"
+            "nit_count: 2"
+        ))
+        result = build_phase_output(
+            "design_review", tmp_path, workflow_id="wf-bpo-design-1"
+        )
+        assert result["score"] >= 0.6
+        assert result["spec_gate"]["band"] == "pass"
+
     def test_architectural_review_with_blockers(self, tmp_path):
         docs = tmp_path / ".hephaestus" / "architectural_review"
         docs.mkdir(parents=True)
@@ -1634,9 +1658,45 @@ class TestScoreDesignReview:
 
     def test_warnings_only_also_routes_back(self):
         """The key difference from score_adversarial_review: a WARNING-only
-        report does NOT pass here."""
+        report does NOT pass here -- on its FIRST occurrence (no prior run
+        to compare against)."""
         score, meta = score_design_review(
             {"blocker_count": 0, "warning_count": 2, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert meta["band"] == "architecture_design"
+
+    def test_warnings_unchanged_from_prior_run_passes(self):
+        """ticket-14029d38: architecture_design was re-dispatched 4x with an
+        identical "2 WARNING/2 NIT" report even after the requested fixes
+        were applied and verified -- design_review routed back on every
+        single run because a WARNING-only report always did, regardless of
+        whether it was the same already-acknowledged warning or a new one.
+        Same fix and rationale as score_adversarial_review's
+        prior_warning_count."""
+        score, meta = score_design_review(
+            {"blocker_count": 0, "warning_count": 2, "nit_count": 2},
+            prior_warning_count=2,
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+        assert meta["warning_count"] == 2
+
+    def test_warnings_fewer_than_prior_run_passes(self):
+        score, meta = score_design_review(
+            {"blocker_count": 0, "warning_count": 1, "nit_count": 0},
+            prior_warning_count=2,
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+
+    def test_new_warning_beyond_prior_run_still_routes_back(self):
+        """A HIGHER warning_count than last run is real signal something
+        changed -- still worth another architecture_design pass, unlike the
+        unchanged case above."""
+        score, meta = score_design_review(
+            {"blocker_count": 0, "warning_count": 3, "nit_count": 0},
+            prior_warning_count=2,
         )
         assert score < 0.6
         assert meta["band"] == "architecture_design"
