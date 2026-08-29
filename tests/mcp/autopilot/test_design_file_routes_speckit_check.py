@@ -195,6 +195,64 @@ def test_same_number_in_two_repos_omitted_repo_label_resolves_only_primary(db_ma
     assert secondary_resp.json()["features"][0]["slug"] == "secondary-feature"
 
 
+class TestDiscoverFeaturesOr404:
+    """Direct unit coverage for `_discover_features_or_404` itself.
+
+    Architectural review FIX-2 on this feature: this shared helper (added
+    to fix the repo_label BLOCKER in ac58db19) is the canonical interface
+    for both /speckit/features and /speckit/check's repo_label semantics,
+    but was previously only exercised indirectly through those two routes'
+    HTTP-level tests. Testing it directly here gives it its own explicit
+    contract so a future architecture pass -- or a future caller -- can
+    see its behavior without tracing through two HTTP routes first.
+    """
+
+    def test_unknown_project_raises_404(self, db_manager, tmp_path):
+        from fastapi import HTTPException
+
+        from src.core.database import get_db
+        from src.mcp.autopilot.design_file_routes import _discover_features_or_404
+
+        with get_db() as db:
+            try:
+                _discover_features_or_404(db, "does-not-exist")
+                assert False, "expected HTTPException"
+            except HTTPException as e:
+                assert e.status_code == 404
+
+    def test_single_repo_project_has_none_primary_repo_id(self, db_manager, tmp_path):
+        from src.core.database import get_db
+        from src.mcp.autopilot.design_file_routes import _discover_features_or_404
+
+        base_dir = _make_project(db_manager, tmp_path)
+        _write_feature(base_dir, "001", "checkout-flow")
+
+        with get_db() as db:
+            features, primary_repo_id = _discover_features_or_404(db, "proj-1")
+
+        assert primary_repo_id is None
+        assert len(features) == 1
+        assert features[0].repo_id is None
+
+    def test_registered_project_returns_primary_repo_id(self, db_manager, tmp_path):
+        from src.core.database import get_db
+        from src.mcp.autopilot.design_file_routes import _discover_features_or_404
+
+        base_dir = tmp_path / "primary"
+        (base_dir / "specs" / "001-x").mkdir(parents=True)
+        (base_dir / "specs" / "001-x" / "spec.md").write_text("spec", encoding="utf-8")
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="proj-1", base_dir=str(base_dir)))
+            session.add(ProjectRepo(id="repo-1", project_id="proj-1", label="my-repo", path=str(base_dir), is_primary=True))
+
+        with get_db() as db:
+            features, primary_repo_id = _discover_features_or_404(db, "proj-1")
+
+        assert primary_repo_id == "repo-1"
+        assert features[0].repo_id == "repo-1"
+
+
 def test_route_never_mutates_project(db_manager, tmp_path):
     base_dir = _make_project(db_manager, tmp_path)
     _write_feature(base_dir, "001", "checkout-flow")
