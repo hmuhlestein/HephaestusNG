@@ -295,11 +295,11 @@ else
 fi
 
 if [ "$DEV_MODE" = true ]; then
-    if "$PYTHON" -c "import pytest" 2>/dev/null; then
+    if "$PYTHON" -c "import pytest, diff_cover" 2>/dev/null; then
         ok "Dev dependencies already installed"
     else
         log "Installing dev dependencies..."
-        "$UV_BIN" pip install pytest pytest-asyncio pytest-cov black flake8 mypy ruff ipython --quiet --python "$PYTHON"
+        "$UV_BIN" pip install pytest pytest-asyncio pytest-cov diff-cover black flake8 mypy ruff ipython --quiet --python "$PYTHON"
         ok "Dev dependencies installed"
     fi
 fi
