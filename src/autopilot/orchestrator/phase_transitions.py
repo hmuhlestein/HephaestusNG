@@ -1528,6 +1528,40 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
     """
     for ps in in_progress:
         phase = ps["phase"]
+
+        # A LOWER-order phase also in_progress means a goto sent it back to
+        # rework something THIS (later-order) phase found -- this pipeline
+        # is otherwise strictly sequential, so two phases genuinely
+        # in_progress at once only ever means that. This phase's own
+        # in_progress status is stale residue from before the goto (it was
+        # reset to "pending" by the routing code, e.g.
+        # _maybe_retry_failed_tasks's ticket-blocked routing, or flipped
+        # back to in_progress by an unrelated redundant re-evaluation of
+        # an earlier phase's completion -- see that function's own
+        # "Routed to development via goto" comment) -- not a fresh cycle
+        # ready for a new dispatch. The earlier phase's own eventual goto
+        # is what should re-target this phase (via
+        # _case_completed_with_successor's pending-list search), not this
+        # generic "in_progress with 0 tasks" fallback. Observed live:
+        # workflow a7695dc5's doc_review got a second, premature dispatch
+        # (task 7adafc03) while development (order 5) was still actively
+        # reworking the exact ticket doc_review itself had just routed
+        # there minutes earlier -- a wasted review pass against code that
+        # hadn't been fixed yet.
+        blocking_earlier = next(
+            (p for p in in_progress if p["phase"].order < phase.order),
+            None,
+        )
+        if blocking_earlier:
+            logger.info(
+                f"[PHASE-ADVANCE] {phase.name} (order {phase.order}) is "
+                f"in_progress but so is {blocking_earlier['phase'].name} "
+                f"(order {blocking_earlier['phase'].order}) -- skipping a "
+                "fresh dispatch until the earlier phase's own goto "
+                "re-targets it"
+            )
+            continue
+
         # Scoped to this phase's CURRENT cycle (Task.created_at >=
         # execution.started_at), matching _case_completed_with_successor's
         # own cycle_filter -- an unscoped count sees a stale, terminal task
@@ -2466,9 +2500,16 @@ def _fire_phase_transition(
                 open_tickets = get_open_bug_tickets(_ticket_db, workflow_id)
             if open_tickets:
                 titles = [f"{t.id}: {t.title}" for t in open_tickets[:5]]
+                # Directive, not just descriptive -- matches verify_no_open_
+                # tickets's own phrasing for the identical requirement, so
+                # the agent is told to fix it right in this task's initial
+                # dispatch instead of only discovering that requirement
+                # after a first "done" attempt gets rejected.
                 reason = (
-                    f"{len(open_tickets)} open bug ticket(s) left by security review: "
-                    + "; ".join(titles)
+                    f"Fix the underlying issue for each of these {len(open_tickets)} "
+                    "open bug ticket(s) left by security review, then call "
+                    "update_ticket_status(new_status='shipped') for each before "
+                    "marking this task done: " + "; ".join(titles)
                 )
                 logger.warning(
                     f"[PHASE-ADVANCE] security_review passed its own gate but "

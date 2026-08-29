@@ -964,6 +964,96 @@ class TestCaseInProgressNoTasks:
                 mock_create.assert_not_called()
                 mock_release.assert_called_once_with(session, "phase-1")
 
+    def test_skips_a_later_phase_while_an_earlier_phase_is_also_in_progress(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, observed live: workflow a7695dc5's doc_review (order
+        11) got a second, premature dispatch (task 7adafc03) while
+        development (order 5) was still actively reworking the exact
+        ticket doc_review itself had just routed there minutes earlier --
+        a wasted review pass against code that hadn't been fixed yet. This
+        pipeline is otherwise strictly sequential: two phases genuinely
+        in_progress at once only ever means an earlier one was goto'd back
+        to rework something a later one found, so the later phase must
+        wait for that earlier phase's own goto to re-target it, not get a
+        fresh dispatch from this generic "in_progress with 0 tasks"
+        fallback."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks
+
+        with db_manager.session_scope() as session:
+            phase1 = session.query(Phase).filter_by(id="phase-1").first()
+            phase2 = session.query(Phase).filter_by(id="phase-2").first()
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec2 = PhaseExecution(
+                id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1",
+                status="in_progress",
+            )
+            session.add(exec2)
+            # phase-2 listed FIRST: the function returns as soon as any
+            # phase in the loop dispatches, so without the fix this order
+            # would let phase-2 wrongly win the dispatch before phase-1 is
+            # ever reached -- ordering phase-1 last is what actually
+            # exercises the guard instead of vacuously passing either way.
+            in_progress = [
+                {"phase": phase2, "execution": exec2, "status": "in_progress"},
+                {"phase": phase1, "execution": exec1, "status": "in_progress"},
+            ]
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True) as mock_create:
+            with db_manager.session_scope() as session:
+                result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
+                # phase-2 (order 2, blocked by phase-1) is skipped; the
+                # loop continues to phase-1 (order 1), which has no
+                # blocking earlier phase and still gets its fresh dispatch.
+                assert result is True
+                mock_create.assert_called_once()
+                assert mock_create.call_args[0][1] == "phase-1"
+
+    def test_both_phases_stay_untouched_when_only_the_later_one_has_no_tasks(
+        self, db_manager, sample_workflow
+    ):
+        """Same scenario, but the earlier phase (development-equivalent)
+        already has a live task of its own -- only the later phase is
+        being evaluated by this function's loop, and it must still be
+        skipped rather than dispatched."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks
+
+        cycle_start = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            phase1 = session.query(Phase).filter_by(id="phase-1").first()
+            phase2 = session.query(Phase).filter_by(id="phase-2").first()
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.started_at = cycle_start
+            session.add(Task(
+                id="task-development-live",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="in_progress",
+                created_at=cycle_start,
+            ))
+            exec2 = PhaseExecution(
+                id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1",
+                status="in_progress",
+            )
+            session.add(exec2)
+            in_progress = [
+                {"phase": phase1, "execution": exec1, "status": "in_progress"},
+                {"phase": phase2, "execution": exec2, "status": "in_progress"},
+            ]
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True) as mock_create:
+            with db_manager.session_scope() as session:
+                result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
+                # Neither phase gets a fresh dispatch: phase-1 already has
+                # a live task, and phase-2 is skipped by the blocking-
+                # earlier-phase guard.
+                assert result is None
+                mock_create.assert_not_called()
+
 
 class TestMaybeRetryFailedTasks:
     """Tests for _maybe_retry_failed_tasks function."""
@@ -3912,7 +4002,12 @@ class TestFirePhaseTransition:
         call_kwargs = mock_pm.mark_phase_complete.call_args.kwargs
         assert call_kwargs.get("force_action") == "goto"
         assert call_kwargs.get("force_target_phase") == "development"
-        assert "ticket-1" in call_kwargs.get("force_reason", "")
+        force_reason = call_kwargs.get("force_reason", "")
+        assert "ticket-1" in force_reason
+        # Directive, not just descriptive -- the agent must be told to fix
+        # it in this task's initial dispatch, not just informed a ticket
+        # exists and left to independently realize it must be resolved.
+        assert "Fix the underlying issue" in force_reason
         args, _ = mock_create.call_args
         assert args[1] == "phase-dev"
         assert args[2] == "development"
