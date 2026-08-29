@@ -333,6 +333,19 @@ class TestGetAgentOutputUsesCleanTranscript:
         session_db.commit()
         session_db.close()
 
+        # _resolve_tmux_transcript_dir only trusts a candidate directory
+        # once a transcript file already exists there -- real sessions get
+        # this for free (launch_pipeline.py's _create_tmux_session sets up
+        # pipe-pane, which unconditionally creates .transcript.log, before
+        # any agent work starts). This test's tmux_session fixture creates
+        # a bare libtmux session with no such wiring, so without this the
+        # directory can never resolve and _poll_stable_transcript is never
+        # even reached. Mirror the real precondition instead of the actual
+        # pipe-pane setup.
+        tmux_dir = tmp_path / ".hephaestus" / "tmux"
+        tmux_dir.mkdir(parents=True, exist_ok=True)
+        (tmux_dir / f"{session_name}.transcript.log").touch()
+
         output = agent_manager.get_agent_output(agent_id, lines=100)
         assert "hello-from-clean-transcript" in output
         assert (tmp_path / ".hephaestus" / "tmux" / f"{session_name}.clean.log").exists()
@@ -394,22 +407,74 @@ class TestGetAgentOutputUsesCleanTranscript:
         assert "live-correctly-rendered-line" in output
         assert "raw-duplicated-streaming-line" not in output
 
-    def test_terminated_agent_prefers_clean_transcript_over_garbled_raw(
+    def test_terminated_agent_prefers_raw_transcript_over_clean(
         self, agent_manager, db_manager, tmp_path, monkeypatch
     ):
-        """Regression: get_agent_output used to try the raw pipe-pane
-        transcript FIRST for terminated agents, only falling back to the
-        clean transcript's own data (via AgentLog.final_output) if that
-        came up empty -- even though terminate_agent() already does a
-        final unconditional flush of clean.log right before killing the
-        session, specifically so it stays authoritative after death. A
-        terminated agent with a perfectly good clean.log therefore still
-        returned garbled text reconstructed from the raw transcript by
-        regex alone (e.g. cursor-painted text collapsing together with no
-        spaces). The clean transcript must win."""
+        """A terminated agent's raw pipe-pane transcript has no gaps --
+        unlike .clean.log, which is built from periodic snapshots of only
+        the currently-visible alt-screen pane and can permanently miss
+        output that scrolled off-screen between polls (tmux keeps no
+        alt-screen scrollback at all, so history-limit doesn't help).
+        Observed live (agent 8389d7e0): the raw transcript recovered
+        13,034 real lines of a session .clean.log only ever captured 153
+        of. Prefer the raw transcript once the session is terminated -- a
+        LIVE agent still prefers clean.log (see
+        test_live_agent_output_comes_from_clean_transcript and
+        test_empty_clean_transcript_falls_back_to_live_capture_pane_not_raw
+        above, both about the live path, which is unchanged)."""
         from src.core.database import Workflow
 
-        session_name = "sess-terminated-clean"
+        session_name = "sess-terminated-raw"
+        task_id = str(uuid.uuid4())
+        agent_id = str(uuid.uuid4())
+        workflow_id = str(uuid.uuid4())
+        session_db = db_manager.get_session()
+        session_db.add(
+            Workflow(
+                id=workflow_id, name="t", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot",
+                working_directory=str(tmp_path),
+            )
+        )
+        session_db.add(
+            Agent(
+                id=agent_id, system_prompt="p", status="terminated", cli_type="claude",
+                tmux_session_name=session_name, current_task_id=None,
+            )
+        )
+        session_db.add(
+            Task(
+                id=task_id, workflow_id=workflow_id, raw_description="r",
+                done_definition="d", status="done", assigned_agent_id=agent_id,
+            )
+        )
+        session_db.commit()
+        session_db.close()
+
+        tmux_dir = tmp_path / ".hephaestus" / "tmux"
+        tmux_dir.mkdir(parents=True)
+        (tmux_dir / f"{session_name}.clean.log").write_text("clean-final-line-only\n")
+        (tmux_dir / f"{session_name}.transcript.log").write_text(
+            "full-raw-session-history-line-1\nfull-raw-session-history-line-2\n"
+        )
+
+        # Session is gone (agent terminated) -- capture-pane can't see it.
+        monkeypatch.setattr(agent_manager._output_capture, "_capture_pane_lines", lambda _sn: None)
+
+        output = agent_manager.get_agent_output(agent_id, lines=100)
+
+        assert "full-raw-session-history-line-1" in output
+        assert "full-raw-session-history-line-2" in output
+
+    def test_terminated_agent_falls_back_to_clean_transcript_when_raw_is_empty(
+        self, agent_manager, db_manager, tmp_path, monkeypatch
+    ):
+        """If the raw transcript is missing/empty (e.g. a legacy session,
+        or the pipe-pane write failed), fall back to the clean transcript
+        rather than returning nothing."""
+        from src.core.database import Workflow
+
+        session_name = "sess-terminated-clean-fallback"
         task_id = str(uuid.uuid4())
         agent_id = str(uuid.uuid4())
         workflow_id = str(uuid.uuid4())
@@ -439,17 +504,13 @@ class TestGetAgentOutputUsesCleanTranscript:
         tmux_dir = tmp_path / ".hephaestus" / "tmux"
         tmux_dir.mkdir(parents=True)
         (tmux_dir / f"{session_name}.clean.log").write_text("clean-final-line\n")
-        (tmux_dir / f"{session_name}.transcript.log").write_text(
-            "garbledrawpipepanebytes\n"
-        )
+        # No .transcript.log at all.
 
-        # Session is gone (agent terminated) -- capture-pane can't see it.
         monkeypatch.setattr(agent_manager._output_capture, "_capture_pane_lines", lambda _sn: None)
 
         output = agent_manager.get_agent_output(agent_id, lines=100)
 
         assert "clean-final-line" in output
-        assert "garbledrawpipepanebytes" not in output
 
 
 class TestTmuxHistoryLimit:

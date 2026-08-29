@@ -55,26 +55,26 @@ class AgentOutputCapture:
             if agent.agent_type == "orchestrator":
                 return self._get_orchestrator_output(agent, lines)
 
-            # The stability-tracked "clean" transcript (tmux's own capture-
-            # pane rendering -- cursor positioning, overwrites, and line
-            # wrapping already correctly resolved) is authoritative
-            # whether the agent is still running or has terminated:
-            # terminate_agent() does a final unconditional flush of it
-            # right before killing the session, specifically so it stays
-            # correct once capture-pane can no longer see anything. Check
-            # it first regardless of status -- a terminated agent used to
-            # skip straight to the raw pipe-pane transcript below, which
-            # re-shows every intermediate \r/cursor-redrawn TUI frame as
-            # its own line and can't always be reconstructed by regex
-            # stripping alone (text painted via cursor movement rather
-            # than literal spaces comes out concatenated). See
-            # _read_transcript_log.
+            # A terminated agent's session is over -- its raw pipe-pane
+            # transcript is a complete, unchanging record, and it's read
+            # here at most a handful of times (not polled every second
+            # like a live agent), so the filter's one-time cost is worth
+            # paying to get the FULL session instead of settling for
+            # whatever .clean.log happened to capture. See
+            # _get_terminated_agent_output for why that's a real gap, not
+            # a hypothetical one.
+            if agent.status == "terminated":
+                return self._get_terminated_agent_output(agent, agent_id, session, lines)
+
+            # Live agent: the stability-tracked "clean" transcript (tmux's
+            # own capture-pane rendering -- cursor positioning, overwrites,
+            # and line wrapping already correctly resolved) is the best
+            # available source while the session is still running.
             if agent.tmux_session_name:
                 transcript_dir = self._resolve_tmux_transcript_dir(agent)
                 if transcript_dir:
                     clean_path = transcript_dir / f"{agent.tmux_session_name}.clean.log"
-                    if agent.status != "terminated":
-                        self._poll_stable_transcript(agent.tmux_session_name, clean_path)
+                    self._poll_stable_transcript(agent.tmux_session_name, clean_path)
                     if clean_path.exists() and clean_path.stat().st_size > 0:
                         with open(clean_path, "r", errors="replace") as f:
                             clean_lines = f.read().splitlines()
@@ -87,75 +87,12 @@ class AgentOutputCapture:
                 # response that hasn't settled anywhere yet). A live
                 # capture-pane snapshot is tmux's own correctly-emulated
                 # rendering too -- just not yet "confirmed stable" enough
-                # to persist. Returns None once the session itself is
-                # gone, which is always true for a terminated agent, so
-                # this is a no-op there.
+                # to persist.
                 current_lines = self._capture_pane_lines(agent.tmux_session_name)
                 if current_lines is not None:
                     if lines > 0:
                         current_lines = current_lines[-lines:]
                     return "\n".join(current_lines)
-
-            if agent.status == "terminated":
-                logger.debug(
-                    f"Agent {agent_id} is terminated with no clean transcript, "
-                    "falling back to termination-time capture"
-                )
-
-                # capture-pane snapshot taken by terminate_agent() right
-                # before the session was killed -- also proper tmux
-                # rendering, not raw pty bytes.
-                termination_log = (
-                    session.query(AgentLog)
-                    .filter_by(agent_id=agent_id, log_type="terminated")
-                    .order_by(AgentLog.timestamp.desc())
-                    .first()
-                )
-
-                if termination_log and termination_log.details:
-                    final_output = termination_log.details.get("final_output", "")
-                    if final_output:
-                        logger.debug(
-                            f"Retrieved stored output for terminated agent {agent_id}"
-                        )
-                        # If lines parameter is specified, return only the last N lines
-                        if lines and lines > 0:
-                            output_lines = final_output.split("\n")
-                            return "\n".join(output_lines[-lines:])
-                        return final_output
-
-                # Last resort: the raw pipe-pane transcript (has ANSI
-                # colors), only reached if every tmux-emulated source
-                # above came up empty.
-                transcript_output = self._read_transcript_log(agent, lines)
-                if transcript_output:
-                    return transcript_output
-
-                logger.warning(
-                    f"No stored output found for terminated agent {agent_id}"
-                )
-                # Try to get last logs from agent_logs
-                recent_logs = (
-                    session.query(AgentLog)
-                    .filter_by(agent_id=agent_id)
-                    .order_by(AgentLog.timestamp.desc())
-                    .limit(100)
-                    .all()
-                )
-                if recent_logs:
-                    log_lines = []
-                    for log in reversed(recent_logs):
-                        msg = log.message or ""
-                        if log.details:
-                            summary = log.details.get("summary", "") or log.details.get(
-                                "trajectory_summary", ""
-                            )
-                            if summary:
-                                msg = f"{msg}: {summary[:200]}"
-                        if msg:
-                            log_lines.append(f"[{log.log_type}] {msg}")
-                    return "\n".join(log_lines)
-                return "Agent terminated - no output was captured"
 
             if not agent.tmux_session_name:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
@@ -175,6 +112,101 @@ class AgentOutputCapture:
             return ""
         finally:
             session.close()
+
+    def _get_terminated_agent_output(self, agent, agent_id: str, session, lines: int) -> str:
+        """Output for a terminated agent -- prefers the raw pipe-pane
+        transcript over .clean.log, in contrast to a live agent (see
+        get_agent_output).
+
+        .clean.log is built by _poll_stable_transcript periodically
+        snapshotting whatever's CURRENTLY VISIBLE on the alt-screen pane
+        and keeping only content that stays identical across
+        _STABILITY_CONFIRMATIONS consecutive polls. Any output that
+        appears and scrolls back off-screen between two polls -- which
+        happens constantly during active streaming/tool-call output -- is
+        gone forever there, no matter how large history-limit is (tmux
+        doesn't retain alt-screen scrollback at all, so a poll only ever
+        sees the current frame). The raw .transcript.log has no such gap:
+        pipe-pane captures every byte written to the pty continuously,
+        independent of polling cadence or screen redraws.
+
+        _read_transcript_log's regex-based redraw reconstruction isn't
+        perfect (occasional dropped characters/missing spaces from cursor-
+        movement patterns it can't fully undo), but that's a narrower,
+        separate defect than simply missing most of the session. Observed
+        live (agent 8389d7e0): the raw-transcript recovery pulled 13,034
+        real lines out of a ~14-minute session .clean.log only ever
+        captured 153 of.
+
+        A terminated session is unchanging and read here at most a
+        handful of times (not polled every second like a live agent), so
+        the filter's one-time cost -- cached by mtime/size after the
+        first call -- is worth paying for the full history.
+        """
+        if agent.tmux_session_name:
+            transcript_output = self._read_transcript_log(agent, lines)
+            if transcript_output:
+                return transcript_output
+
+        logger.debug(
+            f"Agent {agent_id} is terminated with no raw transcript, "
+            "falling back to the clean transcript / termination snapshot"
+        )
+
+        # Fall back to the stability-tracked clean transcript (still
+        # correctly tmux-rendered, just less complete) if the raw
+        # transcript is missing or came up empty.
+        if agent.tmux_session_name:
+            transcript_dir = self._resolve_tmux_transcript_dir(agent)
+            if transcript_dir:
+                clean_path = transcript_dir / f"{agent.tmux_session_name}.clean.log"
+                if clean_path.exists() and clean_path.stat().st_size > 0:
+                    with open(clean_path, "r", errors="replace") as f:
+                        clean_lines = f.read().splitlines()
+                    if lines > 0:
+                        clean_lines = clean_lines[-lines:]
+                    return "\n".join(clean_lines)
+
+        # capture-pane snapshot taken by terminate_agent() right before
+        # the session was killed -- also proper tmux rendering, not raw
+        # pty bytes.
+        termination_log = (
+            session.query(AgentLog)
+            .filter_by(agent_id=agent_id, log_type="terminated")
+            .order_by(AgentLog.timestamp.desc())
+            .first()
+        )
+        if termination_log and termination_log.details:
+            final_output = termination_log.details.get("final_output", "")
+            if final_output:
+                logger.debug(f"Retrieved stored output for terminated agent {agent_id}")
+                if lines and lines > 0:
+                    output_lines = final_output.split("\n")
+                    return "\n".join(output_lines[-lines:])
+                return final_output
+
+        logger.warning(f"No stored output found for terminated agent {agent_id}")
+        recent_logs = (
+            session.query(AgentLog)
+            .filter_by(agent_id=agent_id)
+            .order_by(AgentLog.timestamp.desc())
+            .limit(100)
+            .all()
+        )
+        if recent_logs:
+            log_lines = []
+            for log in reversed(recent_logs):
+                msg = log.message or ""
+                if log.details:
+                    summary = log.details.get("summary", "") or log.details.get(
+                        "trajectory_summary", ""
+                    )
+                    if summary:
+                        msg = f"{msg}: {summary[:200]}"
+                if msg:
+                    log_lines.append(f"[{log.log_type}] {msg}")
+            return "\n".join(log_lines)
+        return "Agent terminated - no output was captured"
 
     def _resolve_tmux_transcript_dir(self, agent) -> Optional[Path]:
         """Find the .hephaestus/tmux/ directory this agent's transcript
@@ -695,6 +727,19 @@ class AgentOutputCapture:
             # from here on same as any other line.
             committed = max(0, len(current_lines) - 2)
             self._append_lines(clean_path, current_lines[:committed])
+            # A short session (<=2 lines captured on this very first poll)
+            # commits nothing here -- _append_lines no-ops on an empty
+            # list, so clean_path is never even created. That leaves no
+            # durable signal that polling ever started for this session:
+            # get_agent_output's own `clean_path.exists()` check reads
+            # "no poll has happened yet" from a state that's actually
+            # "polled once, nothing confirmed stable yet" -- indistinguishable
+            # from the outside. Touch the file regardless of whether there
+            # was anything safe to commit; this only records that a poll
+            # occurred, it never writes content that hasn't been confirmed
+            # stable (that guarantee is unchanged -- see _append_lines).
+            clean_path.parent.mkdir(parents=True, exist_ok=True)
+            clean_path.touch(exist_ok=True)
             self._pane_stability_cache[session_name] = {
                 "history": [current_lines],
                 "committed": committed,
