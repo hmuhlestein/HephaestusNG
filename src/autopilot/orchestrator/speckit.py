@@ -157,17 +157,26 @@ def _sort_key(feature: SpecKitFeature):
 
 def discover_speckit_features(db: Session, project_id: str, project_base_dir: str) -> List[SpecKitFeature]:
     """Scan specs/ under every ProjectRepo of the project (REQ-02), plus
-    project_base_dir itself when no ProjectRepo rows exist yet. Returns
-    features sorted by (repo_label, number). Never raises (NFR-07)."""
+    project_base_dir itself -- always when no ProjectRepo rows exist yet,
+    and additionally for a multi-repo project whose workspace root is a
+    genuinely separate directory from every registered repo (a shared/
+    cross-cutting feature spec that doesn't belong to just one child repo,
+    e.g. `specify init` run at the workspace root instead of inside a
+    specific repo). Skipped when the workspace root already IS one of the
+    registered repos (the traditional single-repo case), which would
+    otherwise double-count that repo's own features. Returns features
+    sorted by (repo_label, number). Never raises (NFR-07)."""
     from src.core.repo_resolution import get_project_repos
 
     features: List[SpecKitFeature] = []
     repos = get_project_repos(db, project_id)
-    if repos:
-        for repo in repos:
-            features.extend(_scan_one_repo(Path(repo.path) / "specs", str(repo.id), str(repo.label)))
-    else:
-        features.extend(_scan_one_repo(Path(project_base_dir) / "specs", None, None))
+    for repo in repos:
+        features.extend(_scan_one_repo(Path(repo.path) / "specs", str(repo.id), str(repo.label)))
+
+    base_dir_resolved = Path(project_base_dir).resolve()
+    already_covered = any(Path(repo.path).resolve() == base_dir_resolved for repo in repos)
+    if not already_covered:
+        features.extend(_scan_one_repo(base_dir_resolved / "specs", None, None))
 
     return sorted(features, key=_sort_key)
 

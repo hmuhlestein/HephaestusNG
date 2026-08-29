@@ -76,16 +76,32 @@ def _seed_multi_repo_project(db_manager, tmp_path):
 
 
 def test_find_speckit_features_zero_repos_with_specs(db_manager, tmp_path):
-    _seed_single_repo_project(db_manager, tmp_path)
+    repo_path = _seed_single_repo_project(db_manager, tmp_path)
     with db_manager.session_scope() as session:
-        assert find_speckit_features(session, "proj-1") == []
+        assert find_speckit_features(session, "proj-1", str(repo_path)) == []
+
+
+def test_find_speckit_features_falls_back_to_workspace_root_with_genuinely_zero_repos(db_manager, tmp_path):
+    """No ProjectRepo rows registered at all (pre-migration edge case, or a
+    project not yet fully set up) -- must still find a feature sitting
+    directly at the project's own base_dir, matching
+    discover_speckit_features's own (pre-existing) zero-repos fallback.
+    These two implementations previously diverged on exactly this case."""
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-none", name="p", base_dir=str(tmp_path)))
+    _make_feature(tmp_path, "001", "checkout-flow")
+    with db_manager.session_scope() as session:
+        features = find_speckit_features(session, "proj-none", str(tmp_path))
+    assert len(features) == 1
+    assert features[0].repo_id is None
+    assert features[0].dir_name == "001-checkout-flow"
 
 
 def test_find_speckit_features_one_repo_one_feature(db_manager, tmp_path):
     repo_path = _seed_single_repo_project(db_manager, tmp_path)
     _make_feature(repo_path, "001", "checkout-flow", plan=True)
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     assert len(features) == 1
     assert features[0].dir_name == "001-checkout-flow"
     assert features[0].number == "001"
@@ -100,7 +116,7 @@ def test_find_speckit_features_one_repo_two_features(db_manager, tmp_path):
     _make_feature(repo_path, "001", "checkout-flow")
     _make_feature(repo_path, "002", "payments")
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     assert [f.number for f in features] == ["001", "002"]
 
 
@@ -109,7 +125,7 @@ def test_find_speckit_features_two_repos_same_number(db_manager, tmp_path):
     _make_feature(backend, "001", "checkout-flow")
     _make_feature(frontend, "001", "checkout-flow")
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-mr")
+        features = find_speckit_features(session, "proj-mr", str(tmp_path))
     assert len(features) == 2
     assert {f.repo_id for f in features} == {"repo-backend", "repo-frontend"}
 
@@ -121,7 +137,7 @@ def test_find_speckit_features_skips_non_speckit_dir_names(db_manager, tmp_path)
     (non_speckit / "spec.md").write_text("# Spec\n", encoding="utf-8")
     _make_feature(repo_path, "001", "checkout-flow")
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     assert len(features) == 1
     assert features[0].dir_name == "001-checkout-flow"
 
@@ -132,7 +148,7 @@ def test_find_speckit_features_isolates_bad_repo(db_manager, tmp_path):
     with db_manager.session_scope() as session:
         session.query(ProjectRepo).filter_by(id="repo-backend").update({"path": str(tmp_path / "does-not-exist")})
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-mr")
+        features = find_speckit_features(session, "proj-mr", str(tmp_path))
     assert len(features) == 1
     assert features[0].repo_id == "repo-frontend"
 
@@ -152,7 +168,7 @@ def test_find_speckit_features_glob_oserror_isolated_to_one_repo(db_manager, tmp
     monkeypatch.setattr(Path, "glob", _raising_glob)
 
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-mr")
+        features = find_speckit_features(session, "proj-mr", str(tmp_path))
     assert len(features) == 1
     assert features[0].repo_id == "repo-frontend"
 
@@ -182,9 +198,35 @@ def test_find_speckit_features_mid_iteration_failure_discards_partial_repo_resul
     monkeypatch.setattr(Path, "glob", _flaky_glob)
 
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-mr")
+        features = find_speckit_features(session, "proj-mr", str(tmp_path))
     assert len(features) == 1
     assert features[0].repo_id == "repo-frontend"
+
+
+def test_find_speckit_features_also_scans_workspace_root_for_a_multi_repo_project(db_manager, tmp_path):
+    """Regression, observed live: project "ParentChat" (workspace root
+    /parent, child repos /parent/back-end and /parent/front-end) had
+    `specify init` run at the workspace root, putting specs/ there rather
+    than inside either child repo -- auto-scan never found it. The
+    workspace-root feature surfaces with repo_id=None/repo_label=None."""
+    backend, frontend = _seed_multi_repo_project(db_manager, tmp_path)
+    _make_feature(backend, "001", "x")
+    _make_feature(tmp_path, "002", "conversation-history")
+    with db_manager.session_scope() as session:
+        features = find_speckit_features(session, "proj-mr", str(tmp_path))
+    assert {(f.repo_id, f.number) for f in features} == {("repo-backend", "001"), (None, "002")}
+
+
+def test_find_speckit_features_skips_workspace_root_scan_when_it_equals_the_primary_repo(db_manager, tmp_path):
+    """The traditional single-repo case (ProjectRepo.path == base_dir)
+    must not double-count that repo's own features via a second,
+    redundant workspace-root scan."""
+    repo_path = _seed_single_repo_project(db_manager, tmp_path)
+    _make_feature(repo_path, "001", "checkout-flow")
+    with db_manager.session_scope() as session:
+        features = find_speckit_features(session, "proj-1", str(repo_path))
+    assert len(features) == 1
+    assert features[0].repo_id == "repo-1"
 
 
 def test_find_speckit_features_sorts_numerically_across_zero_padding_widths(db_manager, tmp_path):
@@ -192,7 +234,7 @@ def test_find_speckit_features_sorts_numerically_across_zero_padding_widths(db_m
     _make_feature(repo_path, "10", "checkout")
     _make_feature(repo_path, "9", "hotfix")
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     assert [f.dir_name for f in features] == ["9-hotfix", "10-checkout"]
 
 
@@ -203,7 +245,7 @@ def test_select_speckit_feature_implicit_single_match(db_manager, tmp_path):
     repo_path = _seed_single_repo_project(db_manager, tmp_path)
     _make_feature(repo_path, "001", "checkout-flow")
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     selected = select_speckit_feature(features, None, None)
     assert selected.dir_name == "001-checkout-flow"
 
@@ -270,7 +312,7 @@ def test_check_readiness_reports_missing_plan_and_all_markers(db_manager, tmp_pa
     repo_path = _seed_single_repo_project(db_manager, tmp_path)
     _make_feature(repo_path, "001", "checkout-flow", needs_clarification=["scope?", "auth method?", "timeout?", "fourth marker?"])
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     issues = check_readiness(features[0])
     assert ReadinessIssue(kind="missing_file", detail="plan.md missing") in issues
     assert sum(1 for i in issues if i.kind == "needs_clarification") == 4
@@ -280,7 +322,7 @@ def test_check_readiness_empty_for_fully_ready_feature(db_manager, tmp_path):
     repo_path = _seed_single_repo_project(db_manager, tmp_path)
     _make_feature(repo_path, "001", "checkout-flow", plan=True)
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     assert check_readiness(features[0]) == []
 
 
@@ -292,7 +334,7 @@ def test_check_readiness_non_utf8_spec_raises_oserror_not_unicode_decode_error(d
     feature_dir = _make_feature(repo_path, "001", "checkout-flow", plan=True)
     (feature_dir / "spec.md").write_bytes(b"\xff\xfe not valid utf-8")
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     with pytest.raises(OSError):
         check_readiness(features[0])
 
@@ -304,7 +346,7 @@ def test_check_readiness_toctou_deleted_spec_raises_oserror(db_manager, tmp_path
     repo_path = _seed_single_repo_project(db_manager, tmp_path)
     _make_feature(repo_path, "001", "checkout-flow", plan=True)
     with db_manager.session_scope() as session:
-        features = find_speckit_features(session, "proj-1")
+        features = find_speckit_features(session, "proj-1", str(repo_path))
     (features[0].dir_path / "spec.md").unlink()
     with pytest.raises(OSError):
         check_readiness(features[0])
