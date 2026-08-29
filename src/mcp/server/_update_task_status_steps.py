@@ -350,6 +350,15 @@ async def _complete_task_normally(
                 None, functools.partial(TaskCompletionService.verify_scope_cli_flags_are_implemented, session, task, phase=phase)
             )
 
+        # git_expert-only: reject "done" unless the worktree is actually
+        # clean, merged into main, and pushed -- not just claimed as such.
+        # Real GitPython/subprocess work (fetch, ancestor checks), offloaded
+        # like every other check in this chain.
+        if task.status == "done":
+            output_lost_rejection = await loop.run_in_executor(
+                None, functools.partial(TaskCompletionService.verify_git_expert_merged_and_pushed, session, task, phase=phase)
+            )
+
     if task.status == "done":
         # Checks task.status, NOT request.status -- verify_output_survived_commit
         # just above can flip task.status to "failed" in place (same ORM
