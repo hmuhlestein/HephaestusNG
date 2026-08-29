@@ -71,7 +71,9 @@ additional_notes: |
   This is the bugfix pipeline: there is no requirements.md or architecture.md
   to check docs against -- read ./.hephaestus/spec.md (the bug report), the
   adversarial review report, the security review report, README.md, and
-  skim key source files. Look for:
+  skim key source files. **SPEC KIT INPUT (if present):** if no file exists
+  at that flat path, check `./.hephaestus/specs/<NNN-name>/spec.md` instead
+  (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`). Look for:
   - Forward-looking language now out of date ("will be implemented", "not yet created")
   - Filenames or paths that don't match the actual filesystem
   - Documented behavior that contradicts the fix just shipped

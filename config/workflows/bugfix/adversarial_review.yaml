@@ -94,6 +94,7 @@ additional_notes: |
 
   Read:
   - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the spec here; there is no separate requirements.md
+    (SPEC KIT INPUT: if missing, check `./.hephaestus/specs/<NNN-name>/spec.md` instead)
   - src/ — ALL new or modified source files (read them in full, not excerpts)
   - tests/ — ALL new or modified test files
 

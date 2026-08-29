@@ -857,6 +857,22 @@ def resolve_phase_input(
         for candidate in candidates:
             if candidate.exists():
                 return candidate
+    # Spec Kit directory-sourced designs never populate any location checked
+    # above -- copy_speckit_feature copies the whole specs/<NNN-name>/ tree
+    # verbatim (spec.md, plan.md, tasks.md, etc, exact filenames, no task-id
+    # suffix -- see worktree_integration.py) into
+    # .hephaestus/specs/<NNN-name>/, one level deeper than every other input
+    # this function resolves. Without this, a declared input a Spec Kit
+    # feature happens to satisfy from inside that directory (most commonly
+    # spec.md) permanently shows [MISSING] in the INPUTS manifest and never
+    # gets named in the /goal condition, even though the file is right
+    # there.
+    specs_dir = base / CONTEXT_DIR_NAME / "specs"
+    if specs_dir.is_dir():
+        for name in names:
+            matches = list(specs_dir.glob(f"*/{name}"))
+            if matches:
+                return max(matches, key=lambda p: p.stat().st_mtime)
     return None
 
 

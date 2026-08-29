@@ -100,14 +100,22 @@ additional_notes: |
 
   ```bash
   # Read the original design doc (source of truth)
-  # It is ALWAYS at ./.hephaestus/spec.md — the orchestrator places it there.
+  # It is normally at ./.hephaestus/spec.md — the orchestrator places it there.
   cat ./.hephaestus/spec.md
 
   # Read the extracted requirements
   cat ./.hephaestus/requirements.md
   ```
 
-  If .hephaestus/spec.md is missing, run:
+  **SPEC KIT INPUT (if present):** if this run's design doc came from a Spec
+  Kit feature directory instead of a hand-written spec.md, no file exists
+  at the flat `./.hephaestus/spec.md` path above — check
+  `./.hephaestus/specs/<NNN-name>/spec.md` instead
+  (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`) and
+  treat it as the same source of truth for every "spec.md" reference in
+  this file.
+
+  If neither location has a spec.md, run:
   ```bash
   find . -name "*.md" -path "*/design*" | head -5
   find . -path "./.hephaestus/*" | head -10

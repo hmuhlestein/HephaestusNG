@@ -93,6 +93,10 @@ additional_notes: |
        implemented items NOT in the design as scope violations (critical issue).
        Also verify the seeded test file matches the design doc's test section —
        if it was replaced or modified, that is a critical issue.
+       **SPEC KIT INPUT (if present):** if no file exists at the flat
+       `./.hephaestus/spec.md` path, this run's bug report came from a Spec
+       Kit feature directory — check `./.hephaestus/specs/<NNN-name>/spec.md`
+       instead (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`).
 
     1. **Run the application** — follow the "How to Run the Application" section.
        Run the actual code, not just tests. Capture stdout and any log files it writes.
@@ -145,6 +149,7 @@ additional_notes: |
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - TESTING.md — How to run the app and tests
   - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the spec here; there is no separate requirements.md
+    (SPEC KIT INPUT: if missing, check `./.hephaestus/specs/<NNN-name>/spec.md` instead)
   - adversarial.md (from Artifacts Path) - What issues were found in adversarial review?
   - security.md (from Artifacts Path) - What security fixes were made?
 

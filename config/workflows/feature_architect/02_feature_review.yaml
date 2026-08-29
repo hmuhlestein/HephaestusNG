@@ -64,6 +64,14 @@ additional_notes: |
   - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - ./.hephaestus/features.json — the proposed decomposition
   - ./.hephaestus/features/<id>/scope.md for every feature listed
+
+  **SPEC KIT INPUT (if present):** if no file exists at the flat
+  `./.hephaestus/spec.md` path, this run started from a Spec Kit feature
+  directory — check `./.hephaestus/specs/<NNN-name>/spec.md`, `plan.md`,
+  and `tasks.md` instead (`find ./.hephaestus/specs -maxdepth 2 -name
+  spec.md 2>/dev/null`) and read them together, the same wider scope the
+  Feature Architect itself was told to use for decomposition — verify the
+  decomposition actually reflects them, not just spec.md alone.
   - Explore the existing codebase the same way the Feature Architect was told
     to (ls, find, read entry points) — a feature marked "already implemented"
     or excluded from scope needs to actually be there.
