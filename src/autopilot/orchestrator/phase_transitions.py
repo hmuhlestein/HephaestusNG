@@ -106,7 +106,27 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
     that a held claim silently blocks.
 
     Returns True if a stale claim was found and cleared, False otherwise.
+
+    Never clears a claim guarding a still-in-flight arbitration (see
+    _phase_has_arbitration_in_flight), regardless of age. An arbiter is a
+    real LLM-driven agent dispatch -- spawn, read context, reason, write
+    arbitration_result.json -- legitimately taking longer than
+    CLAIM_STALE_TIMEOUT_SECONDS (8 minutes) is not a corner case. Without
+    this, this function reintroduces the exact bug
+    _phase_has_arbitration_in_flight's other two call sites were added to
+    fix, just on this function's own timer instead of an immediate
+    caller's return: the claim vanishes out from under a real, running
+    arbitration, _maybe_resolve_arbitration permanently stops looking at
+    the phase once it's done, and the arbiter's eventual decision is
+    silently dropped. A genuinely dead arbiter agent still gets caught --
+    once its task is marked "failed" by the normal orphan/health-check
+    self-heal, _phase_has_arbitration_in_flight no longer considers it in
+    flight and _maybe_resolve_arbitration's own "failed" branch resolves
+    and clears the claim itself.
     """
+    if _phase_has_arbitration_in_flight(db, phase_id):
+        return False
+
     stale_cutoff = utc_now() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
     cleared = (
         db.query(PhaseExecution)
@@ -1509,6 +1529,40 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
     """
     for ps in in_progress:
         phase = ps["phase"]
+
+        # A LOWER-order phase also in_progress means a goto sent it back to
+        # rework something THIS (later-order) phase found -- this pipeline
+        # is otherwise strictly sequential, so two phases genuinely
+        # in_progress at once only ever means that. This phase's own
+        # in_progress status is stale residue from before the goto (it was
+        # reset to "pending" by the routing code, e.g.
+        # _maybe_retry_failed_tasks's ticket-blocked routing, or flipped
+        # back to in_progress by an unrelated redundant re-evaluation of
+        # an earlier phase's completion -- see that function's own
+        # "Routed to development via goto" comment) -- not a fresh cycle
+        # ready for a new dispatch. The earlier phase's own eventual goto
+        # is what should re-target this phase (via
+        # _case_completed_with_successor's pending-list search), not this
+        # generic "in_progress with 0 tasks" fallback. Observed live:
+        # workflow a7695dc5's doc_review got a second, premature dispatch
+        # (task 7adafc03) while development (order 5) was still actively
+        # reworking the exact ticket doc_review itself had just routed
+        # there minutes earlier -- a wasted review pass against code that
+        # hadn't been fixed yet.
+        blocking_earlier = next(
+            (p for p in in_progress if p["phase"].order < phase.order),
+            None,
+        )
+        if blocking_earlier:
+            logger.info(
+                f"[PHASE-ADVANCE] {phase.name} (order {phase.order}) is "
+                f"in_progress but so is {blocking_earlier['phase'].name} "
+                f"(order {blocking_earlier['phase'].order}) -- skipping a "
+                "fresh dispatch until the earlier phase's own goto "
+                "re-targets it"
+            )
+            continue
+
         # Scoped to this phase's CURRENT cycle (Task.created_at >=
         # execution.started_at), matching _case_completed_with_successor's
         # own cycle_filter -- an unscoped count sees a stale, terminal task
@@ -2414,42 +2468,101 @@ def _fire_phase_transition(
     that ran for hours with design_review never actually re-reviewed again.
     """
     try:
-        # Build phase output for gated phases -- skipped entirely for a
-        # forced continue, which doesn't read it (_handle_force_continue
-        # takes no phase_output) and shouldn't pay for computing it.
-        phase_output = {}
-        if not force_continue and phase_name in get_gated_phases():
-            with get_db() as db:
-                wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                # Path is already imported at module level -- a redundant
-                # local "from pathlib import Path" here previously made
-                # Python treat Path as local to this whole function, so the
-                # EARLIER use on this same line raised UnboundLocalError
-                # every time, silently caught by this function's own
-                # try/except and logged as "[PHASE-ADVANCE] Transition
-                # error" -- which meant a gated phase (scope_review,
-                # architecture_design, etc.) could never advance past
-                # completion, forever, since the exception fired before
-                # mark_phase_complete ever got called.
-                if wf and wf.working_directory and Path(wf.working_directory).exists():
-                    phase_output = build_phase_output(
-                        phase_name, Path(wf.working_directory),
-                        skip_independent_verification=True,
-                        workflow_id=workflow_id,
-                    )
-
-        # Mark phase complete and get engine decision
-
         pm = PhaseManager(get_default_db_manager(), workflow_id=workflow_id)
-        result = (
-            pm.mark_phase_complete(phase_id, completion_summary, force_action="continue")
-            if force_continue
-            else pm.mark_phase_complete(
-                phase_id,
-                completion_summary,
-                phase_output=phase_output,
+
+        # security_review's own gate (score_security_review) only scores
+        # unresolved_count -- critical/high left unfixed -- by design;
+        # medium/low findings it deliberately tickets instead of fixing
+        # are NOT gate input, so a clean pass here says nothing about
+        # whether an open bug ticket still exists. Without this, that
+        # ticket rides through qa_validation and product_validation
+        # untouched (neither phase's own "done" claim is gated on open
+        # tickets either -- verify_no_open_tickets deliberately excludes
+        # them, see its own docstring) and only gets caught once doc_review
+        # tries to mark done, two full review passes later than the ticket
+        # was already known. Checked BEFORE the normal evaluation runs,
+        # forcing the exact same goto machinery (_handle_force_goto) a
+        # real gate decision uses -- not a post-hoc override of mark_
+        # phase_complete's return value. The normal "continue" path
+        # (_handle_force_continue -> _start_next_phase) already flips the
+        # NEXT phase BY ORDER (qa_validation) to "in_progress" as part of
+        # its own bookkeeping before this function would ever see the
+        # result to override; patching target_phase_id afterward would
+        # leave qa_validation's PhaseExecution stuck in_progress with no
+        # task while development also starts, exactly the concurrent-
+        # phase state _start_next_phase's own in-progress guard exists to
+        # prevent. Skipping the normal evaluation entirely and going
+        # straight to force_action="goto" avoids that path altogether.
+        forced_ticket_goto = False
+        if phase_name == "security_review":
+            from src.services.task_completion.verification import get_open_bug_tickets
+
+            with get_db() as _ticket_db:
+                open_tickets = get_open_bug_tickets(_ticket_db, workflow_id)
+            if open_tickets:
+                titles = [f"{t.id}: {t.title}" for t in open_tickets[:5]]
+                # Directive, not just descriptive -- matches verify_no_open_
+                # tickets's own phrasing for the identical requirement, so
+                # the agent is told to fix it right in this task's initial
+                # dispatch instead of only discovering that requirement
+                # after a first "done" attempt gets rejected.
+                reason = (
+                    f"Fix the underlying issue for each of these {len(open_tickets)} "
+                    "open bug ticket(s) left by security review, then call "
+                    "update_ticket_status(new_status='shipped') for each before "
+                    "marking this task done. If a ticket genuinely has no available "
+                    "fix right now (e.g. no upstream patch exists, or the fix needs a "
+                    "separate human-supervised pass), don't leave it open indefinitely "
+                    "-- call update_ticket_status(new_status='wontfix', comment=<why no "
+                    "fix is possible/appropriate right now>) instead: " + "; ".join(titles)
+                )
+                logger.warning(
+                    f"[PHASE-ADVANCE] security_review passed its own gate but "
+                    f"{len(open_tickets)} bug ticket(s) remain open -- routing to "
+                    f"development instead of continuing ({'; '.join(titles)})"
+                )
+                result = pm.mark_phase_complete(
+                    phase_id, completion_summary,
+                    force_action="goto", force_target_phase="development",
+                    force_reason=reason,
+                )
+                forced_ticket_goto = True
+
+        if not forced_ticket_goto:
+            # Build phase output for gated phases -- skipped entirely for a
+            # forced continue, which doesn't read it (_handle_force_continue
+            # takes no phase_output) and shouldn't pay for computing it.
+            phase_output = {}
+            if not force_continue and phase_name in get_gated_phases():
+                with get_db() as db:
+                    wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                    # Path is already imported at module level -- a redundant
+                    # local "from pathlib import Path" here previously made
+                    # Python treat Path as local to this whole function, so the
+                    # EARLIER use on this same line raised UnboundLocalError
+                    # every time, silently caught by this function's own
+                    # try/except and logged as "[PHASE-ADVANCE] Transition
+                    # error" -- which meant a gated phase (scope_review,
+                    # architecture_design, etc.) could never advance past
+                    # completion, forever, since the exception fired before
+                    # mark_phase_complete ever got called.
+                    if wf and wf.working_directory and Path(wf.working_directory).exists():
+                        phase_output = build_phase_output(
+                            phase_name, Path(wf.working_directory),
+                            skip_independent_verification=True,
+                            workflow_id=workflow_id,
+                        )
+
+            # Mark phase complete and get engine decision
+            result = (
+                pm.mark_phase_complete(phase_id, completion_summary, force_action="continue")
+                if force_continue
+                else pm.mark_phase_complete(
+                    phase_id,
+                    completion_summary,
+                    phase_output=phase_output,
+                )
             )
-        )
 
         action = result.get("action", "continue")
         target_phase_id = result.get("target_phase_id")

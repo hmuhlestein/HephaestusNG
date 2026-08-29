@@ -39,13 +39,13 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL implementation code goes in "Project Path" (src/, tests/, etc.).
   - ALL docs/reports go in "Artifacts Path" — not the project root.
   - Your task description contains the exact paths — copy them exactly.
 
-  SCOPE RULE: Before writing any code, read ./.hephaestus/design.md.
+  SCOPE RULE: Before writing any code, read ./.hephaestus/spec.md.
   Implement ONLY what the design doc specifies. If architecture.md specifies more
   than the design doc, follow the design doc — not the architecture.
   Do NOT add functions, classes, or files not required by the design doc.
@@ -96,7 +96,7 @@ additional_notes: |
   hunting for a [MISSING] file elsewhere.
 
   Read:
-  - ./.hephaestus/design.md — SCOPE AUTHORITY: only implement what this specifies
+  - ./.hephaestus/spec.md — SCOPE AUTHORITY: only implement what this specifies
   - Your task description for "Artifacts Path" and "Project Path" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
   - architecture.md (from Artifacts Path) - Component interfaces and contracts
@@ -141,7 +141,7 @@ additional_notes: |
   problems and filed tickets for them (tagged "qa-finding" or similar,
   ticket_type="bug"). Check before assuming this is a first-time build:
 
-    search_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
+    search_tickets(workflow_id="<your workflow id>", is_resolved=False, ticket_type="bug")
 
   If open bug tickets exist: fixing them is your priority for this pass —
   read each one, fix the underlying issue, then change its status to
@@ -149,6 +149,16 @@ additional_notes: |
   that fixed it. Do this INSTEAD OF re-implementing components from
   scratch; only fall through to normal implementation for genuinely new
   work not covered by an open ticket.
+
+  If a ticket genuinely has no available fix right now (e.g. no upstream
+  patch exists yet, or the fix needs a separate human-supervised pass --
+  a major-version bump on a live shared dependency, say), do not leave it
+  open indefinitely: this phase cannot mark done while ANY bug ticket is
+  open, regardless of whether it's fixable. Move it to the board's "Won't
+  Fix" column instead of "Shipped" (heph_update_ticket_status with
+  new_status="wontfix", comment=<explain why no fix is possible/
+  appropriate right now>) -- it closes the ticket the same as shipping
+  does, without falsely claiming the underlying issue was fixed.
 
   If no open bug tickets exist, proceed normally (first build, or a clean
   QA pass with nothing to fix).

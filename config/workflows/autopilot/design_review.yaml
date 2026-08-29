@@ -86,9 +86,15 @@ additional_notes: |
   ## STEP 1: ORIENT
 
   Read:
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - ./.hephaestus/requirements.md — REQ-XX/NFR-XX requirement IDs
   - ./.hephaestus/architecture.md — THE ARCHITECTURE UNDER REVIEW
+
+  **SPEC KIT INPUT (if present):** if no file exists at the flat
+  `./.hephaestus/spec.md` path, this run's design doc came from a Spec Kit
+  feature directory — check `./.hephaestus/specs/<NNN-name>/spec.md`
+  instead (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`)
+  and treat it as the same source of truth.
 
   Do NOT write or edit code. There is none yet. Do NOT edit architecture.md
   yourself — your only output is challenge.md. The architect (re-run on
@@ -181,7 +187,7 @@ additional_notes: |
     low-level component's interface require calling back into a
     higher-level one?
   - Would adding a new type/variant (the kind of change requirements.md or
-    design.md implies is likely) require touching multiple high-level
+    spec.md implies is likely) require touching multiple high-level
     components, when a clean design would confine it to one new low-level
     implementation?
 
@@ -208,7 +214,7 @@ additional_notes: |
   1. Point to the exact architecture.md section and quote the relevant line(s).
   2. State the concrete scenario in which this causes a real failure (not
      "this could be a problem").
-  3. Confirm requirements.md/design.md doesn't already justify the decision
+  3. Confirm requirements.md/spec.md doesn't already justify the decision
      you're about to flag.
   4. If you cannot state a concrete failure scenario, downgrade to WARNING or NIT.
 

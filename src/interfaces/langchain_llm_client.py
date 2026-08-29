@@ -434,7 +434,7 @@ class LangChainLLMClient:
                 cfg = get_config()
                 cli_tool = cfg.get("agents.default_cli_tool", "claude")
                 cli_model = cfg.get("agents.cli_model", "sonnet")
-                logger.warning(
+                logger.info(
                     f"{provider_config.api_key_env} not set -- falling back to "
                     f"CLI tool {cli_tool!r} ({cli_model}) for {provider}"
                 )

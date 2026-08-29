@@ -10,7 +10,7 @@ status: complete
 **Feature Name:** Pi Cost Tracker Extension
 **Status:** Requirements Extracted
 **Date:** 2026-07-26
-**Design Document:** `.hephaestus/design.md`, "Pi Extension Collector" section (lines 621-647)
+**Design Document:** `.hephaestus/spec.md`, "Pi Extension Collector" section (lines 621-647)
 **Parent Features (already merged to `main`):** Cost Tracking Database Schema → Cost Derivation Engine → Budget Enforcement and Pipeline Throttling → CLI Cost Collectors (Pi + Claude Code)
 
 ---
@@ -87,7 +87,7 @@ Extension install/build (FR-1/FR-2 from the prior `CLI Cost Collectors` requirem
 
 - Any change to `cost_entries` schema, `cost_derivation.py`, or budget enforcement (merged, stable).
 - Adding a `session_id` field to `CostEntry` or the extension's POST body — the design doc's mention of `ctx.sessionManager` is superseded by the simpler, already-working env-var-based attribution; not a gap to close.
-- OpenCode/Codex collectors (separately deferred per `.hephaestus/design.md`'s Non-Goals).
+- OpenCode/Codex collectors (separately deferred per `.hephaestus/spec.md`'s Non-Goals).
 - Introducing a JS/TS test framework (see NFR above).
 
 ## 10. Risks / Open Questions for Architecture/Scope Review

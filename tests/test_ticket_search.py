@@ -87,6 +87,102 @@ class TestTicketSearchService:
             assert results == []
 
     @pytest.mark.asyncio
+    async def test_keyword_search_with_empty_query_returns_all_matching_filters(
+        self, db_manager
+    ):
+        """Regression: every "check for open bug tickets" self-check in this
+        project's own workflow prompts calls search_tickets with only
+        structural filters and no free-text query -- but _fts5_query("")
+        returns '""' (an empty phrase literal), which FTS5 MATCH matches
+        ZERO rows against, not "everything". A pure filter query (no query
+        text) must fall back to a direct, unranked listing instead of
+        silently returning nothing."""
+        import uuid
+
+        from src.core.database import Ticket
+        from src.services.ticket_search_service import TicketSearchService
+
+        workflow_id = f"wf-{uuid.uuid4()}"
+        with db_manager.session_scope() as session:
+            session.add(Ticket(
+                id=f"ticket-{uuid.uuid4()}", workflow_id=workflow_id,
+                created_by_agent_id="agent-x", title="Unresolved bug",
+                description="d", ticket_type="bug", priority="medium",
+                status="backlog", is_resolved=False,
+            ))
+            session.add(Ticket(
+                id=f"ticket-{uuid.uuid4()}", workflow_id=workflow_id,
+                created_by_agent_id="agent-x", title="Already shipped bug",
+                description="d", ticket_type="bug", priority="medium",
+                status="shipped", is_resolved=True,
+            ))
+
+        results = await TicketSearchService.keyword_search(
+            keywords="", workflow_id=workflow_id, filters={"ticket_type": "bug"},
+        )
+
+        assert {r["title"] for r in results} == {"Unresolved bug", "Already shipped bug"}
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_is_resolved_filter(self, db_manager):
+        """The actual gap this fix closes: an agent's self-check needs
+        "give me open bug tickets" -- a resolution-state filter, not a
+        literal board-column string match (which is what "status" is).
+        Works with or without a free-text query."""
+        import uuid
+
+        from src.core.database import Ticket
+        from src.services.ticket_search_service import TicketSearchService
+
+        workflow_id = f"wf-{uuid.uuid4()}"
+        with db_manager.session_scope() as session:
+            session.add(Ticket(
+                id=f"ticket-{uuid.uuid4()}", workflow_id=workflow_id,
+                created_by_agent_id="agent-x", title="Needs action",
+                description="d", ticket_type="bug", priority="medium",
+                status="backlog", is_resolved=False,
+            ))
+            session.add(Ticket(
+                id=f"ticket-{uuid.uuid4()}", workflow_id=workflow_id,
+                created_by_agent_id="agent-x", title="Won't fix, resolved",
+                description="d", ticket_type="bug", priority="medium",
+                status="wontfix", is_resolved=True,
+            ))
+
+        results = await TicketSearchService.keyword_search(
+            keywords="", workflow_id=workflow_id,
+            filters={"ticket_type": "bug", "is_resolved": False},
+        )
+
+        assert [r["title"] for r in results] == ["Needs action"]
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_with_empty_query_returns_immediately(self):
+        """An empty/whitespace query has no meaningful direction to embed --
+        unlike keyword_search's deterministic empty-phrase-matches-nothing
+        behavior, a degenerate embedding still returns SOME top-K vector
+        hits, essentially arbitrary ones. Must short-circuit BEFORE ever
+        calling the embedding provider -- asserting the return value alone
+        isn't enough, since an unmocked provider call failing into the
+        except-block's keyword_search fallback (itself called with the same
+        empty string) would coincidentally also return [] for the wrong
+        reason; assert the provider is never even reached."""
+        from unittest.mock import patch
+
+        from src.services.ticket_search_service import TicketSearchService
+
+        with patch.object(
+            TicketSearchService, "_get_embedding_provider"
+        ) as mock_provider:
+            assert await TicketSearchService.semantic_search(
+                query_text="", workflow_id="wf-anything",
+            ) == []
+            assert await TicketSearchService.semantic_search(
+                query_text="   ", workflow_id="wf-anything",
+            ) == []
+            mock_provider.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_hybrid_search(self):
         """Test hybrid search (semantic + keyword)."""
         # This test would verify:

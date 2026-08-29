@@ -2510,7 +2510,7 @@ class TestMechanicalRecovery:
         """Regression: Agent.last_activity was ONLY touched by an MCP tool
         call (_touch_agent_activity, server.py) or a successful Guardian
         analysis cycle -- never by plain, visible tmux output changing. A
-        read-heavy phase (e.g. feature_review reading design.md + several
+        read-heavy phase (e.g. feature_review reading spec.md + several
         scope.md files before writing anything, with no MCP calls in
         between) could go 5+ minutes without either of those firing while
         genuinely, visibly working, and _audit_system_health's separate

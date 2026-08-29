@@ -78,8 +78,13 @@ additional_notes: |
   - What health checks should run post-deploy
 
   Also read from ./.hephaestus/:
-  - design.md — what was implemented
+  - spec.md — what was implemented
   - context.md — any deployment-related notes from prior phases
+
+  **SPEC KIT INPUT (if present):** if no file exists at the flat
+  `./.hephaestus/spec.md` path, this run's bug report came from a Spec Kit
+  feature directory — check `./.hephaestus/specs/<NNN-name>/spec.md`
+  instead (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`).
 
   ## STEP 3: VALIDATE PREREQUISITES
 

@@ -27,6 +27,16 @@ class AgentOutputCapture:
     """
 
     _STABILITY_CONFIRMATIONS = 3
+    # Cap on _live_backfill_cache -- nothing evicts an entry when its agent
+    # terminates (termination can happen via paths -- the orphan reaper,
+    # auto-restart -- that never call get_agent_output again for that
+    # agent_id, so a purely reactive evict-on-terminated-poll wouldn't
+    # catch every leak). This process-lifetime dict would otherwise grow
+    # monotonically against uptime x agent volume with no eviction at all,
+    # a slow OOM on a long-running backend. FIFO eviction (oldest entry
+    # first, relying on dict insertion order) is enough since each entry
+    # is write-once and never re-read after an agent goes stale.
+    _LIVE_BACKFILL_CACHE_MAX = 200
 
     def __init__(self, db_manager, tmux_server):
         self.db_manager = db_manager
@@ -36,7 +46,8 @@ class AgentOutputCapture:
         # Lazily-computed, process-lifetime cache of each live agent's raw-
         # transcript backfill -- see _get_live_transcript_backfill. Keyed
         # by agent_id, computed at most once per agent regardless of how
-        # many times get_agent_output is polled for it.
+        # many times get_agent_output is polled for it. Bounded by
+        # _LIVE_BACKFILL_CACHE_MAX (see that constant's comment).
         self._live_backfill_cache: Dict[str, str] = {}
 
     def get_agent_output(self, agent_id: str, lines: int = 200) -> str:
@@ -253,6 +264,9 @@ class AgentOutputCapture:
             logger.debug(f"[LIVE-BACKFILL] Failed for agent {agent_id}: {e}")
             backfill = ""
 
+        if len(self._live_backfill_cache) >= self._LIVE_BACKFILL_CACHE_MAX:
+            oldest_agent_id = next(iter(self._live_backfill_cache))
+            del self._live_backfill_cache[oldest_agent_id]
         self._live_backfill_cache[agent_id] = backfill
         return backfill
 
@@ -880,12 +894,51 @@ class AgentOutputCapture:
 
     @staticmethod
     def _append_lines(path: Path, new_lines: List[str]) -> None:
+        """Append newly-stable lines to clean_path, collapsing runs of
+        blank lines to a single one -- mirrors the rule
+        _read_transcript_log's own Spacing pass already applies to the raw-
+        reconstruction path (see that method), which this live-polling path
+        had no equivalent of. Applied here, at the single write choke-point
+        for clean_path, so every reader (this app's get_agent_output, and
+        tools/tmux-viewer's own reader of the same file) benefits without
+        duplicating the rule at each read site.
+
+        _poll_stable_transcript commits newly-stable content in small,
+        separately-timed batches -- often just one or two lines per poll --
+        so a run of blank lines can accumulate one commit at a time over an
+        agent's whole runtime rather than arriving all at once in a single
+        call. Collapsing only WITHIN this call's own new_lines would miss
+        that: a blank line committed by a previous poll, followed by
+        another blank line committed by this one, is still a run of two to
+        the reader. Checking the file's existing tail closes that gap.
+        """
         if not new_lines:
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # Cheap check of whatever's already on disk -- avoids reading a
+            # potentially large clean_path in full on every poll. A blank
+            # line already at the end (or an empty/nonexistent file, where
+            # a leading blank is pointless) must not be immediately
+            # followed by another one from this commit.
+            prev_blank = True
+            if path.exists() and path.stat().st_size > 0:
+                with open(path, "rb") as f:
+                    f.seek(max(0, path.stat().st_size - 4096))
+                    tail = f.read()
+                stripped_tail = tail.rstrip(b"\n")
+                prev_blank = stripped_tail == b"" or tail.endswith(b"\n\n")
+            collapsed: List[str] = []
+            for line in new_lines:
+                blank = not line
+                if blank and prev_blank:
+                    continue
+                collapsed.append(line)
+                prev_blank = blank
+            if not collapsed:
+                return
             with open(path, "a") as f:
-                f.write("\n".join(new_lines) + "\n")
+                f.write("\n".join(collapsed) + "\n")
         except Exception as e:
             logger.warning(f"[STABLE-TRANSCRIPT] Failed to append to {path}: {e}")
 

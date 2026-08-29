@@ -279,6 +279,66 @@ class TestResolvePhaseInputSuffix:
 
         assert found is None
 
+
+class TestResolvePhaseInputSpecKitDirectory:
+    """copy_speckit_feature copies a whole specs/<NNN-name>/ tree verbatim
+    (spec.md, plan.md, tasks.md, etc, exact filenames, no task-id suffix)
+    into .hephaestus/specs/<NNN-name>/ -- one level deeper than every other
+    location resolve_phase_input checks. Without a fallback for it, a Spec
+    Kit directory-sourced design's spec.md/plan.md/tasks.md permanently
+    shows [MISSING] in the INPUTS manifest and never gets named in the
+    /goal condition, even when it's right there on disk."""
+
+    def test_finds_spec_md_inside_a_speckit_feature_directory(self, tmp_path, monkeypatch):
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: [])
+        d = tmp_path / ".hephaestus" / "specs" / "001-my-feature"
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("spec content")
+
+        found = resolve_phase_input(str(tmp_path), "spec.md", workflow_id="wf-1")
+
+        assert found == d / "spec.md"
+
+    def test_finds_plan_md_inside_a_speckit_feature_directory(self, tmp_path, monkeypatch):
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: [])
+        d = tmp_path / ".hephaestus" / "specs" / "001-my-feature"
+        d.mkdir(parents=True)
+        (d / "plan.md").write_text("plan content")
+
+        found = resolve_phase_input(str(tmp_path), "plan.md", workflow_id="wf-1")
+
+        assert found == d / "plan.md"
+
+    def test_every_other_location_still_wins_over_the_specs_fallback(self, tmp_path, monkeypatch):
+        """The specs/ glob is a last resort -- a real flat-location file
+        (the common, non-Spec-Kit case) must not be bypassed in favor of
+        it."""
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: [])
+        (tmp_path / ".hephaestus" / "spec.md").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".hephaestus" / "spec.md").write_text("hand-written spec")
+        speckit_dir = tmp_path / ".hephaestus" / "specs" / "001-my-feature"
+        speckit_dir.mkdir(parents=True)
+        (speckit_dir / "spec.md").write_text("speckit spec")
+
+        found = resolve_phase_input(str(tmp_path), "spec.md", workflow_id="wf-1")
+
+        assert found == tmp_path / ".hephaestus" / "spec.md"
+
+    def test_no_specs_directory_still_returns_none(self, tmp_path, monkeypatch):
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: [])
+
+        found = resolve_phase_input(str(tmp_path), "spec.md", workflow_id="wf-1")
+
+        assert found is None
+
     def test_returns_none_when_nothing_exists(self, tmp_path, monkeypatch):
         import src.autopilot.spec as spec_module
 

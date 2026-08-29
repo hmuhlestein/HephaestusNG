@@ -45,9 +45,25 @@ def test_config_custom_values():
     del os.environ["OPENAI_API_KEY"]
 
 
-def test_config_validation_missing_api_key():
-    """Test that validation fails when API key is missing."""
-    config = HephaestusConfig(llm_provider="openai")
+def test_config_validation_missing_api_key_falls_back_to_cli(caplog):
+    """A missing API key must not be fatal when default_cli_tool is
+    "claude": CLIFallbackChatModel shells out to the claude CLI for real
+    LLM calls instead, so refusing to even start the pipeline over a
+    missing key here throws away a fallback every downstream caller
+    already has. Warn instead of raising."""
+    config = HephaestusConfig(llm_provider="openai", default_cli_tool="claude")
+
+    config.validate()
+
+    assert "OPENAI_API_KEY" in caplog.text
+    assert "claude CLI" in caplog.text
+
+
+def test_config_validation_missing_api_key_raises_without_cli_fallback():
+    """CLIFallbackChatModel only implements Claude's non-interactive `-p`
+    mode -- a non-claude default_cli_tool has no fallback to fall back to,
+    so a missing key must still be fatal."""
+    config = HephaestusConfig(llm_provider="openai", default_cli_tool="codex")
 
     with pytest.raises(ValueError, match="OPENAI_API_KEY must be set"):
         config.validate()

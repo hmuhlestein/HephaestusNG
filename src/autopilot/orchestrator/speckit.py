@@ -1,7 +1,7 @@
 """Spec Kit feature detection and selection (REQ-01..REQ-15, REQ-21..23).
 
 Detects `specs/<NNN>-<name>/` directories (Spec Kit's own convention) as an
-alternative input to a hand-written design.md. Discovery/selection here is
+alternative input to a hand-written spec.md. Discovery/selection here is
 pure and DB-free where possible: discover_speckit_features needs a Session
 to resolve repo attribution; resolve_feature_selection does not.
 """
@@ -47,7 +47,7 @@ class Candidate:
 
     def label(self) -> str:
         if self.is_design_md or self.feature is None:
-            return "design.md"
+            return "spec.md"
         return f"{self.feature.number}-{self.feature.slug}"
 
 
@@ -221,8 +221,8 @@ def resolve_feature_selection(
 
     if not features:
         if not design_md_present:
-            raise SpecKitSelectionError("NOT_FOUND", "No Spec Kit feature or design.md found", [])
-        raise SpecKitSelectionError("NOT_FOUND", "No Spec Kit feature found (design.md exists -- use that path directly)", [])
+            raise SpecKitSelectionError("NOT_FOUND", "No Spec Kit feature or spec.md found", [])
+        raise SpecKitSelectionError("NOT_FOUND", "No Spec Kit feature found (spec.md exists -- use that path directly)", [])
 
     if len(features) >= 2:
         candidates = [Candidate(feature=f) for f in features]
@@ -235,7 +235,7 @@ def resolve_feature_selection(
     if design_md_present:
         raise SpecKitSelectionError(
             "BOTH_INPUTS_PRESENT",
-            "Both a Spec Kit feature and design.md are present; pass --feature or a design document path to select one",
+            "Both a Spec Kit feature and spec.md are present; pass --feature or a design document path to select one",
             [Candidate(feature=features[0]), Candidate(feature=None, is_design_md=True)],
         )
 

@@ -1932,7 +1932,7 @@ class PhaseManager:
     # "Wrote N context file(s) to .../.hephaestus") -- never a phase's own
     # declared output, so _known_output_basenames below can't discover them
     # by iterating Phase.outputs.
-    _CONTEXT_FILE_BASENAMES = {"design.md", "context.md"}
+    _CONTEXT_FILE_BASENAMES = {"spec.md", "context.md"}
 
     def _known_output_basenames(self, session, workflow_id: str) -> set:
         """Basenames of every file this workflow's own phases are actually

@@ -237,7 +237,7 @@ class LLMConfig(_ConfigSection):
             # stricter than that actual runtime behavior and crashed the
             # whole server before _create_model ever got a chance to fall
             # back -- the graceful path existed but was unreachable.
-            logger.warning(
+            logger.info(
                 "OPENROUTER_API_KEY not set -- LLM-backed components (arbitration, "
                 "guardian, etc.) will fall back to the configured CLI tool "
                 "(agents.default_cli_tool) instead of calling OpenRouter directly."

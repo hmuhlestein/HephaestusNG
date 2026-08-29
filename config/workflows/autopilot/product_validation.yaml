@@ -70,15 +70,21 @@ additional_notes: |
     duplicate/concurrent dispatch for this same phase then writes to a
     DIFFERENT suffixed file instead of racing yours, and the gate reads
     your own task's suffixed file specifically, not a bare validation.md.
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" (validation.md, etc.).
   - Code goes in "Project Path" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
-  Read the original design document again from ./.hephaestus/design.md.
+  Read the original design document again from ./.hephaestus/spec.md.
   This is your SOURCE OF TRUTH — not requirements.md, not architecture.md.
   Those documents are derived artifacts and may have expanded beyond the design scope.
+
+  **SPEC KIT INPUT (if present):** if no file exists at the flat
+  `./.hephaestus/spec.md` path, this run's design doc came from a Spec Kit
+  feature directory — check `./.hephaestus/specs/<NNN-name>/spec.md`
+  instead (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`)
+  and treat it as the same source of truth for this scope check.
 
   SCOPE CHECK (do this immediately after reading the design doc):
   List every function/feature/file the design doc requires. Then list what was
