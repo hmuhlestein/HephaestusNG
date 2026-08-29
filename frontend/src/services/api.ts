@@ -894,6 +894,24 @@ export const apiService = {
     return data;
   },
 
+  getAutopilotProjectSpeckitReadiness: async (
+    projectId: string,
+    feature: { number: string; repoLabel: string | null },
+  ): Promise<{ features: { number: string; slug: string; repoLabel: string | null; needsClarification: string[]; missingFiles: string[] }[] }> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/speckit/check`, {
+      params: { number: feature.number, repo_label: feature.repoLabel ?? undefined },
+    });
+    return {
+      features: data.features.map((f: any) => ({
+        number: f.number,
+        slug: f.slug,
+        repoLabel: f.repo_label,
+        needsClarification: f.needs_clarification,
+        missingFiles: f.missing_files,
+      })),
+    };
+  },
+
   reorderAutopilotProjectDesigns: async (projectId: string, designIds: string[]): Promise<void> => {
     await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/reorder`, { design_ids: designIds });
   },

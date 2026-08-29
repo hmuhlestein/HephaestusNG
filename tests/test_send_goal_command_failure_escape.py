@@ -18,7 +18,7 @@ call satisfies the goal too.
 """
 
 import uuid
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -161,3 +161,29 @@ class TestSendGoalCommandNamesInputFiles:
 
         sent_condition = cli_agent.format_goal_command.call_args[0][0]
         assert "actually read and resolved" not in sent_condition
+
+    @pytest.mark.asyncio
+    async def test_input_resolution_failure_does_not_break_goal_delivery(
+        self, db_manager, tmp_path, _task_with_phase
+    ):
+        """Adversarial-review gap closed (ticket-da4b4448): the enrichment
+        block is wrapped in try/except with logger.warning on failure, but
+        no test previously forced that path. If load_phase_inputs (or any
+        other call inside the try) raises, /goal delivery must still
+        proceed with the unmodified base condition -- never crash task
+        launch or silently drop the goal command entirely."""
+        pipeline = _launch_pipeline(db_manager)
+        pane = Mock()
+        cli_agent = Mock(needs_chunked_delivery=False)
+        cli_agent.format_goal_command = Mock(side_effect=lambda c: f"/goal {c}")
+
+        with patch(
+            "src.autopilot.spec.load_phase_inputs",
+            side_effect=RuntimeError("boom"),
+        ):
+            await pipeline._send_goal_command(pane, cli_agent, _task_with_phase, "phase")
+
+        cli_agent.format_goal_command.assert_called_once()
+        sent_condition = cli_agent.format_goal_command.call_args[0][0]
+        assert "actually read and resolved" not in sent_condition
+        assert "Task marked as done" in sent_condition

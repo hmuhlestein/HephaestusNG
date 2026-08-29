@@ -501,6 +501,30 @@ async def browse_project_files(project_id: str, path: str = Query("")):
     return BrowseResult(path=rel_path, parent=parent, entries=entries)
 
 
+def _discover_features_or_404(db, project_id: str):
+    """Shared by both /speckit/features and /speckit/check: 404 on unknown
+    project_id, else (features, primary_repo_id). Kept in one place so the
+    primary-repo resolution used by both routes' repo_label semantics can't
+    drift out of sync again (adversarial review NIT on commit 2edde877).
+
+    Canonical interface for this route pair's repo_label semantics -- a
+    future architecture pass for either route should start from this
+    shared helper, not from independent inline lookups (architectural
+    review FIX-2 on this feature: the original architecture specified two
+    separate inline lookups, which is exactly what let the two routes'
+    repo_label handling drift out of sync in the first place)."""
+    from src.autopilot.orchestrator.speckit import discover_speckit_features
+    from src.core.database import AutopilotProject, ProjectRepo
+
+    proj = db.query(AutopilotProject).get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    features = discover_speckit_features(db, project_id, proj.base_dir)
+    primary_repo = db.query(ProjectRepo).filter_by(project_id=project_id, is_primary=True).first()
+    primary_repo_id = primary_repo.id if primary_repo else None
+    return features, primary_repo_id
+
+
 @router.get("/projects/{project_id}/speckit/features")
 async def list_project_speckit_features(project_id: str):
     """Dashboard picker's data source (REQ-10), project_id-scoped to match
@@ -508,16 +532,10 @@ async def list_project_speckit_features(project_id: str):
     hand, not a raw project_path. Thin wrapper around
     speckit.discover_speckit_features; same shape as
     control_routes.list_speckit_features."""
-    from src.autopilot.orchestrator.speckit import discover_speckit_features
-    from src.core.database import AutopilotProject, ProjectRepo, get_db
+    from src.core.database import get_db
 
     with get_db() as db:
-        proj = db.query(AutopilotProject).get(project_id)
-        if not proj:
-            raise HTTPException(404, "Project not found")
-        features = discover_speckit_features(db, project_id, proj.base_dir)
-        primary_repo = db.query(ProjectRepo).filter_by(project_id=project_id, is_primary=True).first()
-        primary_repo_id = primary_repo.id if primary_repo else None
+        features, primary_repo_id = _discover_features_or_404(db, project_id)
 
     return [
         {
@@ -530,12 +548,72 @@ async def list_project_speckit_features(project_id: str):
             # reach base_dir/the primary repo, so this is what the dashboard
             # picker actually needs to decide "selectable here" vs "needs
             # --repo on the CLI" -- not "is this project multi-repo at all."
+            # check_project_speckit_readiness below MUST resolve a `None`
+            # it receives back from the frontend the same way (as "the
+            # primary repo"), not as "any repo_label" -- see that route's
+            # own docstring.
             "repoLabel": None if f.repo_id == primary_repo_id else f.repo_label,
             "hasPlan": f.plan_path is not None,
             "hasTasks": f.tasks_path is not None,
         }
         for f in features
     ]
+
+
+@router.get("/projects/{project_id}/speckit/check")
+async def check_project_speckit_readiness(
+    project_id: str,
+    number: Optional[str] = Query(None),
+    repo_label: Optional[str] = Query(None),
+):
+    """REQ-01: project-id-keyed voluntary readiness check, mirroring
+    control_routes.speckit_check's shape. `number` optional -- omitted
+    checks every discovered feature; provided, scopes to the matching
+    feature(s). No resolve_feature_selection/ambiguity handling needed
+    here (unlike the CLI's --feature/--repo path) -- the dashboard always
+    calls this with an exact (number, repoLabel) pair taken straight from
+    a prior /speckit/features response. That response nulls out repoLabel
+    for the PRIMARY repo's own features (see list_project_speckit_features),
+    so a `repo_label=None` here means "the project's primary repo", not
+    "any repo" -- adversarial review BLOCKER on commit 2edde877: matching
+    `None` against `SpecKitFeature.repo_label`'s real (unmasked) value 404'd
+    every primary-repo feature once any ProjectRepo row existed. Resolving
+    `None` to `f.repo_id == primary_repo_id` instead fixes that without
+    ever matching "any repo" -- important because a bare `number` can
+    exist in more than one repo (each repo numbers its own features
+    independently), so treating `None` as a wildcard would silently merge
+    unrelated features across repos instead of 404ing.
+    Read-only. Never mutates state. Never affects /start.
+    """
+    from src.autopilot.orchestrator.speckit import check_feature_readiness
+    from src.core.database import get_db
+
+    with get_db() as db:
+        features, primary_repo_id = _discover_features_or_404(db, project_id)
+
+    if number is not None:
+        if repo_label is not None:
+            targets = [f for f in features if f.number == number and f.repo_label == repo_label]
+        else:
+            targets = [f for f in features if f.number == number and f.repo_id == primary_repo_id]
+        if not targets:
+            raise HTTPException(404, "Spec Kit feature not found")
+    else:
+        targets = features
+
+    reports = [check_feature_readiness(f) for f in targets]
+    return {
+        "features": [
+            {
+                "number": r.feature.number,
+                "slug": r.feature.slug,
+                "repo_label": r.feature.repo_label,
+                "needs_clarification": r.needs_clarification,
+                "missing_files": r.missing_files,
+            }
+            for r in reports
+        ]
+    }
 
 
 @router.get("/projects/{project_id}/browse/content")
