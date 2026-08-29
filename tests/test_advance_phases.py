@@ -719,6 +719,64 @@ class TestCaseInProgressNoTasks:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.started_at <= real_task_created_at
 
+    def test_does_not_duplicate_a_real_task_when_skew_exceeds_the_correction_window(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, observed live: workflow 0be376f2's product_requirements
+        phase got a duplicate task (abf3f36f) ~15s after the real one
+        (d66b39ab), despite _correct_skewed_cycle_start existing
+        specifically to catch this. Root cause: PhaseManager._start_phase
+        stamps execution.started_at = utc_now() at WORKFLOW CREATION time
+        (before the real task even exists) and flips status to
+        "in_progress" -- so _release_phase_task_creation_claim's own
+        anchoring-to-the-real-task's-created_at is gated on status in
+        ("pending", "completed", "skipped"), which is already false by the
+        time it runs, and never fires. If the resulting skew exceeds
+        _correct_skewed_cycle_start's 10s window (a slow enrichment/
+        embedding/dedup pass in create_task easily can), the cycle-scoped
+        task_count read misses the real task -- and so does a re-check
+        that reuses the same cycle_filter. This is the case the re-check's
+        own unscoped fix (mirroring _case_start_first_phase's identical
+        fix) exists for: it must catch the real task regardless of
+        whatever skew fooled the cycle-scoped read above it."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks, _get_phase_statuses
+
+        real_task_created_at = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            # Beyond _correct_skewed_cycle_start's 10s skew_floor -- this
+            # skew survives that correction and reaches the cycle-scoped
+            # task_count read (and, without this fix, the re-check) unfixed.
+            execution.started_at = real_task_created_at + timedelta(seconds=15)
+            session.add(Task(
+                id="task-real-just-created",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="pending",
+                created_at=real_task_created_at,
+            ))
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True) as mock_create:
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
+                assert result is None
+                mock_create.assert_not_called()
+
+        with db_manager.session_scope() as session:
+            # The real task must still be the only one -- no duplicate,
+            # and the claim taken (since task_count's own scoped read saw
+            # zero) must have been released again by the unscoped re-check.
+            tasks = session.query(Task).filter_by(phase_id="phase-1").all()
+            assert len(tasks) == 1
+            assert tasks[0].id == "task-real-just-created"
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
+
     def test_creates_task_when_the_only_task_is_duplicated_even_within_the_cycle(
         self, db_manager, sample_workflow
     ):
