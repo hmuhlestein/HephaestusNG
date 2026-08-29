@@ -69,6 +69,11 @@ class AgentOutputCapture:
             # _get_terminated_agent_output for why that's a real gap, not
             # a hypothetical one.
             if agent.status == "terminated":
+                # Evict this agent's entry now that it's terminal -- the
+                # live backfill is never read again once this branch is
+                # reached, and this cache is process-lifetime with no other
+                # eviction path (see _get_live_transcript_backfill).
+                self._live_backfill_cache.pop(agent_id, None)
                 return self._get_terminated_agent_output(agent, agent_id, session, lines)
 
             # Live agent: the stability-tracked "clean" transcript (tmux's

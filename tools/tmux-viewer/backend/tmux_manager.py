@@ -422,6 +422,11 @@ class TmuxSessionManager:
         except Exception as e:
             logger.error(f"Failed to kill session '{session_name}': {e}")
             return False
+        finally:
+            # Evict this session's backfill entry -- it's process-lifetime
+            # with no other eviction path (see _get_raw_transcript_backfill)
+            # and is never read again once the session is gone.
+            self._transcript_backfill_cache.pop(session_name, None)
 
     def list_sessions(self, prefix_filter: Optional[str] = None) -> List[Dict]:
         """List all tmux sessions, optionally filtered by prefix.

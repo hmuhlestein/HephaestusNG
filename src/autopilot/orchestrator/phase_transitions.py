@@ -1084,9 +1084,22 @@ def _release_stale_task_creation_claims(db, workflow_id: str, logger: "Orchestra
     )
     for execution in stale_executions:
         phase = db.query(Phase).filter_by(id=execution.phase_id).first()
+        phase_label = phase.name if phase else execution.phase_id
+        # An arbiter dispatch reuses this same claim to mark "arbitration in
+        # flight" (see _phase_has_arbitration_in_flight's docstring) and can
+        # legitimately run past CLAIM_STALE_TIMEOUT_SECONDS -- clearing the
+        # claim out from under it drops the arbiter's eventual decision the
+        # same way the millisecond-scale race this self-heal exists for did.
+        # Leave it alone; _maybe_resolve_arbitration's own dead-agent self-heal
+        # (arbitration.py) owns cleanup for a genuinely stuck arbiter.
+        if _phase_has_arbitration_in_flight(db, execution.phase_id):
+            logger.warning(
+                f"[PHASE-ADVANCE] {phase_label}: task_creation_claimed_at is stale but arbitration is still in flight -- leaving claim in place"
+            )
+            continue
         latest_task = db.query(Task).filter_by(phase_id=execution.phase_id).order_by(Task.created_at.desc()).first()
         logger.warning(
-            f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: task_creation_claimed_at held with no release -- clearing stale claim ({'task exists' if latest_task else 'no task yet'})"
+            f"[PHASE-ADVANCE] {phase_label}: task_creation_claimed_at held with no release -- clearing stale claim ({'task exists' if latest_task else 'no task yet'})"
         )
         _clear_stale_task_creation_claim(db, execution.phase_id, repair_status=True)
 
