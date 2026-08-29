@@ -3178,9 +3178,9 @@ def _create_corrective_task_body(
         # rather than inlining feedback, for the same reason: keeps /goal
         # short and sends the agent back to the full, authoritative detail.
         goal_def = (
-            f"{done_def} AND this specific validation failure has been "
-            f"resolved: {feedback} (full detail in "
-            f".hephaestus/tasks/{task_id}.md if unsure)"
+            f"{done_def} AND the specific validation failure described in "
+            f".hephaestus/tasks/{task_id}.md has been resolved -- read that "
+            "file and fix what it identifies"
         )
 
         task = Task(
