@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket, Settings, Wifi, WifiOff, Sun, Moon } from 'lucide-react';
 import { useWebSocket } from '@/context/WebSocketContext';
@@ -16,6 +16,7 @@ const Layout: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
   const { selectProject } = useProject();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // Global (not per-project) check for a pending human_input_required
   // request -- the autopilot orchestrator is a single process, so this
@@ -68,6 +69,14 @@ const Layout: React.FC = () => {
       { to: '/graph', icon: GitBranch, label: 'Graph' },
       { to: '/observability', icon: Monitor, label: 'Observability' },
     ];
+
+  // Longest-prefix match against navItems -- '/' only matches the exact
+  // root (every other path also starts with '/'), everything else matches
+  // its own path or a nested route under it (e.g. '/agents/:agentId').
+  const currentPageTitle = [...navItems]
+    .sort((a, b) => b.to.length - a.to.length)
+    .find((item) => (item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)))
+    ?.label ?? 'HephaestusNG';
 
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
@@ -164,7 +173,7 @@ const Layout: React.FC = () => {
             <div className="px-8 py-4 flex items-center justify-between">
               <div className="flex items-center">
                 <Activity className="w-5 h-5 mr-2 text-gray-600 dark:text-gray-400" />
-                <span className="text-gray-800 dark:text-gray-100 font-medium">System Overview</span>
+                <span className="text-gray-800 dark:text-gray-100 font-medium">{currentPageTitle}</span>
               </div>
               <div className="flex items-center space-x-2">
                 <button
