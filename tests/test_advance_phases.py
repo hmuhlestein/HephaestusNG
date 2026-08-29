@@ -2516,6 +2516,46 @@ class TestReleaseStaleTaskCreationClaims:
             assert execution.task_creation_claimed_at is None
             assert execution.status == "pending"  # unchanged -- no task to justify the flip
 
+    def test_stale_claim_with_in_flight_arbitration_is_left_alone(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, found by adversarial review of the fix above: an
+        arbiter is a real LLM-driven agent dispatch (spawn, read context,
+        reason, write arbitration_result.json) that can legitimately run
+        longer than CLAIM_STALE_TIMEOUT_SECONDS (8 minutes) -- this sweep
+        must not clear its claim just because it's stale by the clock. A
+        claim reused by a still-running arbitration is not the same as a
+        genuinely abandoned one; clearing it here reproduces the exact
+        silently-dropped-decision bug _phase_has_arbitration_in_flight's
+        other two call sites were added to fix, just on a longer clock."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            _release_stale_task_creation_claims,
+        )
+        from src.core.database import PhaseExecution
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-arbitration-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="Arbitrate stuck phase: requirements",
+                done_definition="d", status="pending",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+            ))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            _release_stale_task_creation_claims(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+
     def test_recent_claim_is_left_alone(self, db_manager, sample_workflow):
         """A claim well within CLAIM_STALE_TIMEOUT_SECONDS is exactly the
         legitimate in-flight case (e.g. mid-arbitration) this guard exists
