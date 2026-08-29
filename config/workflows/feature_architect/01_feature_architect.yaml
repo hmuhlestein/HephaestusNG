@@ -24,19 +24,19 @@ additional_notes: |
   discrete, implementable features with clear boundaries, dependencies, and scope documents.
 
   ## Input
-  - Design document at: ./.hephaestus/design.md (copied into your worktree at launch)
+  - Design document at: ./.hephaestus/spec.md (copied into your worktree at launch)
   - Project path: {project_path}
   - Design ID: {design_id}
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an
   isolated git worktree). All file paths are relative to your cwd. Do NOT read
   from the parent repo's .hephaestus/specs/ directory — the design document
-  is already at ./.hephaestus/design.md in your worktree.
+  is already at ./.hephaestus/spec.md in your worktree.
 
   ## Your Task
 
   ### Step 1: Read and Understand the Design Document
-  Read ./.hephaestus/design.md. Understand:
+  Read ./.hephaestus/spec.md. Understand:
   - What is being built
   - The major functional areas
   - Integration points
@@ -62,8 +62,8 @@ additional_notes: |
   This composes with, and does not replace, the existing multi-repo
   repo-binding rules below (`repo_label`, one repo per feature,
   cross-repo ordering via `depends_on`) — those rules apply unchanged
-  whether the input is Spec Kit or a hand-written design.md. If no
-  `spec.md` is found, proceed exactly as before using ./.hephaestus/design.md.
+  whether the input is Spec Kit or a hand-written spec.md. If no
+  `spec.md` is found, proceed exactly as before using ./.hephaestus/spec.md.
 
   ### Step 2: Explore the Existing Codebase
   Before decomposing, look at what's actually there:

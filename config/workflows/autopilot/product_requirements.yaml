@@ -44,19 +44,19 @@ additional_notes: |
   ## STEP -1: DETECT SPEC KIT INPUT
 
   Before anything else, check whether this run was started from a Spec Kit
-  feature instead of a hand-written design.md:
+  feature instead of a hand-written spec.md:
 
   ```bash
   find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null
   ```
 
   If a `spec.md` exists under `./.hephaestus/specs/<NNN-name>/`, read THAT
-  file as your primary input instead of `./.hephaestus/design.md` for every
+  file as your primary input instead of `./.hephaestus/spec.md` for every
   step below that says "read the design document" (REQ-04). Spec Kit's
   `spec.md` already carries prioritized (P1/P2/P3) user stories, functional
   requirements (`FR-NNN`), and measurable success criteria — treat it as
-  authoritative in the same role design.md plays for a hand-written input.
-  If no `spec.md` is present, proceed exactly as before (design.md is your
+  authoritative in the same role spec.md plays for a hand-written input.
+  If no `spec.md` is present, proceed exactly as before (spec.md is your
   input).
 
   ## STEP 0: DETECT TECH DEBT FLOW (AUTO-SWITCH)
@@ -65,14 +65,14 @@ additional_notes: |
 
   ```bash
   # Check design doc for tech debt indicators
-  head -50 ./.hephaestus/design.md 2>/dev/null | grep -i "tech.debt\|refactor\|pipeline.improvement\|open.ticket\|bug.fix" && echo "TECH_DEBT_INDICATORS_FOUND"
+  head -50 ./.hephaestus/spec.md 2>/dev/null | grep -i "tech.debt\|refactor\|pipeline.improvement\|open.ticket\|bug.fix" && echo "TECH_DEBT_INDICATORS_FOUND"
   ```
 
   Also use MCP tool to check for open tickets:
   ```python
   # Check for open bug tickets and tech debt items
-  result = heph_search_tickets(status="open", ticket_type="bug")
-  result2 = heph_search_tickets(status="open", tags=["tech-debt"])
+  result = heph_search_tickets(is_resolved=False, ticket_type="bug")
+  result2 = heph_search_tickets(is_resolved=False, tags=["tech-debt"])
   ```
 
   If the design doc is about tech debt/refactoring OR there are significant
@@ -95,7 +95,7 @@ additional_notes: |
   before any context gathering to avoid contamination from stale project files.
 
   0a. READ THE DESIGN DOCUMENT FIRST:
-     Read ./.hephaestus/design.md (or the "Design Document:" path from your
+     Read ./.hephaestus/spec.md (or the "Design Document:" path from your
      task description). Understand what THIS feature requires BEFORE looking
      at existing code or docs. Previous runs or stale files may contain
      conflicting context — the design doc overrides everything.
@@ -172,10 +172,10 @@ additional_notes: |
 
   EXCEPTION -- if you genuinely disagree with a specific out-of-scope item
   (e.g. you believe it's necessary for a reason scope_review's comparison
-  against design.md wouldn't have surfaced, like a security or correctness
+  against spec.md wouldn't have surfaced, like a security or correctness
   concern), you may keep it -- but ONLY if you add a `## Scope
   Disagreements` section to requirements.md explaining, per REQ/NFR ID,
-  EXACTLY why you believe it should stay despite design.md not covering it.
+  EXACTLY why you believe it should stay despite spec.md not covering it.
   Cite the specific reasoning (not "seems reasonable" or "good practice" --
   a concrete justification scope_review can evaluate and either accept or
   rebut). Bumping the version number and resubmitting the SAME unchanged
@@ -227,7 +227,7 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALWAYS use the "Artifacts Path" value for ALL generated docs (.md, .json, .txt).
   - ALWAYS use the "Project Path" value for ALL implementation code.
@@ -256,7 +256,7 @@ additional_notes: |
 
   **TRACEABILITY (MANDATORY):** every `REQ-XX` row's `Source` column MUST
   cite the exact origin it was derived from — a Spec Kit `FR-NNN`/`US-N`/
-  `SC-NNN` ID when the input was `spec.md`, or the `design.md` section name
+  `SC-NNN` ID when the input was `spec.md`, or the `spec.md` section name
   when the input was hand-written. This makes traceability mechanically
   diffable: every source ID that never appears in a `Source` citation is a
   silent drop.
@@ -265,7 +265,7 @@ additional_notes: |
   Organize requirements as prioritized, independently-testable user stories
   (`P1`/`P2`/`P3`, highest priority first) with measurable, technology-
   agnostic success criteria — Spec Kit's own quality bar, applied whether
-  the source was `spec.md` or a hand-written `design.md` with no explicit
+  the source was `spec.md` or a hand-written `spec.md` with no explicit
   priorities of its own.
 
   **NEEDS CLARIFICATION (MANDATORY, bounded):** for a requirement that is
@@ -288,8 +288,8 @@ additional_notes: |
   ### Functional Requirements
   | REQ ID | Requirement | Acceptance Criteria | Priority | Source | Integration |
   |--------|-------------|---------------------|----------|--------|-------------|
-  | REQ-01 | [Requirement] | [criteria] | P1/P2/P3 | [FR-NNN / design.md section] | [components] |
-  | REQ-02 | [Requirement] | [criteria] | P1/P2/P3 | [FR-NNN / design.md section] | [components] |
+  | REQ-01 | [Requirement] | [criteria] | P1/P2/P3 | [FR-NNN / spec.md section] | [components] |
+  | REQ-02 | [Requirement] | [criteria] | P1/P2/P3 | [FR-NNN / spec.md section] | [components] |
 
   ### Non-Functional Requirements
   | REQ ID | Category | Requirement | Target |

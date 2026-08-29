@@ -1157,7 +1157,7 @@ class TestInputManifest:
                 produced.add(Path(e).name)
         # Seeded into the worktree by WorktreeManager's context_files rather
         # than produced by a phase.
-        produced |= {"design.md", "context.md", "qa_spec.json"}
+        produced |= {"spec.md", "context.md", "qa_spec.json"}
 
         for phase, declared in (cfg.get("phase_inputs") or {}).items():
             for kind in ("required", "optional"):

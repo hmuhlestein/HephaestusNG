@@ -423,6 +423,120 @@ async def test_change_status_unblocked_ticket(
 
 
 @pytest.mark.asyncio
+async def test_change_status_to_a_resolving_flagged_column_marks_resolved(
+    db_manager, test_workflow, test_agent
+):
+    """A column doesn't have to be the board's literal last one to resolve
+    a ticket -- any column marked "resolving": true does too. This is the
+    honest close-without-a-fix path: a ticket with no available fix right
+    now (no upstream patch published, needs a separate human-supervised
+    pass, etc.) can move to a "Won't Fix" column instead of being forced
+    through the board's real last column ("shipped"), which would falsely
+    claim the underlying issue was fixed."""
+    session = db_manager.get_session()
+    try:
+        board = BoardConfig(
+            id="board-wontfix",
+            workflow_id=test_workflow,
+            name="Board with a resolving non-last column",
+            columns=[
+                {"id": "backlog", "name": "Backlog", "order": 0},
+                {"id": "in_progress", "name": "In Progress", "order": 1},
+                {"id": "wontfix", "name": "Won't Fix", "order": 2, "resolving": True},
+                {"id": "shipped", "name": "Shipped", "order": 3},
+            ],
+            ticket_types=["bug", "task"],
+            default_ticket_type="task",
+            initial_status="backlog",
+        )
+        session.add(board)
+        session.commit()
+    finally:
+        session.close()
+
+    ticket = await TicketService.create_ticket(
+        workflow_id=test_workflow,
+        agent_id=test_agent,
+        title="No upstream fix available",
+        description="ecdsa has no published fix",
+        ticket_type="bug",
+        priority="medium",
+    )
+
+    result = await TicketService.change_status(
+        ticket_id=ticket["ticket_id"],
+        agent_id=test_agent,
+        new_status="wontfix",
+        comment="No upstream fix exists for this CVE",
+    )
+
+    assert result["success"] is True
+
+    session = db_manager.get_session()
+    try:
+        updated = session.query(Ticket).filter_by(id=ticket["ticket_id"]).first()
+        assert updated.status == "wontfix"
+        assert updated.is_resolved is True
+        assert updated.resolved_at is not None
+    finally:
+        session.close()
+
+
+@pytest.mark.asyncio
+async def test_change_status_to_a_plain_non_resolving_column_stays_unresolved(
+    db_manager, test_workflow, test_agent
+):
+    """Control for the test above: a column that is neither the board's
+    last one nor explicitly marked "resolving" must not mark the ticket
+    resolved -- otherwise the "resolving" flag would be meaningless (every
+    column would resolve) rather than an opt-in."""
+    session = db_manager.get_session()
+    try:
+        board = BoardConfig(
+            id="board-wontfix-2",
+            workflow_id=test_workflow,
+            name="Board with a resolving non-last column",
+            columns=[
+                {"id": "backlog", "name": "Backlog", "order": 0},
+                {"id": "in_progress", "name": "In Progress", "order": 1},
+                {"id": "wontfix", "name": "Won't Fix", "order": 2, "resolving": True},
+                {"id": "shipped", "name": "Shipped", "order": 3},
+            ],
+            ticket_types=["bug", "task"],
+            default_ticket_type="task",
+            initial_status="backlog",
+        )
+        session.add(board)
+        session.commit()
+    finally:
+        session.close()
+
+    ticket = await TicketService.create_ticket(
+        workflow_id=test_workflow,
+        agent_id=test_agent,
+        title="Still being worked",
+        description="d",
+        ticket_type="bug",
+        priority="medium",
+    )
+
+    await TicketService.change_status(
+        ticket_id=ticket["ticket_id"],
+        agent_id=test_agent,
+        new_status="in_progress",
+        comment="Picking this up",
+    )
+
+    session = db_manager.get_session()
+    try:
+        updated = session.query(Ticket).filter_by(id=ticket["ticket_id"]).first()
+        assert updated.status == "in_progress"
+        assert updated.is_resolved is False
+    finally:
+        session.close()
+
+
+@pytest.mark.asyncio
 async def test_add_comment(db_manager, test_workflow, test_agent, test_board_config):
     """Test adding comments to a ticket."""
     # Create ticket

@@ -50,7 +50,7 @@ def test_new_worktree_is_not_discarded_back_to_project_path(tmp_path):
     assert db_manager is not None
 
     # The design document must actually have been copied into the worktree.
-    copied = expected_worktree_path / ".hephaestus" / "design.md"
+    copied = expected_worktree_path / ".hephaestus" / "spec.md"
     assert copied.read_text() == "# Design"
 
 

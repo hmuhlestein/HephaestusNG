@@ -218,7 +218,7 @@ class SimpleConfig:
                 if strict:
                     raise ValueError(f"Missing API keys: {', '.join(missing_keys)}")
                 else:
-                    logger.warning(
+                    logger.info(
                         f"Some API keys are missing: {', '.join(missing_keys)}. "
                         "Components using these providers will use fallback behavior."
                     )

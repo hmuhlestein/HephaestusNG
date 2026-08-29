@@ -82,11 +82,18 @@ additional_notes: |
   If TESTING.md EXISTS:
     → Read it fully, then execute these steps IN ORDER:
 
-    0. **Scope check** — read ./.hephaestus/design.md and list every function/file
+    0. **Scope check** — read ./.hephaestus/spec.md and list every function/file
        the design requires. Then list what is actually implemented. Flag any
        implemented items NOT in the design as scope violations (critical issue).
        Also verify the seeded test file matches the design doc's test section —
        if it was replaced or modified, that is a critical issue.
+       **SPEC KIT INPUT (if present):** if no file exists at the flat
+       `./.hephaestus/spec.md` path, this run's design doc came from a Spec
+       Kit feature directory — check `./.hephaestus/specs/<NNN-name>/spec.md`
+       instead (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`)
+       and use it as the design for this scope check. Also check that same
+       directory for `tasks.md` — its acceptance-criteria/task list is
+       additional, supplementary scope context alongside spec.md.
 
     1. **Run the application** — follow the "How to Run the Application" section.
        Run the actual code, not just tests. Capture stdout and any log files it writes.
@@ -123,7 +130,7 @@ additional_notes: |
     dispatch for this same phase then writes to a DIFFERENT suffixed file
     instead of racing yours, and the gate reads your own task's suffixed
     file specifically, not a bare qa.md.
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" (qa.md, etc.).
   - Code/tests go in "Project Path" (src/, tests/, etc.).
@@ -138,7 +145,7 @@ additional_notes: |
   Read:
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - TESTING.md — How to run the app and tests
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth)
   - requirements.md (from Artifacts Path) - What must it do? (contains REQ-XX IDs)
   - architecture.md (from Artifacts Path) - How should it work?
   - adversarial.md (from Artifacts Path) - What issues were found in adversarial review?

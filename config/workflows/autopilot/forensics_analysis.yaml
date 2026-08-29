@@ -161,7 +161,12 @@ additional_notes: |
   produce a fresh one on re-entry), so an absent report means that phase's
   last run either never completed or was rewound.
 
-  Also read the original design document at ./.hephaestus/design.md.
+  Also read the original design document at ./.hephaestus/spec.md.
+
+  **SPEC KIT INPUT (if present):** if no file exists at that flat path,
+  this run's design doc came from a Spec Kit feature directory — check
+  `./.hephaestus/specs/<NNN-name>/spec.md` instead
+  (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`).
 
   For each output, compare what was produced against:
   1. The prompt that was given (from Step 4)

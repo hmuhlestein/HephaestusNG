@@ -61,28 +61,30 @@ required_output:
 # proceed without the file.
 phase_inputs:
   scope_review:
-    required: [design.md, requirements.md]
+    required: [spec.md, requirements.md]
   architecture_design:
     required: [requirements.md]
-    optional: [design.md]
+    optional: [spec.md]
   design_review:
     required: [requirements.md, architecture.md]
+    optional: [spec.md]
   development:
     required: [architecture.md, requirements.md]
     optional: [challenge.md, adversarial.md, review.md, security.md]
   adversarial_review:
     required: [requirements.md]
-    optional: [architecture.md]
+    optional: [architecture.md, spec.md]
   architectural_review:
     required: [architecture.md, requirements.md]
+    optional: [spec.md]
   security_review:
     required: [requirements.md, architecture.md]
-    optional: [adversarial.md]
+    optional: [adversarial.md, spec.md]
   qa_validation:
     required: [requirements.md]
-    optional: [architecture.md, adversarial.md, security.md]
+    optional: [architecture.md, adversarial.md, security.md, spec.md]
   product_validation:
-    required: [design.md, requirements.md]
+    required: [spec.md, requirements.md]
     optional: [architecture.md]
   doc_review:
     # Not summary.md -- doc_review PRODUCES that, so listing it here would show
@@ -405,9 +407,21 @@ workflow:
         name: Doc Review
         order: 9
         color: "#06b6d4"
+      - id: wontfix
+        name: Won't Fix
+        order: 10
+        color: "#78716c"
+        # Closes a ticket honestly when there's genuinely no fix available
+        # right now (no upstream patch published, needs a separate human-
+        # supervised pass, etc.) -- resolving=true makes update_ticket_status
+        # set is_resolved the same as moving to "shipped" would, so open-
+        # ticket gates (verify_no_open_tickets, security_review's redirect)
+        # stop rejecting completion, without falsely claiming the underlying
+        # issue was fixed the way "shipped" would.
+        resolving: true
       - id: shipped
         name: Shipped
-        order: 10
+        order: 11
         color: "#3b82f6"
     ticket_types:
       - infrastructure
@@ -457,7 +471,7 @@ launch_template:
   phase_1_task_prompt: |
     Phase 1: Product Requirements Extraction
 
-    **Design Document:** ./.hephaestus/design.md (copied into your worktree)
+    **Design Document:** ./.hephaestus/spec.md (copied into your worktree)
     **Project Path:** . (your current working directory — an isolated git worktree)
     **Feature Scope:** {feature_scope}
 
@@ -482,7 +496,16 @@ launch_template:
     ### STEP 2: Read the Scope Document (PRIMARY INPUT)
     If feature_scope is provided, read it first: {feature_scope}
     This document defines the specific scope for this feature.
-    Otherwise, read the design document: ./.hephaestus/design.md
+    Otherwise, read the design document: ./.hephaestus/spec.md
+
+    **SPEC KIT INPUT (if present):** before reading, check whether this run
+    started from a Spec Kit feature instead of a hand-written spec.md:
+    `find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`. If a
+    `spec.md` exists under `./.hephaestus/specs/<NNN-name>/`, read THAT file
+    instead of the flat `./.hephaestus/spec.md` path above — it already
+    carries prioritized (P1/P2/P3) user stories, functional requirements
+    (`FR-NNN`), and measurable success criteria. If no `spec.md` is present
+    under either location, proceed exactly as before.
 
     ### STEP 3: Extract Requirements
     - Functional requirements with acceptance criteria

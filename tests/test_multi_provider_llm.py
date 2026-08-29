@@ -1,5 +1,6 @@
 """Unit tests for multi-provider LLM functionality."""
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -84,7 +85,9 @@ llm:
         assert "Missing API keys" in str(excinfo.value)
 
     def test_validate_config_non_strict(self, tmp_path, caplog):
-        """Test non-strict validation logs warnings for missing API keys."""
+        """Test non-strict validation logs missing API keys as informational
+        (not a warning -- this is expected, handled behavior: the
+        component just falls back, not something gone wrong)."""
         config_file = tmp_path / "test_config.yaml"
         config_file.write_text("""
 llm:
@@ -99,9 +102,10 @@ llm:
 """)
 
         config = SimpleConfig(str(config_file))
-        config.validate(strict=False)  # Should not raise
+        with caplog.at_level(logging.INFO):
+            config.validate(strict=False)  # Should not raise
 
-        # Check that warning was logged
+        # Check that it was logged
         assert "Some API keys are missing" in caplog.text
 
     def test_openrouter_provider_config(self, tmp_path):
@@ -702,11 +706,12 @@ llm:
       model: "gpt-4"
 """)
 
-        # Should not crash, just log warnings
+        # Should not crash, just log informationally
         config = SimpleConfig(str(config_file))
-        config.validate(strict=False)
+        with caplog.at_level(logging.INFO):
+            config.validate(strict=False)
 
-        # Check warnings were logged
+        # Check it was logged
         assert (
             "Some API keys are missing" in caplog.text
             or "API key not found" in caplog.text

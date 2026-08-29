@@ -39,7 +39,7 @@ def test_single_feature_with_design_md_raises_both_inputs_present(tmp_path):
         resolve_feature_selection(features, feature_arg=None, repo_arg=None, design_md_present=True)
     assert exc.value.code == "BOTH_INPUTS_PRESENT"
     labels = {c.label() for c in exc.value.candidates}
-    assert labels == {"001-x", "design.md"}
+    assert labels == {"001-x", "spec.md"}
 
 
 def test_feature_arg_resolves_even_with_design_md_present(tmp_path):

@@ -70,7 +70,7 @@ additional_notes: |
   ## STEP 1: RE-READ YOUR DESIGN AND REQUIREMENTS
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path".
   - Do NOT edit any source code or tests. Your only output is the report.
@@ -84,7 +84,7 @@ additional_notes: |
 
   Read:
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - architecture.md (from Artifacts Path) - YOUR design decisions, component structure, interfaces
   - requirements.md (from Artifacts Path) - What the system should do (contains REQ-XX IDs)
   - Your goal: Did the implementation (in Project Path) match the ORIGINAL DESIGN?
@@ -96,7 +96,7 @@ additional_notes: |
   - Include a "Requirements Coverage" section in your report listing each REQ-XX status
 
   SCOPE CHECK (do this before anything else):
-  Compare architecture.md against ./.hephaestus/design.md. If the architecture
+  Compare architecture.md against ./.hephaestus/spec.md. If the architecture
   specifies functions, features, or components NOT in the original design doc,
   flag it as BLOCKER: "Over-scope: architecture exceeds design spec." The code
   must match the ORIGINAL DESIGN, not an expanded architecture.

@@ -83,5 +83,5 @@ def test_does_not_break_existing_copy_design_document(tmp_path):
 
     dest = copy_design_document(entry, feature_folder)
 
-    assert dest == feature_folder / CONTEXT_DIR_NAME / "design.md"
+    assert dest == feature_folder / CONTEXT_DIR_NAME / "spec.md"
     assert dest.read_text() == "# design"

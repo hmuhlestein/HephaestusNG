@@ -21,7 +21,7 @@ from src.agents._create_agent_for_task_steps import (
     _run_launch_preparations,
     _send_launch_command_and_record_agent,
 )
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, TMUX_PANE_WIDTH
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, TMUX_PANE_HEIGHT, TMUX_PANE_WIDTH
 from src.core.database import (
     Agent,
     AgentLog,
@@ -1106,21 +1106,36 @@ class LaunchPipeline:
         except Exception as e:
             logger.warning(f"Failed to enable pipe-pane transcript logging: {e}")
 
-        # Use a wide terminal so captured output isn't hard-wrapped at 80 columns.
-        # This matches what a developer would see in a full-width terminal.
-        # TMUX_PANE_WIDTH is shared with output_capture.py's raw-transcript
-        # row reconstruction, which auto-wraps at this same fixed width to
-        # match where the terminal itself wrapped -- it can't observe the
-        # pane's actual width later (usually long gone by the time a
-        # terminated agent's transcript is read), so the two must agree.
+        # Use a large pane so captured output isn't hard-wrapped at 80x24 and
+        # so Ink-based TUIs (Claude Code, pi) -- which size their live-
+        # rendering viewport off the pane's reported terminal height and
+        # redraw-in-place via absolute cursor positioning once content
+        # exceeds it, permanently discarding anything scrolled out -- have
+        # far more room before they need to start doing that. TMUX_PANE_WIDTH
+        # is shared with output_capture.py's raw-transcript row
+        # reconstruction, which auto-wraps at this same fixed width to match
+        # where the terminal itself wrapped -- it can't observe the pane's
+        # actual width later (usually long gone by the time a terminated
+        # agent's transcript is read), so the two must agree.
+        #
+        # `resize-pane` (the previous approach here, via pane.set_width /
+        # pane.resize_pane) is a no-op on a single-pane window -- there's no
+        # sibling pane to redistribute space from -- so those calls never
+        # actually resized anything; the window instead just tracked
+        # whatever real client last attached, under tmux's default
+        # `window-size latest`. `resize-window` is the call that actually
+        # resizes a single-pane window, and only takes effect once
+        # `window-size` is set to `manual` (otherwise a later client attach
+        # silently reverts it). Confirmed empirically: set_width/resize_pane
+        # left a test pane at 80x24 even with window-size manual already
+        # set; window-size manual + resize-window is the only combination
+        # that worked, verified by a process inside the pane observing the
+        # new size via os.get_terminal_size().
         try:
-            pane = session.attached_window.attached_pane
-            # Try both methods for reliability
-            pane.set_width(TMUX_PANE_WIDTH)
-            try:
-                pane.resize_pane(width=TMUX_PANE_WIDTH)
-            except Exception:
-                pass
+            session.set_option("window-size", "manual")
+            session.attached_window.cmd(
+                "resize-window", "-x", str(TMUX_PANE_WIDTH), "-y", str(TMUX_PANE_HEIGHT)
+            )
         except Exception:
             pass  # Non-critical
 
@@ -1173,7 +1188,7 @@ class LaunchPipeline:
         """Persist an agent's full initial instructions as a markdown file in
         its worktree, so every phase agent -- the first in a workflow
         included -- receives its task the same way later phases already
-        receive prior phases' outputs (design.md, architecture.md,
+        receive prior phases' outputs (spec.md, architecture.md,
         requirements.md written by _gather_worktree_context): as a file to
         read, not a wall of text pasted live into the terminal.
 
@@ -1370,7 +1385,7 @@ class LaunchPipeline:
                 p = Path(design_doc)
                 if p.exists() and p.is_file():
                     try:
-                        context["design.md"] = p.read_text()
+                        context["spec.md"] = p.read_text()
                     except Exception as e:
                         logger.warning(f"Could not read design document {p}: {e}")
 

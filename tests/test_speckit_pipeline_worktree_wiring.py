@@ -1,6 +1,6 @@
 """Integration test for the BLOCKER fixed in architectural review: the
 worktree-population call sites in pipeline.py (run_phase0 and the
-per-feature path) previously always did a plain shutil.copy2(design.md)
+per-feature path) previously always did a plain shutil.copy2(spec.md)
 regardless of DesignEntry.speckit_feature_dir, so a Spec Kit-selected run
 never got plan.md/tasks.md/contracts/ into the worktree at all. This tests
 the actual shared helper both call sites now use, not just
@@ -34,8 +34,8 @@ def test_speckit_entry_populates_whole_feature_dir_in_worktree(tmp_path):
     assert (dest / "spec.md").read_text() == "# spec"
     assert (dest / "plan.md").read_text() == "# plan"
     assert (dest / "tasks.md").read_text() == "# tasks"
-    # No plain design.md written for a Spec Kit-selected entry.
-    assert not (worktree / CONTEXT_DIR_NAME / "design.md").exists()
+    # No plain spec.md written for a Spec Kit-selected entry.
+    assert not (worktree / CONTEXT_DIR_NAME / "spec.md").exists()
 
 
 def test_source_dir_only_entry_populates_whole_feature_dir_in_worktree(tmp_path):
@@ -65,10 +65,10 @@ def test_source_dir_only_entry_populates_whole_feature_dir_in_worktree(tmp_path)
     dest = worktree / CONTEXT_DIR_NAME / "specs" / "001-x"
     assert (dest / "spec.md").read_text() == "# spec"
     assert (dest / "plan.md").read_text() == "# plan"
-    assert not (worktree / CONTEXT_DIR_NAME / "design.md").exists()
+    assert not (worktree / CONTEXT_DIR_NAME / "spec.md").exists()
 
 
-def test_design_md_entry_still_copies_plain_design_md(tmp_path):
+def test_design_md_entry_still_copies_plain_spec_md(tmp_path):
     design_file = tmp_path / "design.md"
     design_file.write_text("# design")
     worktree = tmp_path / "worktree"
@@ -77,5 +77,5 @@ def test_design_md_entry_still_copies_plain_design_md(tmp_path):
 
     _copy_design_input_into_worktree(entry, worktree)
 
-    assert (worktree / CONTEXT_DIR_NAME / "design.md").read_text() == "# design"
+    assert (worktree / CONTEXT_DIR_NAME / "spec.md").read_text() == "# design"
     assert not (worktree / CONTEXT_DIR_NAME / "specs").exists()
