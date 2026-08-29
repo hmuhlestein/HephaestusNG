@@ -1,6 +1,7 @@
 """Core tmux session management - create, read, write, and kill tmux sessions."""
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -13,6 +14,134 @@ logger = logging.getLogger(__name__)
 # during its work, so its cwd at read time isn't necessarily the worktree
 # root the session started in.
 _HEPHAESTUS_TMUX_SEARCH_DEPTH = 6
+
+# Mirrors src/core/constants.py's TMUX_PANE_WIDTH -- this tool is
+# standalone/reusable (its own requirements.txt, no dependency on the
+# main app's src/ package), so it can't import that constant directly.
+# Only used to auto-wrap a Hephaestus agent's raw transcript (the
+# .hephaestus/tmux/ convention below is already Hephaestus-specific), so
+# it must stay in sync with the real value if that ever changes.
+_HEPHAESTUS_PANE_WIDTH = 150
+
+_RAW_TRANSCRIPT_TOKEN_RE = re.compile(r'\x1b\[([0-9;?]*)([A-Za-z])|([^\x1b])', re.DOTALL)
+
+
+def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_WIDTH) -> str:
+    """Reconstruct readable rows from a raw pipe-pane transcript the way a
+    real terminal would, instead of naively treating \\n as the only row
+    boundary. TUI apps (Claude Code, pi) redraw in place using CSI
+    G/C/D/B/A/H/f (cursor move) and K/J (erase), not just \\r/\\n --
+    deleting those (as pipe-pane's own perl filter used to, and as a
+    plain ANSI-strip would) throws away the position information they
+    carry, concatenating text written before and after one as if always
+    adjacent.
+
+    This is a simplified sibling of
+    src/agents/output_capture.py::AgentOutputCapture._read_transcript_log
+    -- same cursor/row reconstruction core, without that function's
+    Claude-Code/pi-specific chrome and progressive-redraw deduplication
+    passes (this tool views arbitrary tmux sessions, not just Hephaestus
+    agents, so baking in that much CLI-specific noise-filtering isn't
+    appropriate here). Keep the two in sync if the reconstruction core
+    itself changes.
+
+    SGR color codes are tracked as a "pending" prefix attached to the
+    next character written rather than occupying a column of their own --
+    correctly interleaving them with arbitrary overwrites is a full
+    terminal emulator's job. A run of SGR codes with nothing following
+    before the row ends is simply dropped (cosmetic only).
+    """
+    text = raw_bytes.decode('utf-8', errors='replace')
+    text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
+    text = re.sub(r'\x1b\][^\x1b]*\x1b\\', '', text)  # OSC with ST
+    text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)  # Charset selection
+    text = re.sub(r'\x1b(?!\[)[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC (not CSI)
+
+    rows: List[List[str]] = [[]]
+    cursor_row = 0
+    cursor_col = 0
+    pending_sgr = ""
+
+    def _ensure_row(r: int) -> None:
+        while len(rows) <= r:
+            rows.append([])
+
+    def _end_row() -> None:
+        nonlocal pending_sgr, cursor_row, cursor_col
+        if pending_sgr:
+            rows[cursor_row].append(pending_sgr)
+            pending_sgr = ""
+        cursor_row += 1
+        _ensure_row(cursor_row)
+        cursor_col = 0
+
+    for m in _RAW_TRANSCRIPT_TOKEN_RE.finditer(text):
+        params, letter, ch = m.group(1), m.group(2), m.group(3)
+        if letter is not None:
+            if letter == 'm':
+                pending_sgr += m.group(0)
+                continue
+            parts = [int(p) for p in params.split(';') if p.isdigit()] if params else []
+            n = parts[0] if parts else None
+            if letter == 'G':
+                cursor_col = max(0, (n or 1) - 1)
+            elif letter == 'C':
+                cursor_col += (n or 1)
+            elif letter == 'D':
+                cursor_col = max(0, cursor_col - (n or 1))
+            elif letter == 'B':
+                cursor_row += (n or 1)
+                _ensure_row(cursor_row)
+            elif letter == 'A':
+                cursor_row = max(0, cursor_row - (n or 1))
+            elif letter in ('H', 'f'):
+                row_n = parts[0] if len(parts) > 0 else 1
+                col_n = parts[1] if len(parts) > 1 else 1
+                cursor_row = max(0, row_n - 1)
+                _ensure_row(cursor_row)
+                cursor_col = max(0, col_n - 1)
+            elif letter == 'K':
+                mode = n or 0
+                row = rows[cursor_row]
+                if mode == 0:
+                    del row[cursor_col:]
+                elif mode == 1:
+                    for i in range(min(cursor_col, len(row))):
+                        row[i] = " "
+                elif mode == 2:
+                    rows[cursor_row] = []
+            elif letter == 'J':
+                mode = n or 0
+                if mode == 0:
+                    del rows[cursor_row][cursor_col:]
+                    del rows[cursor_row + 1:]
+                elif mode == 1:
+                    for i in range(min(cursor_col, len(rows[cursor_row]))):
+                        rows[cursor_row][i] = " "
+                    for r in range(cursor_row):
+                        rows[r] = []
+                else:
+                    rows = [[]]
+                    cursor_row = 0
+            continue
+        if ch == '\r':
+            cursor_col = 0
+        elif ch == '\n':
+            _end_row()
+        else:
+            if cursor_col >= width:
+                _end_row()
+            row = rows[cursor_row]
+            while len(row) <= cursor_col:
+                row.append(" ")
+            row[cursor_col] = pending_sgr + ch
+            pending_sgr = ""
+            cursor_col += 1
+
+    if pending_sgr:
+        rows[cursor_row].append(pending_sgr)
+
+    return "\n".join("".join(row).rstrip() for row in rows).strip("\n")
 
 
 class TmuxSessionManager:
@@ -50,6 +179,12 @@ class TmuxSessionManager:
         """
         self.server = libtmux.Server()
         self.session_prefix = session_prefix
+        # Lazily-computed, session-lifetime cache of each session's raw-
+        # transcript backfill (see _get_raw_transcript_backfill) -- read
+        # and filtered ONCE per session, not on every poll, since it can
+        # be a large file and its whole purpose is recovering EARLY
+        # content .clean.log missed, not tracking live changes.
+        self._transcript_backfill_cache: Dict[str, str] = {}
 
     def create_session(
         self,
@@ -128,6 +263,8 @@ class TmuxSessionManager:
             logger.error(f"Failed to get pane for '{session_name}': {e}")
             return ""
 
+        backfill = self._get_raw_transcript_backfill(session_name, pane)
+
         clean_log = self._find_hephaestus_clean_log(session_name, pane)
         if clean_log is not None:
             try:
@@ -135,7 +272,8 @@ class TmuxSessionManager:
                 out_lines = text.splitlines()
                 if lines > 0:
                     out_lines = out_lines[-lines:]
-                return "\n".join(out_lines)
+                live_text = "\n".join(out_lines)
+                return f"{backfill}\n\n[... below: continues live ...]\n\n{live_text}" if backfill else live_text
             except Exception as e:
                 logger.warning(
                     f"Failed to read Hephaestus clean log for '{session_name}' "
@@ -144,10 +282,13 @@ class TmuxSessionManager:
 
         try:
             output = pane.cmd("capture-pane", "-p", f"-S -{lines}").stdout
-            return "\n".join(output) if output else ""
+            live_text = "\n".join(output) if output else ""
+            if backfill:
+                return f"{backfill}\n\n[... below: continues live ...]\n\n{live_text}" if live_text else backfill
+            return live_text
         except Exception as e:
             logger.error(f"Failed to capture output from '{session_name}': {e}")
-            return ""
+            return backfill
 
     def _find_hephaestus_clean_log(self, session_name: str, pane) -> Optional[Path]:
         """Look for `.hephaestus/tmux/{session_name}.clean.log` at or above
@@ -171,6 +312,63 @@ class TmuxSessionManager:
                 break
             current = current.parent
         return None
+
+    def _find_hephaestus_raw_transcript(self, session_name: str, pane) -> Optional[Path]:
+        """Same search as _find_hephaestus_clean_log, for the raw pipe-pane
+        `{session_name}.transcript.log` instead."""
+        try:
+            cwd = pane.pane_current_path
+        except Exception:
+            cwd = None
+        if not cwd:
+            return None
+
+        current = Path(cwd)
+        for _ in range(_HEPHAESTUS_TMUX_SEARCH_DEPTH):
+            candidate = current / ".hephaestus" / "tmux" / f"{session_name}.transcript.log"
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return candidate
+            if current.parent == current:
+                break
+            current = current.parent
+        return None
+
+    def _get_raw_transcript_backfill(self, session_name: str, pane) -> str:
+        """Recover the TRUE beginning of a live agent's session, which
+        .clean.log structurally cannot have: it's built by polling
+        capture-pane only while a viewer is actively open (see
+        AgentOutputCapture._poll_stable_transcript), so anything from
+        before the first poll -- or that scrolled off the alt-screen pane
+        between infrequent polls -- is gone from it forever. The raw
+        pipe-pane transcript has no such gap; it captures every byte
+        continuously from session start. Read and reconstructed ONCE per
+        session (cached for this manager's lifetime, not re-read on every
+        poll -- it's a backfill for what's permanently missing at the
+        start, not a live-updating source), so get_output prepends it in
+        front of the normal live clean_log/capture-pane content instead
+        of replacing it.
+
+        Returns "" if there's nothing to backfill with (no such file, or
+        already cached as empty).
+        """
+        if session_name in self._transcript_backfill_cache:
+            return self._transcript_backfill_cache[session_name]
+
+        backfill = ""
+        transcript_path = self._find_hephaestus_raw_transcript(session_name, pane)
+        if transcript_path is not None:
+            try:
+                raw_bytes = transcript_path.read_bytes()
+                backfill = _reconstruct_raw_transcript(raw_bytes)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to read/reconstruct raw transcript for '{session_name}' "
+                    f"({transcript_path}): {e}"
+                )
+                backfill = ""
+
+        self._transcript_backfill_cache[session_name] = backfill
+        return backfill
 
     def send_message(self, session_name: str, message: str, enter: bool = True) -> bool:
         """Send a message (keystrokes) to a tmux session.
