@@ -5,7 +5,7 @@ GET /api/autopilot/projects/{project_id}/speckit/check
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.core.database import AutopilotProject
+from src.core.database import AutopilotProject, ProjectRepo
 from src.mcp.autopilot import router
 
 
@@ -96,6 +96,68 @@ def test_number_omitted_returns_report_for_every_feature(db_manager, tmp_path):
     assert resp.status_code == 200
     numbers = {f["number"] for f in resp.json()["features"]}
     assert numbers == {"001", "002"}
+
+
+def test_primary_repo_feature_readiness_round_trip_via_null_repo_label(db_manager, tmp_path):
+    """Regression for the adversarial-review BLOCKER on commit 2edde877:
+    /speckit/features nulls out repoLabel for the PRIMARY repo's own
+    features (f2386caf), and the frontend echoes that null straight back
+    as `repo_label` (dropped from the query string entirely by axios). A
+    naive filter (`f.repo_label == repo_label`) matched a real label
+    against `None` and 404'd on every primary-repo feature. `number` alone
+    (no `repo_label` in the query) must resolve to the primary repo's
+    feature."""
+    base_dir = tmp_path / "primary"
+    (base_dir / "specs" / "001-checkout-flow").mkdir(parents=True)
+    (base_dir / "specs" / "001-checkout-flow" / "spec.md").write_text("spec", encoding="utf-8")
+    (base_dir / "specs" / "001-checkout-flow" / "plan.md").write_text("plan", encoding="utf-8")
+
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-1", name="proj-1", base_dir=str(base_dir)))
+        session.add(ProjectRepo(id="repo-1", project_id="proj-1", label="my-repo", path=str(base_dir), is_primary=True))
+
+    client = client_for(db_manager)
+
+    features_resp = client.get("/api/autopilot/projects/proj-1/speckit/features")
+    assert features_resp.status_code == 200
+    assert features_resp.json()[0]["repoLabel"] is None
+
+    # Simulate the frontend round-trip: repoLabel=None means "omit the
+    # repo_label query param entirely" (api.ts's `?? undefined` coalescing).
+    check_resp = client.get("/api/autopilot/projects/proj-1/speckit/check", params={"number": "001"})
+    assert check_resp.status_code == 200
+    assert check_resp.json()["features"][0]["number"] == "001"
+
+
+def test_secondary_repo_feature_still_requires_its_real_repo_label(db_manager, tmp_path):
+    """Other half of the same fix: a genuinely non-primary repo's feature
+    is NOT reachable by omitting repo_label (that resolves to the primary
+    repo only) -- its real label is still required."""
+    primary_dir = tmp_path / "primary"
+    secondary_dir = tmp_path / "secondary"
+    primary_dir.mkdir()
+    (secondary_dir / "specs" / "002-login-page").mkdir(parents=True)
+    (secondary_dir / "specs" / "002-login-page" / "spec.md").write_text("spec", encoding="utf-8")
+
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-1", name="proj-1", base_dir=str(primary_dir)))
+        session.add(ProjectRepo(id="repo-1", project_id="proj-1", label="primary-repo", path=str(primary_dir), is_primary=True))
+        session.add(ProjectRepo(id="repo-2", project_id="proj-1", label="secondary-repo", path=str(secondary_dir)))
+
+    client = client_for(db_manager)
+
+    # Omitting repo_label resolves to the PRIMARY repo -- the secondary
+    # repo's feature must not be found this way.
+    no_label_resp = client.get("/api/autopilot/projects/proj-1/speckit/check", params={"number": "002"})
+    assert no_label_resp.status_code == 404
+
+    # Its real label reaches it correctly.
+    with_label_resp = client.get(
+        "/api/autopilot/projects/proj-1/speckit/check",
+        params={"number": "002", "repo_label": "secondary-repo"},
+    )
+    assert with_label_resp.status_code == 200
+    assert with_label_resp.json()["features"][0]["number"] == "002"
 
 
 def test_route_never_mutates_project(db_manager, tmp_path):
