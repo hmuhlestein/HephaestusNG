@@ -2539,6 +2539,43 @@ class TestReleaseStaleTaskCreationClaims:
             assert execution.task_creation_claimed_at is not None
             assert execution.status == "in_progress"  # unchanged from fixture default
 
+    def test_stale_claim_with_in_flight_arbitration_is_left_alone(
+        self, db_manager, sample_workflow
+    ):
+        """Adversarial-review BLOCKER: a stale claim (>CLAIM_STALE_TIMEOUT_SECONDS)
+        whose phase's latest task is a still-running arbitration task must
+        survive this sweep -- clearing it drops the arbiter's eventual
+        decision on a longer clock than the millisecond-scale race
+        _phase_has_arbitration_in_flight was introduced to close (see
+        arbitration.py's ARBITRATION_CREATED_BY and _maybe_resolve_arbitration,
+        which finds claimed phases via task_creation_claimed_at.isnot(None))."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            _release_stale_task_creation_claims,
+        )
+        from src.core.database import PhaseExecution
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-arb-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="in_progress",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+            ))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            _release_stale_task_creation_claims(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+
     @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
     def test_advance_phases_end_to_end_fires_transition_for_stale_pending_phase(
         self, mock_fire, db_manager, sample_workflow
