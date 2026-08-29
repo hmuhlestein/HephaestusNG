@@ -410,15 +410,43 @@ class Terminator:
                                                 / f"{_phase.name}_{agent_id[:8]}.log"
                                             )
 
-                                            # Prefer the just-flushed clean
-                                            # transcript over the capture-pane
-                                            # snapshot above -- see the flush
-                                            # comment near _wait_for_pane_idle
-                                            # for why the snapshot alone is
-                                            # structurally incomplete for a
-                                            # full-screen TUI agent.
+                                            # Prefer the raw pipe-pane
+                                            # transcript, filtered, over
+                                            # both the just-flushed clean
+                                            # transcript and the capture-
+                                            # pane snapshot above. The clean
+                                            # transcript is built from
+                                            # periodic snapshots of only the
+                                            # CURRENTLY VISIBLE pane -- any
+                                            # output that scrolled off-
+                                            # screen between two polls is
+                                            # gone forever there, no matter
+                                            # how large history-limit is
+                                            # (tmux keeps no alt-screen
+                                            # scrollback at all). The raw
+                                            # transcript has no such gap:
+                                            # pipe-pane captures every byte
+                                            # continuously. lines=0 forces
+                                            # the full untruncated history
+                                            # regardless of agent.status,
+                                            # which isn't flipped to
+                                            # "terminated" until after this
+                                            # runs. See
+                                            # AgentOutputCapture._get_terminated_agent_output's
+                                            # docstring for the same
+                                            # priority applied to the
+                                            # general read path (observed
+                                            # live, agent 8389d7e0: 13,034
+                                            # real lines recovered vs 153 in
+                                            # the clean transcript).
                                             clean_scrollback = full_scrollback
-                                            if (
+                                            try:
+                                                raw_scrollback = self._output_capture._read_transcript_log(agent, lines=0)
+                                            except Exception:
+                                                raw_scrollback = ""
+                                            if raw_scrollback:
+                                                clean_scrollback = raw_scrollback
+                                            elif (
                                                 clean_transcript_path
                                                 and clean_transcript_path.exists()
                                                 and clean_transcript_path.stat().st_size > 0
