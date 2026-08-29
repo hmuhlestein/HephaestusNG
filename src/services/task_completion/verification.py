@@ -477,8 +477,9 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
         "Fix the underlying issue for each, then call update_ticket_status(new_status='shipped') before "
         "retrying update_task_status(done). If a ticket genuinely has no available fix right now (e.g. no "
         "upstream patch exists, or the fix needs a separate human-supervised pass), do not leave it open "
-        "indefinitely -- call resolve_ticket(ticket_id, resolution_comment=<explain why no fix is possible/"
-        "appropriate right now>) instead, so this floor doesn't reject the same unfixable ticket forever."
+        "indefinitely -- call update_ticket_status(new_status='wontfix', comment=<explain why no fix is "
+        "possible/appropriate right now>) instead, so this floor doesn't reject the same unfixable ticket "
+        "forever."
         if phase.name == "development"
         else (f"This phase cannot fix code itself — the workflow needs to route back to development to resolve these before {phase.name} can proceed.")
     )

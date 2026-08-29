@@ -808,14 +808,28 @@ class TicketService:
                 # Mark as started if moving from initial status
                 ticket.started_at = utc_now()
 
-            # Check if this is a completion status (last column)
+            # Check if this is a completion status: the board's last column
+            # (the conventional "shipped"/"done" terminal state) OR any
+            # column explicitly marked "resolving": true in board_config --
+            # e.g. a "Won't Fix" column for a ticket with no available fix
+            # right now (no upstream patch published, needs a separate
+            # human-supervised pass, etc.). That needs to close the SAME as
+            # a real fix does (is_resolved=True, so get_open_bug_tickets/
+            # verify_no_open_tickets stop gating on it) without literally
+            # claiming "shipped" -- which would misrepresent the ticket's
+            # own history as fixed when it wasn't. Boards that never set
+            # "resolving" on any column keep the original last-column-only
+            # behavior unchanged.
             columns = board_config.columns
             last_column_id = columns[-1]["id"] if isinstance(columns[-1], dict) else columns[-1]
-            if new_status == last_column_id:
+            resolving_column_ids = {last_column_id} | {
+                col["id"] for col in columns if isinstance(col, dict) and col.get("resolving")
+            }
+            if new_status in resolving_column_ids:
                 ticket.completed_at = utc_now()
                 ticket.is_resolved = True
                 ticket.resolved_at = utc_now()
-            elif ticket.is_resolved and new_status != last_column_id:
+            elif ticket.is_resolved and new_status not in resolving_column_ids:
                 # Reopening a resolved ticket — clear resolution
                 ticket.is_resolved = False
                 ticket.resolved_at = None

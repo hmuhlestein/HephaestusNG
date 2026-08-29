@@ -154,10 +154,11 @@ additional_notes: |
   patch exists yet, or the fix needs a separate human-supervised pass --
   a major-version bump on a live shared dependency, say), do not leave it
   open indefinitely: this phase cannot mark done while ANY bug ticket is
-  open, regardless of whether it's fixable. Call resolve_ticket(ticket_id,
-  resolution_comment=<explain why no fix is possible/appropriate right
-  now>) instead of shipping it, so the requirement is honestly closed
-  rather than retried forever against something that can't change.
+  open, regardless of whether it's fixable. Move it to the board's "Won't
+  Fix" column instead of "Shipped" (heph_update_ticket_status with
+  new_status="wontfix", comment=<explain why no fix is possible/
+  appropriate right now>) -- it closes the ticket the same as shipping
+  does, without falsely claiming the underlying issue was fixed.
 
   If no open bug tickets exist, proceed normally (first build, or a clean
   QA pass with nothing to fix).

@@ -2512,8 +2512,8 @@ def _fire_phase_transition(
                     "marking this task done. If a ticket genuinely has no available "
                     "fix right now (e.g. no upstream patch exists, or the fix needs a "
                     "separate human-supervised pass), don't leave it open indefinitely "
-                    "-- call resolve_ticket(ticket_id, resolution_comment=<why no fix "
-                    "is possible/appropriate right now>) instead: " + "; ".join(titles)
+                    "-- call update_ticket_status(new_status='wontfix', comment=<why no "
+                    "fix is possible/appropriate right now>) instead: " + "; ".join(titles)
                 )
                 logger.warning(
                     f"[PHASE-ADVANCE] security_review passed its own gate but "
