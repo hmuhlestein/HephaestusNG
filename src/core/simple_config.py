@@ -11,12 +11,15 @@ place. `Config` keeps the same public shape (`config.server.mcp_port`,
 slice they actually use instead of the whole object.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 from src.core.constants import HEPHAESTUS_INSTALL_DIR
 
@@ -224,8 +227,20 @@ class LLMConfig(_ConfigSection):
                 "ANTHROPIC_API_KEY is required when using Anthropic provider"
             )
         if self.llm_provider == "openrouter" and not self.openrouter_api_key:
-            raise ValueError(
-                "OPENROUTER_API_KEY is required when using OpenRouter provider"
+            # NOT a hard failure, unlike the openai/anthropic branches above:
+            # langchain_llm_client.py's _create_model already degrades a
+            # missing OPENROUTER_API_KEY to CLIFallbackChatModel (drives the
+            # configured CLI tool -- claude, by default -- directly instead
+            # of calling OpenRouter), specifically so the system can run
+            # fully API-key-free with the CLI itself acting as
+            # arbitrator/guardian/etc. This startup check used to be
+            # stricter than that actual runtime behavior and crashed the
+            # whole server before _create_model ever got a chance to fall
+            # back -- the graceful path existed but was unreachable.
+            logger.warning(
+                "OPENROUTER_API_KEY not set -- LLM-backed components (arbitration, "
+                "guardian, etc.) will fall back to the configured CLI tool "
+                "(agents.default_cli_tool) instead of calling OpenRouter directly."
             )
         return True
 
