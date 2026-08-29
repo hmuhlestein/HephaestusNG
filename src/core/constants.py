@@ -49,12 +49,6 @@ TMUX_PANE_HEIGHT = 2000
 # three separate places (orchestrator.py, status_derivation.py).
 DIAGNOSTIC_TASK_PREFIX = "DIAGNOSTIC:"
 
-# Design document queue/inbox (relative to project root)
-DESIGN_SUBDIR = "docs/spec"
-# Default destination folder for the "Report Bug" flow's uploads -- see
-# add_project_design's destination handling and DESIGN_SUBDIR's identical
-# role for the "New Feature" flow.
-BUGFIX_SUBDIR = "docs/bugfix"
 DESIGN_CONTEXT_SUBDIR = ".hephaestus/specs"
 DESIGN_QUEUE_FALLBACK_DIR = "docs/spec-queue"
 

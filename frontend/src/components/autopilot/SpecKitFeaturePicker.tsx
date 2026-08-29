@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { FileText } from 'lucide-react';
 import { apiService } from '@/services/api';
 
 export interface SpecKitFeatureDto {
@@ -24,15 +23,24 @@ export interface SpecKitReadinessDto {
 interface SpecKitFeaturePickerProps {
   projectId: string;
   onSelect: (feature: SpecKitFeatureDto) => void;
+  /** Fired the moment the dropdown is opened (before a choice is made) --
+   * lets a caller collapse other UI (e.g. a remote file browser) that
+   * would otherwise compete with it for space/attention. */
+  onOpen?: () => void;
 }
+
+const key = (f: SpecKitFeatureDto) => `${f.repoLabel ?? ''}/${f.number}-${f.slug}`;
 
 // REQ-10: surfaces the same feature list `--feature` accepts, with repo
 // labels, so a Spec Kit project's features are pickable without a
-// terminal. Renders nothing when the project has no Spec Kit features --
-// callers decide whether to show this at all (e.g. only when the query
-// resolves with a non-empty list).
-const SpecKitFeaturePicker: React.FC<SpecKitFeaturePickerProps> = ({ projectId, onSelect }) => {
-  const [selected, setSelected] = useState<string | null>(null);
+// terminal. A single <select> rather than an always-expanded card list --
+// this is a secondary path (most designs come from the drop zone above),
+// so it shouldn't cost vertical space for every feature at once. Renders
+// nothing when the project has no Spec Kit features -- callers decide
+// whether to show this at all (e.g. only when the query resolves with a
+// non-empty list).
+const SpecKitFeaturePicker: React.FC<SpecKitFeaturePickerProps> = ({ projectId, onSelect, onOpen }) => {
+  const [selectedKey, setSelectedKey] = useState<string>('');
   const [readiness, setReadiness] = useState<Record<string, SpecKitReadinessDto['features'][0] | 'error'>>({});
 
   const { data: features, isLoading, isError, refetch } = useQuery({
@@ -73,7 +81,6 @@ const SpecKitFeaturePicker: React.FC<SpecKitFeaturePickerProps> = ({ projectId, 
 
   if (!features || features.length === 0) return null;
 
-  const key = (f: SpecKitFeatureDto) => `${f.repoLabel ?? ''}/${f.number}-${f.slug}`;
   const repoLabels = Array.from(new Set(features.map(f => f.repoLabel)));
   const groupedByRepo = repoLabels.length > 1 || (repoLabels.length === 1 && repoLabels[0] !== null);
 
@@ -81,88 +88,76 @@ const SpecKitFeaturePicker: React.FC<SpecKitFeaturePickerProps> = ({ projectId, 
     ? repoLabels.map(label => ({ label, features: features.filter(f => f.repoLabel === label) }))
     : [{ label: null, features }];
 
-  const handleSelect = (f: SpecKitFeatureDto) => {
-    const k = key(f);
-    setSelected(k);
-    onSelect(f);
+  const selected = features.find(f => key(f) === selectedKey) ?? null;
+  const isCheckingFeature = readinessMutation.isPending && !!selected && readinessMutation.variables === selected;
+  const result = selected ? readiness[key(selected)] : undefined;
+
+  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const k = e.target.value;
+    setSelectedKey(k);
+    const f = features.find(candidate => key(candidate) === k);
+    if (f) onSelect(f);
   };
 
   return (
-    <div className="space-y-3" data-testid="speckit-feature-picker">
-      {groups.map(group => (
-        <div key={group.label ?? '__flat__'}>
-          {group.label && (
-            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
-              {group.label}
+    <div data-testid="speckit-feature-picker">
+      <select
+        value={selectedKey}
+        onChange={handleChange}
+        onMouseDown={onOpen}
+        className="w-full appearance-none bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-200 text-sm rounded-lg px-3 py-2 hover:border-blue-300 dark:hover:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent cursor-pointer"
+      >
+        <option value="">Select a feature…</option>
+        {groups.map(group =>
+          group.label ? (
+            <optgroup key={group.label} label={group.label}>
+              {group.features.map(f => (
+                <option key={key(f)} value={key(f)}>
+                  {f.number}-{f.slug}
+                  {!f.hasPlan ? ' (no plan.md)' : ''}
+                </option>
+              ))}
+            </optgroup>
+          ) : (
+            group.features.map(f => (
+              <option key={key(f)} value={key(f)}>
+                {f.number}-{f.slug}
+                {!f.hasPlan ? ' (no plan.md)' : ''}
+              </option>
+            ))
+          )
+        )}
+      </select>
+
+      {selected && (
+        <div className="mt-2">
+          <button
+            type="button"
+            disabled={isCheckingFeature}
+            onClick={() => readinessMutation.mutate(selected)}
+            className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isCheckingFeature ? 'Checking…' : 'Check readiness'}
+          </button>
+          {result && result !== 'error' && (
+            <div className="mt-1 text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
+              {result.missingFiles.map(m => (
+                <div key={m} className="text-amber-600 dark:text-amber-400">
+                  Missing: {m}
+                </div>
+              ))}
+              {result.needsClarification.map((n, i) => (
+                <div key={i} className="text-amber-600 dark:text-amber-400">
+                  NEEDS CLARIFICATION: {n}
+                </div>
+              ))}
             </div>
           )}
-          <div className="space-y-1.5">
-            {group.features.map(f => {
-              const k = key(f);
-              const isSelected = selected === k;
-              const isCheckingFeature = readinessMutation.isPending && readinessMutation.variables === f;
-              const result = readiness[k];
-              return (
-                <div key={k}>
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => handleSelect(f)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        handleSelect(f);
-                      }
-                    }}
-                    aria-pressed={isSelected}
-                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-left text-sm transition-colors duration-150 cursor-pointer ${
-                      isSelected
-                        ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-400 dark:border-blue-500'
-                        : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600'
-                    }`}
-                  >
-                    <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                    <span className="font-mono">
-                      {f.number}-{f.slug}
-                    </span>
-                    {!f.hasPlan && (
-                      <span className="ml-auto text-xs text-amber-600 dark:text-amber-400">no plan.md</span>
-                    )}
-                    <button
-                      type="button"
-                      disabled={isCheckingFeature}
-                      onClick={e => {
-                        e.stopPropagation();
-                        readinessMutation.mutate(f);
-                      }}
-                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isCheckingFeature ? 'Checking…' : 'Check readiness'}
-                    </button>
-                  </div>
-                  {result && result !== 'error' && (
-                    <div className="ml-6 mt-1 text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
-                      {result.missingFiles.map(m => (
-                        <div key={m} className="text-amber-600 dark:text-amber-400">
-                          Missing: {m}
-                        </div>
-                      ))}
-                      {result.needsClarification.map((n, i) => (
-                        <div key={i} className="text-amber-600 dark:text-amber-400">
-                          NEEDS CLARIFICATION: {n}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {result === 'error' && (
-                    <div className="ml-6 mt-1 text-xs text-red-600 dark:text-red-400">Failed to check readiness.</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          {result === 'error' && (
+            <div className="mt-1 text-xs text-red-600 dark:text-red-400">Failed to check readiness.</div>
+          )}
         </div>
-      ))}
+      )}
     </div>
   );
 };

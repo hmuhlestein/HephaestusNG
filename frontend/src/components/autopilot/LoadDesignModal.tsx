@@ -40,7 +40,7 @@ const TYPE_COPY = {
     title: 'Design Spec',
     subtitle: 'Select or drag & drop design documents describing what to build.',
     accent: 'blue',
-    defaultFolder: 'docs/spec',
+    defaultFolder: 'docs/specs',
   },
   bugfix: {
     icon: Bug,
@@ -516,14 +516,14 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onClick={() => fileInputRef.current?.click()}
-                  className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+                  className={`border-2 border-dashed rounded-xl p-3 text-center cursor-pointer transition-all ${
                     isDragOver
                       ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20'
                       : 'border-gray-200 dark:border-gray-600 hover:border-violet-300 dark:hover:border-violet-500 hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                 >
-                  <FileText className={`w-12 h-12 mx-auto mb-3 ${isDragOver ? 'text-violet-500 dark:text-violet-400' : 'text-gray-300 dark:text-gray-600'}`} />
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  <FileText className={`w-6 h-6 mx-auto mb-1.5 ${isDragOver ? 'text-violet-500 dark:text-violet-400' : 'text-gray-300 dark:text-gray-600'}`} />
+                  <p className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
                     {isDragOver ? 'Drop files here' : 'Click to select files or drag & drop'}
                   </p>
                   <p className="text-xs text-gray-400 dark:text-gray-500">
@@ -553,6 +553,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                   </label>
                   <SpecKitFeaturePicker
                     projectId={projectId}
+                    onOpen={() => setRemoteOpen(false)}
                     onSelect={(feature) => {
                       // This modal's remote browser (browseAutopilotProjectFiles/
                       // getAutopilotProjectFileContent) only ever resolves paths
@@ -585,11 +586,11 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
               <div className="flex justify-start">
                 <button
                   type="button"
-                  onClick={openRemoteBrowser}
+                  onClick={() => (remoteOpen ? setRemoteOpen(false) : openRemoteBrowser())}
                   className="flex items-center gap-1.5 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-700 dark:hover:text-violet-300"
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
-                  Load from Remote
+                  {remoteOpen ? 'Hide Server Files' : 'Show Server Files'}
                 </button>
               </div>
 

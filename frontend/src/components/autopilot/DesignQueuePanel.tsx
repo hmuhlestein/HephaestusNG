@@ -495,14 +495,16 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <p className="text-sm text-gray-400 dark:text-gray-500 mb-4">
             Drop design documents into the queue to start processing
           </p>
-          <Button onClick={() => onAddDesign('feature')} className="bg-purple-700 hover:bg-purple-800 text-white">
-            <Sparkles className="w-4 h-4 mr-1" />
-            Design Spec
-          </Button>
-          <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
-            <Bug className="w-4 h-4 mr-1" />
-            Bug Spec
-          </Button>
+          <div className="flex items-center justify-center gap-3">
+            <Button onClick={() => onAddDesign('feature')} className="bg-purple-700 hover:bg-purple-800 text-white">
+              <Sparkles className="w-4 h-4 mr-1" />
+              Design Spec
+            </Button>
+            <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
+              <Bug className="w-4 h-4 mr-1" />
+              Bug Spec
+            </Button>
+          </div>
         </div>
       )}
 

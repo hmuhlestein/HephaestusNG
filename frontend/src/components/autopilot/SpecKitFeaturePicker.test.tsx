@@ -33,54 +33,61 @@ function renderPicker(onSelect = vi.fn()) {
   return { ...utils, onSelect };
 }
 
+async function findSelect() {
+  return (await screen.findByRole('combobox')) as HTMLSelectElement;
+}
+
 describe('SpecKitFeaturePicker', () => {
-  it('renders a flat list when the project has one repo (or repo labels are all null)', async () => {
+  it('renders a flat option list when the project has one repo (or repo labels are all null)', async () => {
     mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
     renderPicker();
 
-    expect(await screen.findByText('001-checkout-flow')).toBeInTheDocument();
-    expect(screen.getByText('002-login-page')).toBeInTheDocument();
-    // No repo-group headers in the flat case.
-    expect(screen.queryByText('backend')).not.toBeInTheDocument();
+    const select = await findSelect();
+    expect(screen.getByRole('option', { name: '001-checkout-flow' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '002-login-page (no plan.md)' })).toBeInTheDocument();
+    // No repo optgroups in the flat case.
+    expect(select.querySelector('optgroup')).not.toBeInTheDocument();
   });
 
-  it('renders a repo-grouped list when the project has more than one repo', async () => {
+  it('renders repo optgroups when the project has more than one repo', async () => {
     mockGetFeatures.mockResolvedValue(MULTI_REPO_FEATURES);
     renderPicker();
 
-    expect(await screen.findByText('backend')).toBeInTheDocument();
-    expect(screen.getByText('frontend')).toBeInTheDocument();
-    expect(screen.getByText('001-api-change')).toBeInTheDocument();
-    expect(screen.getByText('002-ui-change')).toBeInTheDocument();
+    const select = await findSelect();
+    const groups = Array.from(select.querySelectorAll('optgroup')).map(g => g.label);
+    expect(groups).toEqual(['backend', 'frontend']);
+    expect(screen.getByRole('option', { name: '001-api-change' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '002-ui-change' })).toBeInTheDocument();
   });
 
-  it('calls onSelect with the clicked feature', async () => {
+  it('calls onSelect with the chosen feature', async () => {
     mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
     const { onSelect } = renderPicker();
 
-    const row = await screen.findByText('001-checkout-flow');
-    fireEvent.click(row.closest('[role="button"]')!);
+    const select = await findSelect();
+    fireEvent.change(select, { target: { value: '/001-checkout-flow' } });
 
     expect(onSelect).toHaveBeenCalledWith(SINGLE_REPO_FEATURES[0]);
   });
 
-  it('marks the selected feature aria-pressed after a click', async () => {
+  it('shows "Check readiness" only after a feature is chosen', async () => {
     mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
     renderPicker();
 
-    const row = (await screen.findByText('001-checkout-flow')).closest('[role="button"]')!;
-    expect(row).toHaveAttribute('aria-pressed', 'false');
+    const select = await findSelect();
+    expect(screen.queryByText('Check readiness')).not.toBeInTheDocument();
 
-    fireEvent.click(row);
+    fireEvent.change(select, { target: { value: '/001-checkout-flow' } });
 
-    expect(row).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Check readiness')).toBeInTheDocument();
   });
 
-  it('flags a feature missing plan.md', async () => {
+  it('flags a feature missing plan.md in its option label', async () => {
     mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
     renderPicker();
 
-    expect(await screen.findByText('no plan.md')).toBeInTheDocument();
+    await findSelect();
+    expect(screen.getByRole('option', { name: '002-login-page (no plan.md)' })).toBeInTheDocument();
   });
 
   it('fetches and renders readiness only after clicking "Check readiness"', async () => {
@@ -98,10 +105,11 @@ describe('SpecKitFeaturePicker', () => {
     });
     renderPicker();
 
-    await screen.findByText('001-checkout-flow');
+    const select = await findSelect();
+    fireEvent.change(select, { target: { value: '/001-checkout-flow' } });
     expect(mockGetReadiness).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+    fireEvent.click(screen.getByText('Check readiness'));
 
     expect(await screen.findByText('Missing: tasks.md')).toBeInTheDocument();
     expect(screen.getByText('NEEDS CLARIFICATION: What auth scheme?')).toBeInTheDocument();
@@ -117,8 +125,9 @@ describe('SpecKitFeaturePicker', () => {
     );
     renderPicker();
 
-    await screen.findByText('001-checkout-flow');
-    const button = screen.getAllByText('Check readiness')[0].closest('button')!;
+    const select = await findSelect();
+    fireEvent.change(select, { target: { value: '/001-checkout-flow' } });
+    const button = screen.getByText('Check readiness').closest('button')!;
     fireEvent.click(button);
 
     expect(await screen.findByText('Checking…')).toBeInTheDocument();
@@ -130,13 +139,14 @@ describe('SpecKitFeaturePicker', () => {
     expect(reenabled.closest('button')!).not.toBeDisabled();
   });
 
-  it('passes the feature\'s real (non-null) repoLabel through to the readiness call for a multi-repo feature', async () => {
+  it("passes the feature's real (non-null) repoLabel through to the readiness call for a multi-repo feature", async () => {
     mockGetFeatures.mockResolvedValue(MULTI_REPO_FEATURES);
     mockGetReadiness.mockResolvedValue({ features: [{ number: '001', slug: 'api-change', repoLabel: 'backend', needsClarification: [], missingFiles: [] }] });
     renderPicker();
 
-    await screen.findByText('001-api-change');
-    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+    const select = await findSelect();
+    fireEvent.change(select, { target: { value: 'backend/001-api-change' } });
+    fireEvent.click(screen.getByText('Check readiness'));
 
     await screen.findByText('Check readiness');
     expect(mockGetReadiness).toHaveBeenCalledWith('proj-1', { number: '001', repoLabel: 'backend' });
@@ -147,22 +157,42 @@ describe('SpecKitFeaturePicker', () => {
     mockGetReadiness.mockRejectedValue(new Error('boom'));
     renderPicker();
 
-    await screen.findByText('001-checkout-flow');
-    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+    const select = await findSelect();
+    fireEvent.change(select, { target: { value: '/001-checkout-flow' } });
+    fireEvent.click(screen.getByText('Check readiness'));
 
     expect(await screen.findByText('Failed to check readiness.')).toBeInTheDocument();
   });
 
-  it('clicking "Check readiness" never calls onSelect', async () => {
+  it('choosing a feature never calls onSelect a second time from "Check readiness"', async () => {
     mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
     mockGetReadiness.mockResolvedValue({ features: [{ number: '001', slug: 'checkout-flow', repoLabel: null, needsClarification: [], missingFiles: [] }] });
     const { onSelect } = renderPicker();
 
-    await screen.findByText('001-checkout-flow');
-    fireEvent.click(screen.getAllByText('Check readiness')[0]);
+    const select = await findSelect();
+    fireEvent.change(select, { target: { value: '/001-checkout-flow' } });
+    expect(onSelect).toHaveBeenCalledTimes(1);
 
+    fireEvent.click(screen.getByText('Check readiness'));
     await screen.findByText('Check readiness');
-    expect(onSelect).not.toHaveBeenCalled();
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires onOpen as soon as the dropdown is clicked, before a choice is made', async () => {
+    mockGetFeatures.mockResolvedValue(SINGLE_REPO_FEATURES);
+    const onOpen = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SpecKitFeaturePicker projectId="proj-1" onSelect={vi.fn()} onOpen={onOpen} />
+      </QueryClientProvider>
+    );
+
+    const select = await findSelect();
+    fireEvent.mouseDown(select);
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it('renders nothing when the project has no Spec Kit features', async () => {
