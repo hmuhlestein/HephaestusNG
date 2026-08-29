@@ -44,7 +44,7 @@ required_output:
 # -- architecture_design, product_requirements, design_review,
 # architectural_review -- don't run here, so those files would show
 # [MISSING] on every single run, not just when a goto rewound something).
-# design.md (the bug report) is always available separately and isn't part
+# spec.md (the bug report) is always available separately and isn't part
 # of this declarative manifest, same as in autopilot.
 phase_inputs:
   development:
@@ -234,7 +234,7 @@ launch_template:
       label: Design Document Path
       type: text
       required: true
-      description: "Path to the bug report document (design.md)"
+      description: "Path to the bug report document (spec.md)"
     - name: project_path
       label: Project Working Directory
       type: text
@@ -258,7 +258,7 @@ launch_template:
   phase_1_task_prompt: |
     Phase 1: Fix the Reported Bug
 
-    **Bug Report:** ./.hephaestus/design.md (copied into your worktree)
+    **Bug Report:** ./.hephaestus/spec.md (copied into your worktree)
     **Project Path:** . (your current working directory — an isolated git worktree)
     **Feature Scope:** {feature_scope}
 
@@ -284,7 +284,7 @@ launch_template:
 
     ### STEP 2: Read the Bug Report (PRIMARY INPUT)
     If feature_scope is provided, read it first: {feature_scope}
-    Otherwise, read the bug report: ./.hephaestus/design.md
+    Otherwise, read the bug report: ./.hephaestus/spec.md
     Identify: expected behavior, actual (broken) behavior, and reproduction steps.
 
     ### STEP 3: Reproduce the Bug

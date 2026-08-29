@@ -39,13 +39,13 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL implementation code goes in "Project Path" (src/, tests/, etc.).
   - ALL docs/reports go in "Artifacts Path" — not the project root.
   - Your task description contains the exact paths — copy them exactly.
 
-  SCOPE RULE: Before writing any code, read ./.hephaestus/design.md.
+  SCOPE RULE: Before writing any code, read ./.hephaestus/spec.md.
   Implement ONLY what the design doc specifies. If architecture.md specifies more
   than the design doc, follow the design doc — not the architecture.
   Do NOT add functions, classes, or files not required by the design doc.
@@ -96,7 +96,7 @@ additional_notes: |
   hunting for a [MISSING] file elsewhere.
 
   Read:
-  - ./.hephaestus/design.md — SCOPE AUTHORITY: only implement what this specifies
+  - ./.hephaestus/spec.md — SCOPE AUTHORITY: only implement what this specifies
   - Your task description for "Artifacts Path" and "Project Path" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
   - architecture.md (from Artifacts Path) - Component interfaces and contracts

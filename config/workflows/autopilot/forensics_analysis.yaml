@@ -161,7 +161,7 @@ additional_notes: |
   produce a fresh one on re-entry), so an absent report means that phase's
   last run either never completed or was rewound.
 
-  Also read the original design document at ./.hephaestus/design.md.
+  Also read the original design document at ./.hephaestus/spec.md.
 
   For each output, compare what was produced against:
   1. The prompt that was given (from Step 4)

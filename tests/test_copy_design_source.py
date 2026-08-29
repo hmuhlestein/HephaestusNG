@@ -33,7 +33,7 @@ class TestCopyDesignSourceFileSourced:
         entry = _file_entry(tmp_path / "src")
         heph_dir = tmp_path / "dest" / ".hephaestus"
         dest = copy_design_source(entry, heph_dir)
-        assert dest == heph_dir / "design.md"
+        assert dest == heph_dir / "spec.md"
         assert dest.read_text() == "design content"
 
     def test_missing_file_raises(self, tmp_path):
@@ -75,7 +75,7 @@ class TestCopyDesignDocumentWrapper:
         entry = _file_entry(tmp_path / "src")
         feature_folder = tmp_path / "feature"
         dest = copy_design_document(entry, feature_folder)
-        assert dest == feature_folder / ".hephaestus" / "design.md"
+        assert dest == feature_folder / ".hephaestus" / "spec.md"
         assert dest.read_text() == "design content"
 
     def test_directory_sourced_copies_full_tree(self, tmp_path):

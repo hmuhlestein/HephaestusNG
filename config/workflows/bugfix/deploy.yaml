@@ -78,7 +78,7 @@ additional_notes: |
   - What health checks should run post-deploy
 
   Also read from ./.hephaestus/:
-  - design.md — what was implemented
+  - spec.md — what was implemented
   - context.md — any deployment-related notes from prior phases
 
   ## STEP 3: VALIDATE PREREQUISITES

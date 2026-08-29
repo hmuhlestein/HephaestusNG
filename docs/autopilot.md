@@ -173,7 +173,7 @@ features with explicit execution ordering.
 - Reads `AGENTS.md` for repository guidelines
 - Searches `designs/` for previously shipped work that may inform scope boundaries
 - Queries vector DB for prior decomposition decisions and dependency patterns
-- Reads the full design document (`.hephaestus/design.md`)
+- Reads the full design document (`.hephaestus/spec.md`)
 
 Produces two outputs:
 
@@ -232,10 +232,10 @@ Gate between product requirements and architecture. Verifies that
 scope — nothing added, nothing dropped.
 
 - Reads `.hephaestus/features/<feature-id>/scope.md` — the feature's stated scope
-- Reads `.hephaestus/design.md` — the original full design doc, to verify `scope.md`
+- Reads `.hephaestus/spec.md` — the original full design doc, to verify `scope.md`
   correctly represents the original intent for this feature's slice
 - Reads `requirements.md` — what Phase 1 produced
-- Traces every requirement back to a line in `scope.md` and ultimately to `design.md`
+- Traces every requirement back to a line in `scope.md` and ultimately to `spec.md`
 
 Produces: `scope.md` — a YAML frontmatter block (OKF format:
 `type` first, then verdict PASS or FAIL and supporting fields) followed by
@@ -374,7 +374,7 @@ Produces: `qa.md` with pass/fail status and recommendation.
 
 Final spec compliance check for this feature. Reads both sources:
 - `.hephaestus/features/<feature-id>/scope.md` — the feature's stated scope and boundaries
-- `.hephaestus/design.md` — the original full design doc, to verify the feature's scope was
+- `.hephaestus/spec.md` — the original full design doc, to verify the feature's scope was
   correctly extracted and nothing was silently dropped or added
 
 Compares implementation against every requirement in `scope.md`, validates
@@ -599,7 +599,7 @@ merges to main.
 worktrees/
 ├── <design-id>/                       ← Phase 0 design worktree (temporary)
 │   └── .hephaestus/
-│       ├── design.md                  ← original design doc
+│       ├── spec.md                  ← original design doc
 │       ├── features.json              ← written by Phase 0
 │       └── features/
 │           ├── auth/
@@ -615,7 +615,7 @@ worktrees/
 │       ├── features/
 │       │   └── auth/
 │       │       └── scope.md           ← copied from Phase 0 worktree at creation
-│       ├── design.md                  ← copy of the design doc, seeded at creation
+│       ├── spec.md                  ← copy of the design doc, seeded at creation
 │       ├── requirements.md            ← product_requirements writes flat
 │       ├── architecture_design/
 │       │   └── architecture.md        ← every gated phase writes to its own
@@ -730,7 +730,7 @@ Key points:
 
 ### Phase 0 worktree (design-scoped)
 
-Phase 0 runs in a single design-level worktree. It reads `design.md`, writes
+Phase 0 runs in a single design-level worktree. It reads `spec.md`, writes
 `features.json`, and writes one `scope.md` per feature. This worktree is
 discarded after Phase 0 completes.
 
@@ -769,7 +769,7 @@ before the worktrees are discarded.
 
 **After Phase 0 completes**, the orchestrator immediately copies from the design
 worktree to the feature record folder:
-- `.hephaestus/design.md` → `designs/<timestamp>_<design>_<design-id>/design.md`
+- `.hephaestus/spec.md` → `designs/<timestamp>_<design>_<design-id>/spec.md`
 - `.hephaestus/features.json` → `designs/<timestamp>_<design>_<design-id>/features.json`
 - `.hephaestus/features/<id>/scope.md` → `designs/<timestamp>_<design>_<design-id>/features/<id>/scope.md`
   (one copy per feature)
@@ -970,9 +970,9 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 
 | Phase | Scope | Reads From | Writes To |
 |-------|-------|-----------|-----------|
-| 0  | Design  | design.md, AGENTS.md, designs/, vector DB | features.json, features/\<id\>/scope.md (per feature) |
+| 0  | Design  | spec.md, AGENTS.md, designs/, vector DB | features.json, features/\<id\>/scope.md (per feature) |
 | 1  | Feature | scope.md, AGENTS.md, features/, vector DB | requirements.md |
-| 2  | Feature | scope.md, design.md, requirements.md | scope.md |
+| 2  | Feature | scope.md, spec.md, requirements.md | scope.md |
 | 3  | Feature | scope.md, requirements.md | architecture.md |
 | 4  | Feature | scope.md, requirements.md, architecture.md | challenge.md |
 | 5  | Feature | architecture.md, challenge.md, AGENTS.md | Source code, tests |
@@ -980,7 +980,7 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 | 7  | Feature | architecture.md, requirements.md, adversarial.md | review.md |
 | 8  | Feature | requirements.md, architecture.md, adversarial.md | security.md, code fixes |
 | 9  | Feature | requirements.md, architecture.md, all review reports | qa.md |
-| 10 | Feature | scope.md, design.md, requirements.md, architecture.md, qa.md | validation.md |
+| 10 | Feature | scope.md, spec.md, requirements.md, architecture.md, qa.md | validation.md |
 | 11 | Feature | All reports, source code | docs.md, summary.md, feature_report.html, doc fixes |
 | 12 | Feature | All docs, run_health.json, phase_prompts/ | forensics.md, prompt proposals, memory entries |
 | 13 | Feature | Committed source, forensics.md | Git commit, PR, merge |

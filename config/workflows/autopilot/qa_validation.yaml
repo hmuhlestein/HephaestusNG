@@ -82,7 +82,7 @@ additional_notes: |
   If TESTING.md EXISTS:
     → Read it fully, then execute these steps IN ORDER:
 
-    0. **Scope check** — read ./.hephaestus/design.md and list every function/file
+    0. **Scope check** — read ./.hephaestus/spec.md and list every function/file
        the design requires. Then list what is actually implemented. Flag any
        implemented items NOT in the design as scope violations (critical issue).
        Also verify the seeded test file matches the design doc's test section —
@@ -123,7 +123,7 @@ additional_notes: |
     dispatch for this same phase then writes to a DIFFERENT suffixed file
     instead of racing yours, and the gate reads your own task's suffixed
     file specifically, not a bare qa.md.
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Read the design document and prior inputs from ./.hephaestus/ (spec.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" (qa.md, etc.).
   - Code/tests go in "Project Path" (src/, tests/, etc.).
@@ -138,7 +138,7 @@ additional_notes: |
   Read:
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - TESTING.md — How to run the app and tests
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth)
   - requirements.md (from Artifacts Path) - What must it do? (contains REQ-XX IDs)
   - architecture.md (from Artifacts Path) - How should it work?
   - adversarial.md (from Artifacts Path) - What issues were found in adversarial review?

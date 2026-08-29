@@ -1486,7 +1486,7 @@ class TestVerifyRequirementsCoverScopeCliFlags:
             "Scope: extend start with `--feature`/`--repo`/`--design-doc`.\n\n"
             "| REQ ID | Requirement | Source |\n"
             "|--------|-------------|--------|\n"
-            "| REQ-01 | `--feature`/`--repo` resolve a Spec Kit feature | design.md |\n"
+            "| REQ-01 | `--feature`/`--repo` resolve a Spec Kit feature | spec.md |\n"
         )
         task = self._task()
         mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
@@ -1514,8 +1514,8 @@ class TestVerifyRequirementsCoverScopeCliFlags:
         req_md.write_text(
             "| REQ ID | Requirement | Source |\n"
             "|--------|-------------|--------|\n"
-            "| REQ-01 | `--feature`/`--repo` resolve a Spec Kit feature | design.md |\n"
-            "| REQ-02 | `--design-doc` pins an explicit design document path | design.md |\n"
+            "| REQ-01 | `--feature`/`--repo` resolve a Spec Kit feature | spec.md |\n"
+            "| REQ-02 | `--design-doc` pins an explicit design document path | spec.md |\n"
         )
         task = self._task()
         mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))

@@ -61,10 +61,10 @@ required_output:
 # proceed without the file.
 phase_inputs:
   scope_review:
-    required: [design.md, requirements.md]
+    required: [spec.md, requirements.md]
   architecture_design:
     required: [requirements.md]
-    optional: [design.md]
+    optional: [spec.md]
   design_review:
     required: [requirements.md, architecture.md]
   development:
@@ -82,7 +82,7 @@ phase_inputs:
     required: [requirements.md]
     optional: [architecture.md, adversarial.md, security.md]
   product_validation:
-    required: [design.md, requirements.md]
+    required: [spec.md, requirements.md]
     optional: [architecture.md]
   doc_review:
     # Not summary.md -- doc_review PRODUCES that, so listing it here would show
@@ -457,7 +457,7 @@ launch_template:
   phase_1_task_prompt: |
     Phase 1: Product Requirements Extraction
 
-    **Design Document:** ./.hephaestus/design.md (copied into your worktree)
+    **Design Document:** ./.hephaestus/spec.md (copied into your worktree)
     **Project Path:** . (your current working directory — an isolated git worktree)
     **Feature Scope:** {feature_scope}
 
@@ -482,7 +482,7 @@ launch_template:
     ### STEP 2: Read the Scope Document (PRIMARY INPUT)
     If feature_scope is provided, read it first: {feature_scope}
     This document defines the specific scope for this feature.
-    Otherwise, read the design document: ./.hephaestus/design.md
+    Otherwise, read the design document: ./.hephaestus/spec.md
 
     ### STEP 3: Extract Requirements
     - Functional requirements with acceptance criteria

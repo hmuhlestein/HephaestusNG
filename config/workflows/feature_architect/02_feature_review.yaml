@@ -16,7 +16,7 @@ description: |
   DEFER (nice to have). Report findings clearly — do NOT edit features.json or
   any scope.md. The Feature Architect will re-decompose based on your report.
 done_definitions:
-  - "./.hephaestus/design.md reviewed and full scope understood"
+  - "./.hephaestus/spec.md reviewed and full scope understood"
   - "./.hephaestus/features.json and every ./.hephaestus/features/<id>/scope.md reviewed"
   - "Decomposition Summary written first, describing the feature breakdown as proposed before any critique"
   - "Every design requirement traced to an owning feature (or flagged as missing)"
@@ -61,7 +61,7 @@ additional_notes: |
   own task's suffixed file specifically, not a bare feature_review.md.
 
   Read:
-  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
+  - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - ./.hephaestus/features.json — the proposed decomposition
   - ./.hephaestus/features/<id>/scope.md for every feature listed
   - Explore the existing codebase the same way the Feature Architect was told
@@ -71,7 +71,7 @@ additional_notes: |
   ## STEP 2: ADVERSARIAL COMPARISON
 
   ### Coverage
-  - Walk every requirement/section in design.md. Which feature owns it? If none
+  - Walk every requirement/section in spec.md. Which feature owns it? If none
     does, and it isn't marked as already-implemented with evidence, that's a
     BLOCKER — the design has scope with no owner.
   - Is anything in features.json NOT traceable to the design doc (invented
@@ -96,7 +96,7 @@ additional_notes: |
 
   ## STEP 3: VERIFY FINDINGS BEFORE REPORTING
 
-  Before classifying any issue as BLOCKER/FIX, re-read the exact design.md
+  Before classifying any issue as BLOCKER/FIX, re-read the exact spec.md
   section and scope.md you are about to cite — confirm by opening the file
   again immediately before writing the finding, don't rely on memory. If you
   cannot confirm the issue is real, downgrade to DEFER with a note.
@@ -140,7 +140,7 @@ additional_notes: |
   ## Findings
 
   ### [BLOCKER] {title}
-  - **Design section:** {reference into design.md}
+  - **Design section:** {reference into spec.md}
   - **Evidence:** {what's wrong in features.json/scope.md}
   - **Impact:** {what breaks downstream if left unfixed}
   - **Recommended fix:** {specific enough the Feature Architect can act without guessing}
@@ -277,7 +277,7 @@ additional_notes: |
 
   DO:
   - Review against THE DESIGN DOC, not the Feature Architect's own framing of it
-  - Show evidence — cite the design.md section and the scope.md/features.json entry
+  - Show evidence — cite the spec.md section and the scope.md/features.json entry
   - Classify honestly: BLOCKER, FIX, or DEFER
   - Verify "already implemented" claims by reading the actual code
   - Give specific, actionable recommended fixes

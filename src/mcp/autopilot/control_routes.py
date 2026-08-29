@@ -421,7 +421,7 @@ def _resolve_and_enqueue_speckit_feature(
             raise HTTPException(404, f"Project {project_id} not found")
 
         features = discover_speckit_features(db, project_id, project.base_dir)
-        design_md_present = (Path(project_path) / "design.md").exists()
+        design_md_present = (Path(project_path) / "spec.md").exists()
 
         try:
             selected = resolve_feature_selection(features, feature, repo, design_md_present)
@@ -648,7 +648,7 @@ async def speckit_check(project_path: str, feature: Optional[str] = None, repo: 
             features = discover_speckit_features_unregistered(project_path)
             multi_repo_scan = False
 
-    design_md_present = (Path(project_path) / "design.md").exists()
+    design_md_present = (Path(project_path) / "spec.md").exists()
 
     if feature is not None:
         from src.autopilot.orchestrator.speckit import resolve_feature_selection
