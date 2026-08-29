@@ -209,7 +209,11 @@ async def get_pipeline_status(
 
         def _count_queue_depth_sync():
             with get_db() as db:
-                return db.query(AutopilotDesign).filter(AutopilotDesign.project_id == project_id, AutopilotDesign.status.notin_(["completed", "failed", "skipped"])).count()
+                return db.query(AutopilotDesign).filter(
+                    AutopilotDesign.project_id == project_id,
+                    AutopilotDesign.status.notin_(["completed", "failed", "skipped"]),
+                    AutopilotDesign.archived_at.is_(None),
+                ).count()
 
         try:
             queue_depth = await loop.run_in_executor(None, _count_queue_depth_sync)
