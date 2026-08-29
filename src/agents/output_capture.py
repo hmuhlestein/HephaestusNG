@@ -33,6 +33,11 @@ class AgentOutputCapture:
         self.tmux_server = tmux_server
         self._transcript_filter_cache: Dict[str, Any] = {}
         self._pane_stability_cache: Dict[str, Dict[str, Any]] = {}
+        # Lazily-computed, process-lifetime cache of each live agent's raw-
+        # transcript backfill -- see _get_live_transcript_backfill. Keyed
+        # by agent_id, computed at most once per agent regardless of how
+        # many times get_agent_output is polled for it.
+        self._live_backfill_cache: Dict[str, str] = {}
 
     def get_agent_output(self, agent_id: str, lines: int = 200) -> str:
         """Get recent output from agent's tmux session or stored output for terminated agents.
@@ -80,7 +85,11 @@ class AgentOutputCapture:
                             clean_lines = f.read().splitlines()
                         if lines > 0:
                             clean_lines = clean_lines[-lines:]
-                        return "\n".join(clean_lines)
+                        clean_text = "\n".join(clean_lines)
+                        backfill = self._get_live_transcript_backfill(agent, agent_id)
+                        if backfill:
+                            return f"{backfill}\n\n[... below: continues live ...]\n\n{clean_text}"
+                        return clean_text
 
                 # No clean transcript yet (e.g. still within the first
                 # couple of confirmation polls, or mid-stream on a long
@@ -207,6 +216,40 @@ class AgentOutputCapture:
                     log_lines.append(f"[{log.log_type}] {msg}")
             return "\n".join(log_lines)
         return "Agent terminated - no output was captured"
+
+    def _get_live_transcript_backfill(self, agent, agent_id: str) -> str:
+        """Recover the TRUE beginning of a still-live agent's session,
+        which .clean.log structurally cannot have: it's built by
+        _poll_stable_transcript polling capture-pane only while
+        get_agent_output is actually being called for this agent, so
+        anything from before the first poll -- or that scrolled off the
+        alt-screen pane between infrequent polls -- is gone from it
+        forever (tmux keeps no alt-screen scrollback at all). The raw
+        pipe-pane transcript has no such gap; it captures every byte
+        continuously from session start.
+
+        Computed at most ONCE per agent (cached in _live_backfill_cache
+        for this process's lifetime), not on every poll -- re-filtering
+        the whole raw transcript every ~1s for an actively-streaming live
+        agent would be real, recurring cost for a source that's only
+        needed once, to backfill what's permanently missing at the start.
+        The caller prepends this in front of the normal live clean_log
+        content instead of replacing it, so ongoing live updates are
+        unaffected.
+        """
+        if agent_id in self._live_backfill_cache:
+            return self._live_backfill_cache[agent_id]
+
+        backfill = ""
+        try:
+            if agent.tmux_session_name:
+                backfill = self._read_transcript_log(agent, lines=0)
+        except Exception as e:
+            logger.debug(f"[LIVE-BACKFILL] Failed for agent {agent_id}: {e}")
+            backfill = ""
+
+        self._live_backfill_cache[agent_id] = backfill
+        return backfill
 
     def _resolve_tmux_transcript_dir(self, agent) -> Optional[Path]:
         """Find the .hephaestus/tmux/ directory this agent's transcript
@@ -615,6 +658,23 @@ class AgentOutputCapture:
                 if kind == 'content':
                     filtered_lines.append(line)
                     clean_lines.append(clean)
+                elif kind == 'blank':
+                    # A genuinely blank row -- e.g. an actual paragraph
+                    # break or a blank line inside a code block, now
+                    # correctly reconstructed by the row/cursor model
+                    # above -- gets preserved. But a blank sitting between
+                    # two chrome/separator lines is decorative noise from
+                    # THAT chrome (e.g. the blank pi always draws between
+                    # its two separator bars), not real content spacing,
+                    # so only count it as real when neither neighbor is
+                    # chrome/sep. The Spacing pass further down still
+                    # collapses any resulting runs down to one and drops
+                    # leading blanks either way.
+                    prev_kind = classified[idx - 1][0] if idx > 0 else None
+                    next_kind = classified[idx + 1][0] if idx + 1 < len(classified) else None
+                    if prev_kind not in ('sep', 'chrome') and next_kind not in ('sep', 'chrome'):
+                        filtered_lines.append("")
+                        clean_lines.append("")
                 elif kind == 'sep':
                     j = idx + 1
                     while (

@@ -350,6 +350,62 @@ class TestGetAgentOutputUsesCleanTranscript:
         assert "hello-from-clean-transcript" in output
         assert (tmp_path / ".hephaestus" / "tmux" / f"{session_name}.clean.log").exists()
 
+    def test_live_agent_backfills_the_true_beginning_from_raw_transcript(
+        self, agent_manager, db_manager, tmux_session, tmp_path
+    ):
+        """.clean.log is built by polling capture-pane only while
+        get_agent_output is actually being called for this agent -- it
+        structurally cannot have anything from before the first poll
+        (tmux keeps no alt-screen scrollback at all). The raw transcript
+        has no such gap. get_agent_output must backfill from it, once,
+        without losing clean_log's own live content."""
+        session_name, session = tmux_session
+        pane = session.attached_window.attached_pane
+        pane.send_keys("echo hello-from-clean-transcript", enter=True)
+        time.sleep(0.5)
+
+        from src.core.database import Workflow
+
+        task_id = str(uuid.uuid4())
+        agent_id = str(uuid.uuid4())
+        workflow_id = str(uuid.uuid4())
+        session_db = db_manager.get_session()
+        session_db.add(
+            Workflow(
+                id=workflow_id, name="t", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot",
+                working_directory=str(tmp_path),
+            )
+        )
+        session_db.add(
+            Task(
+                id=task_id, workflow_id=workflow_id, raw_description="r",
+                done_definition="d", status="in_progress",
+            )
+        )
+        session_db.add(
+            Agent(
+                id=agent_id, system_prompt="p", status="working", cli_type="claude",
+                tmux_session_name=session_name, current_task_id=task_id,
+            )
+        )
+        session_db.commit()
+        session_db.close()
+
+        # Pre-seed a raw transcript with content .clean.log never saw --
+        # simulating output that scrolled off-screen before polling
+        # started, exactly like a real long-unwatched agent.
+        tmux_dir = tmp_path / ".hephaestus" / "tmux"
+        tmux_dir.mkdir(parents=True, exist_ok=True)
+        (tmux_dir / f"{session_name}.transcript.log").write_text(
+            "the-true-beginning-of-the-session\n"
+        )
+
+        output = agent_manager.get_agent_output(agent_id, lines=100)
+        assert "the-true-beginning-of-the-session" in output
+        assert "hello-from-clean-transcript" in output
+        assert "[... below: continues live ...]" in output
+
     def test_empty_clean_transcript_falls_back_to_live_capture_pane_not_raw(
         self, agent_manager, db_manager, tmp_path, monkeypatch
     ):
