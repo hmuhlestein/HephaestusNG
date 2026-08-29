@@ -102,6 +102,19 @@ class TicketSearchService:
         Returns:
             List of ticket search results with relevance scores
         """
+        # An empty/whitespace-only query has no meaningful direction to embed
+        # -- unlike keyword_search's FTS5 MATCH (which deterministically
+        # matches nothing on an empty phrase), vector similarity against a
+        # degenerate embedding still returns SOME top-K hits, just
+        # essentially arbitrary ones with no relevance to anything. A caller
+        # doing a pure structural filter query (no free text) gets noise
+        # merged into hybrid_search's results instead of nothing -- skip
+        # semantic search entirely and let the keyword branch (which
+        # already handles empty-query structural filtering directly against
+        # the tickets table) be the sole contributor for that case.
+        if not query_text or not query_text.strip():
+            return []
+
         try:
             # Generate query embedding via the configurable provider (fastembed)
             provider = TicketSearchService._get_embedding_provider()
@@ -118,6 +131,26 @@ class TicketSearchService:
                 score_threshold=0.3,  # better recall on cosine similarity
             )
 
+            # is_resolved isn't part of the indexed vector metadata (see
+            # index_ticket) and isn't kept in sync there on every status
+            # change even where it is -- filtering against it from stale/
+            # absent metadata would either silently no-op or (checking
+            # meta.get("is_resolved"), always None) reject every hit
+            # outright. Look it up live against the real ticket_ids
+            # candidate hits actually returned instead -- small, bounded
+            # query, and always correct regardless of index staleness.
+            live_is_resolved: Dict[str, bool] = {}
+            if filters and "is_resolved" in filters and hits:
+                candidate_ids = [
+                    h.get("metadata", {}).get("ticket_id", h.get("id")) for h in hits
+                ]
+                with get_db() as db:
+                    live_is_resolved = dict(
+                        db.query(Ticket.id, Ticket.is_resolved)
+                        .filter(Ticket.id.in_(candidate_ids))
+                        .all()
+                    )
+
             def _passes(meta: Dict[str, Any]) -> bool:
                 if not filters:
                     return True
@@ -129,6 +162,10 @@ class TicketSearchService:
                                 return False
                         elif val != want:
                             return False
+                if "is_resolved" in filters:
+                    ticket_id = meta.get("ticket_id")
+                    if live_is_resolved.get(ticket_id) != filters["is_resolved"]:
+                        return False
                 if (
                     "assigned_agent_id" in filters
                     and meta.get("assigned_agent_id") != filters["assigned_agent_id"]
@@ -210,33 +247,68 @@ class TicketSearchService:
                 # can't be parsed as FTS5 query grammar (see _fts5_query).
                 fts_query = _fts5_query(keywords)
 
-                # Query FTS5 with JOIN to tickets table
-                sql = text(
+                # An empty/whitespace-only keywords string tokenizes to
+                # nothing, and _fts5_query's own fallback ('""', an empty
+                # phrase literal) matches ZERO rows under FTS5 MATCH -- not
+                # "everything", as a caller doing a pure structural filter
+                # query (no free text, e.g. "give me open bug tickets")
+                # might reasonably expect. Skip the MATCH entirely in that
+                # case and just filter the tickets table directly, ordered
+                # by recency instead of a relevance rank that has no query
+                # to rank against. Observed live: every "check for open bug
+                # tickets" self-check in this project's own workflow
+                # prompts calls search_tickets with only filters and no
+                # query text, and silently got zero results every time.
+                if fts_query == '""':
+                    sql = text(
+                        """
+                        SELECT
+                            t.id as ticket_id,
+                            t.title,
+                            t.description,
+                            t.status,
+                            t.priority,
+                            t.ticket_type,
+                            t.is_resolved,
+                            t.created_at,
+                            t.assigned_agent_id,
+                            t.tags,
+                            NULL as relevance_score
+                        FROM tickets t
+                        WHERE t.workflow_id = :workflow_id
+                        ORDER BY t.created_at DESC
+                        LIMIT :limit
                     """
-                    SELECT
-                        t.id as ticket_id,
-                        t.title,
-                        t.description,
-                        t.status,
-                        t.priority,
-                        t.ticket_type,
-                        t.created_at,
-                        t.assigned_agent_id,
-                        t.tags,
-                        fts.rank as relevance_score
-                    FROM ticket_fts fts
-                    JOIN tickets t ON fts.ticket_id = t.id
-                    WHERE fts.ticket_fts MATCH :query
-                      AND t.workflow_id = :workflow_id
-                    ORDER BY fts.rank
-                    LIMIT :limit
-                """
-                )
-
-                result = db.execute(
-                    sql,
-                    {"query": fts_query, "workflow_id": workflow_id, "limit": limit},
-                )
+                    )
+                    result = db.execute(sql, {"workflow_id": workflow_id, "limit": limit})
+                else:
+                    # Query FTS5 with JOIN to tickets table
+                    sql = text(
+                        """
+                        SELECT
+                            t.id as ticket_id,
+                            t.title,
+                            t.description,
+                            t.status,
+                            t.priority,
+                            t.ticket_type,
+                            t.is_resolved,
+                            t.created_at,
+                            t.assigned_agent_id,
+                            t.tags,
+                            fts.rank as relevance_score
+                        FROM ticket_fts fts
+                        JOIN tickets t ON fts.ticket_id = t.id
+                        WHERE fts.ticket_fts MATCH :query
+                          AND t.workflow_id = :workflow_id
+                        ORDER BY fts.rank
+                        LIMIT :limit
+                    """
+                    )
+                    result = db.execute(
+                        sql,
+                        {"query": fts_query, "workflow_id": workflow_id, "limit": limit},
+                    )
 
                 rows = result.fetchall()
 
@@ -265,6 +337,9 @@ class TicketSearchService:
                                     continue
                             elif row.ticket_type != filters["ticket_type"]:
                                 continue
+
+                        if "is_resolved" in filters and row.is_resolved != filters["is_resolved"]:
+                            continue
 
                     results.append(
                         {

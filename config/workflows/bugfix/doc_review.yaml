@@ -45,7 +45,7 @@ additional_notes: |
 
   Before any doc work, check for open bug tickets:
   ```bash
-  search_tickets(status="open", ticket_type="bug")
+  search_tickets(is_resolved=False, ticket_type="bug")
   ```
 
   If open bug tickets exist:

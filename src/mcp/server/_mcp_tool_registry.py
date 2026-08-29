@@ -200,6 +200,11 @@ async def _tool_search_tickets(arguments: Dict[str, Any]):
     filters: Dict[str, Any] = {}
     if arguments.get("status"):
         filters["status"] = arguments["status"]
+    # Explicit None-check, not truthiness -- False is the meaningful,
+    # common value here ("still needs action") and a bare `if
+    # arguments.get("is_resolved"):` would silently drop it.
+    if arguments.get("is_resolved") is not None:
+        filters["is_resolved"] = arguments["is_resolved"]
 
     # Tags are not a supported filter key (only status/priority/ticket_type
     # are), but _ticket_text indexes them into the searchable document, so
@@ -786,7 +791,11 @@ MCP_TOOL_REGISTRY: List[MCPToolSpec] = [
                     "items": {"type": "string"},
                     "description": "Tags to bias the search toward (folded into the query text)",
                 },
-                "status": {"type": "string", "description": "Filter by status"},
+                "status": {"type": "string", "description": "Filter by exact status (a literal board column id, e.g. 'backlog' -- not a general concept like 'open'; use is_resolved for that)"},
+                "is_resolved": {
+                    "type": "boolean",
+                    "description": "Filter by resolution state -- pass false to find tickets still needing action, regardless of which board column they're in. Omit query for a pure filter listing (no free text needed).",
+                },
                 "workflow_id": {
                     "type": "string",
                     "description": "Workflow whose tickets to search",

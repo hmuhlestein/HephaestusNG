@@ -132,7 +132,7 @@ additional_notes: |
   problems and filed tickets for them (tagged "qa-finding" or similar,
   ticket_type="bug"). Check before assuming this is a first-time build:
 
-    search_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
+    search_tickets(workflow_id="<your workflow id>", is_resolved=False, ticket_type="bug")
 
   If open bug tickets exist: fixing them is your priority for this pass —
   read each one, fix the underlying issue, then change its status to
