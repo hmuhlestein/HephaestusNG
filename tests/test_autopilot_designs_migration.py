@@ -404,6 +404,155 @@ def test_migrate_speckit_design_source_dir_unique_resumes_after_interrupted_rebu
         engine.dispose()
 
 
+def test_migrate_speckit_design_columns_resumes_after_interrupted_rebuild():
+    """migrate_speckit_design_columns runs first in the migration list and,
+    before this fix, had no resume check of its own: a crash during ITS OWN
+    filename-nullable rebuild (between the RENAME and the final DROP TABLE)
+    left autopilot_designs_old behind forever, because this function's own
+    "is filename already nullable" check no-ops immediately against
+    whatever fresh table exists on the next startup, never noticing the
+    abandoned table. It must now resume and finish the interrupted rebuild
+    itself, the same way its sibling migration already does."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+
+        from sqlalchemy import MetaData, Table, UniqueConstraint
+        from sqlalchemy.orm import sessionmaker
+
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.schema_migrations import migrate_speckit_design_columns
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        AutopilotProject.__table__.create(engine)
+
+        # Simulate the crash point: autopilot_designs was already renamed to
+        # autopilot_designs_old, but the process died before the CREATE that
+        # would restore autopilot_designs -- so it does not exist at all.
+        old_cols = [c.copy() for c in AutopilotDesign.__table__.columns]
+        meta = MetaData()
+        old_table = Table(
+            "autopilot_designs_old",
+            meta,
+            *old_cols,
+            UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+        )
+        old_table.create(engine)
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        now = datetime.datetime.utcnow()
+        session.execute(
+            AutopilotProject.__table__.insert().values(
+                id="proj-cols-crash", name="Cols Crash Project", base_dir="/tmp/cols-crash", is_active=True, created_at=now, updated_at=now
+            )
+        )
+        session.execute(
+            old_table.insert().values(
+                id="des-cols-crash-1",
+                project_id="proj-cols-crash",
+                filename="design.md",
+                name="Design",
+                ordinal=0,
+                size_bytes=0,
+                extension=".md",
+                status="decomposing",
+                created_at=now,
+                cost_total_usd=0.0,
+            )
+        )
+        session.commit()
+        session.close()
+
+        with engine.connect() as conn:
+            info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+            assert info == []
+
+        migrate_speckit_design_columns(engine)
+
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, status FROM autopilot_designs")).fetchall()
+            assert [(r[0], r[1]) for r in rows] == [("des-cols-crash-1", "decomposing")]
+
+            leftover = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_designs_old'")
+            ).scalar()
+            assert leftover is None
+
+        engine.dispose()
+
+
+def test_resume_helper_shared_across_both_design_migrations():
+    """The resume check is shared: a rebuild left interrupted by ONE
+    migration (e.g. migrate_speckit_design_columns crashing mid-rebuild)
+    must be recovered by whichever design migration happens to run next on
+    the following startup (e.g. migrate_speckit_design_source_dir_unique),
+    not only by the migration that originally started it -- otherwise a
+    crash during the first migration in the list is never picked up by
+    itself (see the no-op-check problem above) and the data stays
+    stranded forever."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+
+        from sqlalchemy import MetaData, Table, UniqueConstraint
+        from sqlalchemy.orm import sessionmaker
+
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.schema_migrations import migrate_speckit_design_source_dir_unique
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        AutopilotProject.__table__.create(engine)
+
+        old_cols = [c.copy() for c in AutopilotDesign.__table__.columns]
+        meta = MetaData()
+        old_table = Table(
+            "autopilot_designs_old",
+            meta,
+            *old_cols,
+            UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+        )
+        old_table.create(engine)
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        now = datetime.datetime.utcnow()
+        session.execute(
+            AutopilotProject.__table__.insert().values(
+                id="proj-shared", name="Shared Project", base_dir="/tmp/shared", is_active=True, created_at=now, updated_at=now
+            )
+        )
+        session.execute(
+            old_table.insert().values(
+                id="des-shared-1",
+                project_id="proj-shared",
+                filename="design.md",
+                name="Design",
+                ordinal=0,
+                size_bytes=0,
+                extension=".md",
+                status="decomposing",
+                created_at=now,
+                cost_total_usd=0.0,
+            )
+        )
+        session.commit()
+        session.close()
+
+        # A DIFFERENT migration than the one that (in the real bug) left
+        # this table behind must still pick it up and finish the rebuild.
+        migrate_speckit_design_source_dir_unique(engine)
+
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, status FROM autopilot_designs")).fetchall()
+            assert [(r[0], r[1]) for r in rows] == [("des-shared-1", "decomposing")]
+
+            leftover = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_designs_old'")
+            ).scalar()
+            assert leftover is None
+
+        engine.dispose()
+
+
 def test_migrate_speckit_design_source_dir_unique_resumes_when_new_table_already_created():
     """A different crash point than the test above: the process died AFTER
     the CREATE that restores autopilot_designs (with the new constraint) but
