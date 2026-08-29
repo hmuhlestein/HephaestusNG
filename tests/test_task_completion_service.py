@@ -1546,6 +1546,145 @@ class TestVerifyRequirementsCoverScopeCliFlags:
         assert result is None  # verify_output_artifact already surfaces this case
 
 
+class TestVerifyScopeCliFlagsAreImplemented:
+    """Final hard floor, at git_expert: a CLI flag can get a REQ-XX row
+    (verify_requirements_cover_scope_cli_flags) and a real commit
+    (verify_development_produced_a_commit) and still never actually be
+    implemented, if the commit was for something unrelated. Observed
+    live: workflow e9019930's speckit-cli-integration merged to main with
+    --design-doc, queue_routes.py's directory-registration logic, and the
+    whole tests/test_cli_autopilot_speckit.py file still missing --
+    development's commits were real, just never implementing the missing
+    pieces. This is the last chokepoint before the gap ships."""
+
+    def _task(self, **overrides):
+        defaults = dict(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        defaults.update(overrides)
+        return Mock(**defaults)
+
+    def _session_with_workflow(self, working_directory, feature_scope):
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
+            working_directory=working_directory,
+            launch_params={"feature_scope": feature_scope} if feature_scope else {},
+        )
+        return mock_session
+
+    def _init_repo_with_main_and_feature_branch(self, tmp_path):
+        """A repo with a 'main' branch and a feature branch diverged from
+        it, so git diff main...HEAD reflects only the feature's own
+        changes -- matching git_expert's own STEP 2 (merge main into the
+        feature branch first)."""
+        from git import Repo
+
+        repo = Repo.init(tmp_path)
+        (tmp_path / "README.md").write_text("# init\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("initial commit")
+        repo.git.branch("-m", repo.active_branch.name, "main")
+        repo.git.checkout("-b", "feature/x")
+        return repo
+
+    def test_returns_none_for_arbitration_task(self):
+        phase = Mock(name="git_expert", id="phase-1")
+        phase.name = "git_expert"
+        task = self._task(created_by_agent_id="arbitration")
+        mock_session = Mock()
+
+        result = TaskCompletionService.verify_scope_cli_flags_are_implemented(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+        mock_session.query.assert_not_called()
+
+    def test_returns_none_for_non_git_expert_phase(self):
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = self._task()
+
+        result = TaskCompletionService.verify_scope_cli_flags_are_implemented(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_returns_none_when_no_feature_scope_in_launch_params(self, tmp_path):
+        phase = Mock(name="git_expert", id="phase-1")
+        phase.name = "git_expert"
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=None)
+
+        result = TaskCompletionService.verify_scope_cli_flags_are_implemented(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
+    def test_rejects_when_flag_never_appears_in_the_diff(self, tmp_path):
+        """The exact live incident: a real commit landed, but for
+        something unrelated to the missing flag."""
+        phase = Mock(name="git_expert", id="phase-1")
+        phase.name = "git_expert"
+        scope_md = tmp_path / "scope.md"
+        scope_md.write_text("Extend start with `--feature`/`--repo`/`--design-doc`.\n")
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
+
+        repo = self._init_repo_with_main_and_feature_branch(tmp_path)
+        (tmp_path / "unrelated.py").write_text("def fixed_bug(): pass\n")
+        repo.index.add(["unrelated.py"])
+        repo.index.commit("fix: unrelated adversarial-review nit")
+
+        result = TaskCompletionService.verify_scope_cli_flags_are_implemented(
+            session=mock_session, task=task, phase=phase
+        )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "--design-doc" in result["message"]
+        assert task.status == "failed"
+        assert "--design-doc" in task.failure_reason
+
+    def test_passes_when_every_flag_appears_in_the_diff(self, tmp_path):
+        phase = Mock(name="git_expert", id="phase-1")
+        phase.name = "git_expert"
+        scope_md = tmp_path / "scope.md"
+        scope_md.write_text("Extend start with `--feature`/`--repo`/`--design-doc`.\n")
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
+
+        repo = self._init_repo_with_main_and_feature_branch(tmp_path)
+        (tmp_path / "cli.py").write_text(
+            "parser.add_argument('--feature')\n"
+            "parser.add_argument('--repo')\n"
+            "parser.add_argument('--design-doc')\n"
+        )
+        repo.index.add(["cli.py"])
+        repo.index.commit("feat: wire up --feature/--repo/--design-doc")
+
+        result = TaskCompletionService.verify_scope_cli_flags_are_implemented(
+            session=mock_session, task=task, phase=phase
+        )
+
+        assert result is None
+        assert task.status == "done"  # untouched
+
+    def test_fails_open_when_worktree_is_not_a_git_repo(self, tmp_path):
+        phase = Mock(name="git_expert", id="phase-1")
+        phase.name = "git_expert"
+        scope_md = tmp_path / "scope.md"
+        scope_md.write_text("Extend start with `--design-doc`.\n")
+        task = self._task()
+        mock_session = self._session_with_workflow(str(tmp_path), feature_scope=str(scope_md))
+
+        result = TaskCompletionService.verify_scope_cli_flags_are_implemented(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+        assert task.status == "done"
+
+
 class TestRecordLearnings:
     """Tests for record_learnings method."""
 
