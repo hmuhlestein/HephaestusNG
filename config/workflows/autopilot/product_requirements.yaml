@@ -71,8 +71,8 @@ additional_notes: |
   Also use MCP tool to check for open tickets:
   ```python
   # Check for open bug tickets and tech debt items
-  result = heph_search_tickets(status="open", ticket_type="bug")
-  result2 = heph_search_tickets(status="open", tags=["tech-debt"])
+  result = heph_search_tickets(is_resolved=False, ticket_type="bug")
+  result2 = heph_search_tickets(is_resolved=False, tags=["tech-debt"])
   ```
 
   If the design doc is about tech debt/refactoring OR there are significant
