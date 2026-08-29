@@ -87,6 +87,13 @@ additional_notes: |
        implemented items NOT in the design as scope violations (critical issue).
        Also verify the seeded test file matches the design doc's test section —
        if it was replaced or modified, that is a critical issue.
+       **SPEC KIT INPUT (if present):** if no file exists at the flat
+       `./.hephaestus/spec.md` path, this run's design doc came from a Spec
+       Kit feature directory — check `./.hephaestus/specs/<NNN-name>/spec.md`
+       instead (`find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`)
+       and use it as the design for this scope check. Also check that same
+       directory for `tasks.md` — its acceptance-criteria/task list is
+       additional, supplementary scope context alongside spec.md.
 
     1. **Run the application** — follow the "How to Run the Application" section.
        Run the actual code, not just tests. Capture stdout and any log files it writes.

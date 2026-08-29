@@ -141,6 +141,7 @@ additional_notes: |
   Read:
   - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - ./.hephaestus/spec.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the security-relevant spec here; there is no separate requirements.md
+    (SPEC KIT INPUT: if missing, check `./.hephaestus/specs/<NNN-name>/spec.md` instead)
   - adversarial.md (from Artifacts Path) - Any security concerns from adversarial review?
 
   ## STEP 4: AUTHENTICATION & AUTHORIZATION

@@ -67,20 +67,22 @@ phase_inputs:
     optional: [spec.md]
   design_review:
     required: [requirements.md, architecture.md]
+    optional: [spec.md]
   development:
     required: [architecture.md, requirements.md]
     optional: [challenge.md, adversarial.md, review.md, security.md]
   adversarial_review:
     required: [requirements.md]
-    optional: [architecture.md]
+    optional: [architecture.md, spec.md]
   architectural_review:
     required: [architecture.md, requirements.md]
+    optional: [spec.md]
   security_review:
     required: [requirements.md, architecture.md]
-    optional: [adversarial.md]
+    optional: [adversarial.md, spec.md]
   qa_validation:
     required: [requirements.md]
-    optional: [architecture.md, adversarial.md, security.md]
+    optional: [architecture.md, adversarial.md, security.md, spec.md]
   product_validation:
     required: [spec.md, requirements.md]
     optional: [architecture.md]
@@ -483,6 +485,15 @@ launch_template:
     If feature_scope is provided, read it first: {feature_scope}
     This document defines the specific scope for this feature.
     Otherwise, read the design document: ./.hephaestus/spec.md
+
+    **SPEC KIT INPUT (if present):** before reading, check whether this run
+    started from a Spec Kit feature instead of a hand-written spec.md:
+    `find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`. If a
+    `spec.md` exists under `./.hephaestus/specs/<NNN-name>/`, read THAT file
+    instead of the flat `./.hephaestus/spec.md` path above — it already
+    carries prioritized (P1/P2/P3) user stories, functional requirements
+    (`FR-NNN`), and measurable success criteria. If no `spec.md` is present
+    under either location, proceed exactly as before.
 
     ### STEP 3: Extract Requirements
     - Functional requirements with acceptance criteria
