@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
   Search, Grid, List,
-  Clock, DollarSign, Layers, Eye
+  Clock, DollarSign, Layers, Eye, FileText
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { StatusBadge, StatusIcon, formatTime } from '@/pages/Autopilot';
@@ -29,7 +29,7 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
 
   const { data: features, isLoading } = useQuery({
     queryKey: ['autopilot-features', projectId],
-    queryFn: () => apiService.getAutopilotFeatures(),
+    queryFn: () => apiService.getAutopilotFeatures(projectId || undefined),
     enabled: !!projectId,
   });
 
@@ -44,6 +44,24 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
     if (statusFilter !== 'all' && f.status !== statusFilter) return false;
     if (search && !f.name.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
+  });
+
+  // Group by the spec each feature was decomposed from. A user queues a
+  // spec, not a feature, so a flat list of a dozen feature names gives no
+  // clue which ones belong to the same piece of work. Built by walking the
+  // already-sorted list so both the groups and the features inside them stay
+  // in the backend's newest-first order.
+  const groups: { id: string; name: string; features: any[] }[] = [];
+  const groupIndex = new Map<string, number>();
+  filtered.forEach((f: any) => {
+    const id = f.design_id || '__no_spec__';
+    let idx = groupIndex.get(id);
+    if (idx === undefined) {
+      idx = groups.length;
+      groupIndex.set(id, idx);
+      groups.push({ id, name: f.design_name || 'No spec', features: [] });
+    }
+    groups[idx].features.push(f);
   });
 
   return (
@@ -110,33 +128,57 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
               : 'Processed features will appear here'}
           </p>
         </div>
-      ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((feature: any, index: number) => (
-            <FeatureCard
-              key={feature.id}
-              feature={feature}
-              index={index}
-              onClick={() => onSelectFeature(feature.id)}
-            />
-          ))}
-        </div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
-          <div className="divide-y">
-            {filtered.map((feature: any) => (
-              <FeatureRow
-                key={feature.id}
-                feature={feature}
-                onClick={() => onSelectFeature(feature.id)}
-              />
-            ))}
-          </div>
+        <div className="space-y-6">
+          {groups.map((group) => (
+            <div key={group.id} className="space-y-3">
+              <SpecHeader name={group.name} count={group.features.length} />
+              {viewMode === 'grid' ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {group.features.map((feature: any, index: number) => (
+                    <FeatureCard
+                      key={feature.id}
+                      feature={feature}
+                      index={index}
+                      onClick={() => onSelectFeature(feature.id)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
+                  <div className="divide-y">
+                    {group.features.map((feature: any) => (
+                      <FeatureRow
+                        key={feature.id}
+                        feature={feature}
+                        onClick={() => onSelectFeature(feature.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
 };
+
+// ── Spec Group Header ──────────────────────────────────────
+
+const SpecHeader: React.FC<{ name: string; count: number }> = ({ name, count }) => (
+  <div className="flex items-center gap-2">
+    <FileText className="w-4 h-4 text-violet-500 shrink-0" />
+    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 truncate" title={name}>
+      {name}
+    </h3>
+    <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 shrink-0">
+      {count}
+    </span>
+    <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
+  </div>
+);
 
 // ── Feature Card (Grid) ────────────────────────────────────
 
