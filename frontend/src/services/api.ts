@@ -735,8 +735,10 @@ export const apiService = {
     return data;
   },
 
-  getAutopilotFeatures: async (): Promise<any[]> => {
-    const { data } = await api.get('/autopilot/features');
+  getAutopilotFeatures: async (projectId?: string): Promise<any[]> => {
+    const { data } = await api.get('/autopilot/features', {
+      params: projectId ? { project_id: projectId } : undefined,
+    });
     return data;
   },
 

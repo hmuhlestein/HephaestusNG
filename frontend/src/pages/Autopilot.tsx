@@ -81,10 +81,14 @@ const Autopilot: React.FC = () => {
   });
 
   // Features count for the Completed tab badge
+  // Same queryKey FeatureGallery uses, so the badge and the list it labels
+  // share one cached, project-scoped fetch -- an unscoped key here would
+  // count every project's features against the selected project's tab.
   const { data: featuresList } = useQuery({
-    queryKey: ['autopilot-features'],
-    queryFn: () => apiService.getAutopilotFeatures(),
+    queryKey: ['autopilot-features', projectId],
+    queryFn: () => apiService.getAutopilotFeatures(projectId || undefined),
     refetchInterval: 30000,
+    enabled: !!projectId,
   });
   // Same exclusion as FeatureGallery's own filter -- otherwise the badge
   // counts features the list below never shows.

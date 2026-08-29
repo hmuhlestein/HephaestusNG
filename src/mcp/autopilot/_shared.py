@@ -309,6 +309,11 @@ class DesignQueueAdd(BaseModel):
 class FeatureSummary(BaseModel):
     id: str
     name: str
+    # The spec (AutopilotDesign) this feature was decomposed from -- the
+    # Completed tab groups by it. design_name is None only for a feature
+    # whose design row is gone.
+    design_id: Optional[str] = None
+    design_name: Optional[str] = None
     status: str
     iterations: int
     total_time_seconds: int

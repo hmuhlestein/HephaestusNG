@@ -781,6 +781,218 @@ class TestFeatures:
         assert resp.json()[0]["status"] == "completed"
         assert resp.json()[0]["has_report"] is True
 
+    def test_list_features_scoped_to_project(self, client, tmp_path):
+        """?project_id= returns only that project's features. The Completed
+        tab is per-project; without the filter it showed every project's
+        features (and counted them in the tab badge)."""
+        from types import SimpleNamespace
+
+        import src.core.app_context as app_context
+        from src.core.app_context import set_app_state
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            DatabaseManager,
+            Feature,
+        )
+
+        db = DatabaseManager(None)
+        with db.session_scope() as session:
+            for n in ("a", "b"):
+                session.add(
+                    AutopilotProject(
+                        id=f"proj-{n}", name=f"project {n}", base_dir=str(tmp_path / n)
+                    )
+                )
+                session.add(
+                    AutopilotDesign(
+                        id=f"design-{n}", project_id=f"proj-{n}", name=f"design {n}"
+                    )
+                )
+                session.add(
+                    Feature(
+                        id=f"feat-{n}",
+                        design_id=f"design-{n}",
+                        feature_key=f"feature_{n}",
+                        name=f"feature_{n}",
+                        scope="test feature",
+                        status="completed",
+                    )
+                )
+
+        previous_state = app_context._app_state
+        set_app_state(SimpleNamespace(db_manager=db))
+        try:
+            scoped = client.get("/api/autopilot/features?project_id=proj-a").json()
+            unscoped = client.get("/api/autopilot/features").json()
+        finally:
+            app_context._app_state = previous_state
+
+        assert [f["name"] for f in scoped] == ["feature_a"]
+        # The Completed tab groups by spec, so every feature must carry its
+        # parent design's identity, not just its own.
+        assert scoped[0]["design_id"] == "design-a"
+        assert scoped[0]["design_name"] == "design a"
+        assert {f["name"] for f in unscoped} == {"feature_a", "feature_b"}
+
+    def test_feature_detail_resolves_a_db_feature_row(self, client, tmp_path):
+        """Every id /features lists is a Feature row id (feat-<uuid>), but
+        get_feature_detail only resolved FEATURES_DIR directory names, so
+        clicking any feature in the gallery 404'd -- a spinner, then an
+        empty modal titled with the raw id."""
+        from datetime import datetime
+
+        from src.core.database import (
+            AutopilotDesign,
+            DatabaseManager,
+            Feature,
+            Workflow,
+        )
+
+        working_dir = tmp_path / "wt"
+        (working_dir / "docs").mkdir(parents=True)
+        (working_dir / "docs" / "architecture.md").write_text("the architecture")
+
+        db = DatabaseManager(None)
+        with db.session_scope() as session:
+            session.add(
+                AutopilotDesign(id="des-d", project_id="proj-d", name="My Spec")
+            )
+            session.add(
+                Workflow(
+                    id="wf-d",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    working_directory=str(working_dir),
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-detail",
+                    design_id="des-d",
+                    feature_key="k",
+                    name="My Feature",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-d",
+                    started_at=datetime(2026, 1, 1, 0, 0, 0),
+                    completed_at=datetime(2026, 1, 1, 0, 1, 30),
+                )
+            )
+
+        body = client.get("/api/autopilot/features/feat-detail").json()
+        assert body["name"] == "My Feature"
+        assert body["design_name"] == "My Spec"
+        assert body["architecture_summary"] == "the architecture"
+        assert body["total_time_seconds"] == 90
+        assert [d["name"] for d in body["docs"]] == ["architecture.md"]
+
+    def test_feature_docs_come_from_the_archived_record_not_the_project(
+        self, client, tmp_path
+    ):
+        """Once a completed feature's worktree is gone, its docs live in the
+        archived features gallery. Falling straight through to the project
+        path listed the whole project's docs/ instead -- which is also why
+        the modal's Report tab found no report for a feature that has one."""
+        import json
+
+        from src.core.constants import CONTEXT_DIR_NAME
+        from src.core.database import DatabaseManager, Feature, Workflow
+
+        project = tmp_path / "proj"
+        (project / "docs").mkdir(parents=True)
+        (project / "docs" / "unrelated-project-doc.md").write_text("not the feature's")
+
+        archived = project / CONTEXT_DIR_NAME / "features" / "20260101_my_spec"
+        (archived / "docs").mkdir(parents=True)
+        (archived / "docs" / "pipeline_metrics.json").write_text(
+            json.dumps({"workflow_id": "wf-archived"})
+        )
+        (archived / "docs" / "feature_report.html").write_text("<html>report</html>")
+
+        db = DatabaseManager(None)
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-archived",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    working_directory=None,
+                    launch_params={"project_path": str(project)},
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-archived",
+                    design_id="des-archived",
+                    feature_key="k",
+                    name="Archived Feature",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-archived",
+                )
+            )
+
+        docs = client.get(
+            "/api/autopilot/feature-records/feat-archived/docs"
+        ).json()["docs"]
+        names = [d["name"] for d in docs]
+        assert "feature_report.html" in names
+        assert "unrelated-project-doc.md" not in names
+
+    def test_feature_report_comes_from_whichever_design_folder_has_it(
+        self, client, tmp_path
+    ):
+        """doc_review files a feature's report under the design folder of the
+        run that produced it, but every run makes a new folder and
+        Feature.feature_record_path/AutopilotDesign.designs_folder still name
+        an older one -- so the report existed and the modal showed nothing."""
+        from src.core.database import AutopilotDesign, DatabaseManager, Feature
+
+        specs = tmp_path / ".hephaestus" / "specs"
+        recorded = specs / "20260101-000000_my_spec_des-x"
+        later_run = specs / "20260102-000000_my_spec_des-x"
+        (recorded / "features" / "k").mkdir(parents=True)
+        (later_run / "features" / "k").mkdir(parents=True)
+        (later_run / "features" / "k" / "feature_report-abc12345.html").write_text(
+            "<html>the report</html>"
+        )
+
+        db = DatabaseManager(None)
+        with db.session_scope() as session:
+            session.add(
+                AutopilotDesign(
+                    id="des-x",
+                    project_id="proj-x",
+                    name="My Spec",
+                    designs_folder=str(recorded),
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-report",
+                    design_id="des-x",
+                    feature_key="k",
+                    name="F",
+                    scope="s",
+                    status="completed",
+                )
+            )
+
+        docs = client.get("/api/autopilot/feature-records/feat-report/docs").json()
+        assert "feature_report.html" in [d["name"] for d in docs["docs"]]
+
+        doc = client.get(
+            "/api/autopilot/feature-records/feat-report/docs/feature_report.html"
+        ).json()
+        assert doc["content"] == "<html>the report</html>"
+
+        raw = client.get("/api/autopilot/feature-records/feat-report/report")
+        assert raw.status_code == 200
+        assert "the report" in raw.text
+
     def test_feature_detail(self, client, autopilot_dirs):
         feature_dir = autopilot_dirs["features"] / "20260101-120000_detail_test"
         feature_dir.mkdir()

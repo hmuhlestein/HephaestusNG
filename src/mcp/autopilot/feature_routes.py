@@ -26,12 +26,52 @@ from src.mcp.autopilot._shared import (
 from src.mcp.autopilot.feature_record_routes import (
     _feature_record_cost,
     _find_archived_feature_report,
+    _resolve_feature_docs_base,
+    _resolve_feature_record_report,
     _resolve_live_feature_report,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+_SUMMARY_FILES = {
+    "requirements_summary": "requirements.md",
+    "architecture_summary": "architecture.md",
+    "security_summary": "security.md",
+    "qa_summary": "qa.md",
+    "product_validation_summary": "validation.md",
+    "forensics_summary": "forensics.md",
+}
+
+
+def _read_summaries(docs_dir: Path) -> Dict[str, str]:
+    """First 500 chars of each phase's summary doc, keyed for FeatureDetail."""
+    summaries = {}
+    for key, fname in _SUMMARY_FILES.items():
+        fpath = docs_dir / fname
+        if fpath.exists():
+            content = fpath.read_text(errors="replace")
+            summaries[key] = content[:500] + ("..." if len(content) > 500 else "")
+    return summaries
+
+
+def _list_docs(docs_dir: Path) -> List[Dict[str, Any]]:
+    docs = []
+    if docs_dir.exists():
+        for f in sorted(docs_dir.iterdir()):
+            if f.is_file():
+                stat = f.stat()
+                docs.append(
+                    {
+                        "name": f.name,
+                        "size_bytes": stat.st_size,
+                        "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                        "type": "markdown" if f.suffix == ".md" else "json" if f.suffix == ".json" else "text" if f.suffix == ".txt" else "other",
+                    }
+                )
+    return docs
 
 
 def _scan_features() -> List[Dict[str, Any]]:
@@ -47,9 +87,22 @@ def _scan_features() -> List[Dict[str, Any]]:
         db_manager = get_app_state().db_manager
         session = db_manager.get_session()
         try:
-            from src.core.database import AutopilotProject, Feature, Workflow
-            db_features = session.query(Feature).order_by(Feature.created_at.desc()).all()
-            for f in db_features:
+            from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+            # Outer join, not inner: a Feature whose design row is missing
+            # still belongs in the unscoped list (it just can't be attributed
+            # to a project, so no project-scoped view will show it).
+            db_features = (
+                session.query(
+                    Feature,
+                    AutopilotDesign.project_id,
+                    AutopilotDesign.name,
+                    AutopilotDesign.designs_folder,
+                )
+                .outerjoin(AutopilotDesign, Feature.design_id == AutopilotDesign.id)
+                .order_by(Feature.created_at.desc())
+                .all()
+            )
+            for f, feature_project_id, design_name, designs_folder in db_features:
                 status = f.status
                 if f.workflow_id:
                     wf = session.query(Workflow).filter_by(id=f.workflow_id).first()
@@ -74,11 +127,21 @@ def _scan_features() -> List[Dict[str, Any]]:
                                 project_base = lp.get("project_path")
                         if project_base:
                             has_report = _find_archived_feature_report(project_base, f.workflow_id) is not None
+                if not has_report:
+                    # Outside the workflow_id guard on purpose -- doc_review's
+                    # report is filed under the design, so it is findable even
+                    # for a feature whose workflow row is gone.
+                    has_report = _resolve_feature_record_report(
+                        designs_folder, f.design_id, f.feature_key
+                    ) is not None
 
                 created_at = f.created_at.isoformat() if f.created_at else ""
 
                 features.append({
                     "id": f.id,
+                    "project_id": feature_project_id,
+                    "design_id": f.design_id,
+                    "design_name": design_name,
                     "name": f.name or f.feature_key or f.id,
                     "status": status,
                     "iterations": 0,
@@ -97,8 +160,15 @@ def _scan_features() -> List[Dict[str, Any]]:
     return _store("features", features)
 
 @router.get("/features", response_model=List[FeatureSummary])
-async def list_features():
-    return _scan_features()
+async def list_features(project_id: Optional[str] = None):
+    """project_id scopes the list to one project's features -- what the UI's
+    Completed tab wants. Omitted, every project's features are returned, which
+    other consumers still depend on. Filtering happens after the (shared,
+    cached) scan so switching projects doesn't re-query the DB."""
+    features = _scan_features()
+    if project_id:
+        return [f for f in features if f.get("project_id") == project_id]
+    return features
 
 @router.post("/features/{feature_id}/pause")
 async def pause_feature(feature_id: str):
@@ -532,12 +602,111 @@ async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
     finally:
         session.close()
 
+def _db_feature_detail(feature_id: str) -> Optional[FeatureDetail]:
+    """FeatureDetail for a Feature Model row (feat-<uuid>), or None when no
+    such row exists.
+
+    Every id /features lists is a Feature row id, but get_feature_detail
+    only ever resolved a FEATURES_DIR *directory name* -- the legacy
+    single-feature pipeline's id -- so every click through from the gallery
+    404'd. Reads through the same _resolve_feature_docs_base chain the
+    feature-records endpoints use, so this Overview and the modal's Docs
+    tab describe the same directory.
+    """
+    from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow, get_db
+    from src.core.status_derivation import derive_feature_status
+
+    with get_db() as db:
+        feat = db.query(Feature).filter_by(id=feature_id).first()
+        if not feat:
+            return None
+
+        wf = db.query(Workflow).filter_by(id=feat.workflow_id).first() if feat.workflow_id else None
+        status = feat.status
+        if wf:
+            derived = derive_feature_status(db, feat.id, write_back=False)
+            if derived:
+                status = derived
+
+        design = db.query(AutopilotDesign).filter_by(id=feat.design_id).first() if feat.design_id else None
+        base_dir = _resolve_feature_docs_base(wf) if wf else None
+
+        # Same project-base derivation as _scan_features: the project row
+        # first, launch_params only as a fallback.
+        project_base = None
+        if wf and wf.project_id:
+            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
+            project_base = proj.base_dir if proj else None
+        if not project_base and wf and isinstance(wf.launch_params, dict):
+            project_base = wf.launch_params.get("project_path")
+
+        name = feat.name or feat.feature_key or feat.id
+        design_name = design.name if design else name
+        design_id = feat.design_id
+        designs_folder = design.designs_folder if design else None
+        feature_key = feat.feature_key
+        workflow_id = feat.workflow_id
+        cost_total = feat.cost_total_usd or 0.0
+        created_at = feat.created_at.isoformat() if feat.created_at else ""
+        # The pipeline never wrote a duration anywhere; the feature row's own
+        # start/finish timestamps are the only real source for it.
+        duration = (
+            int((feat.completed_at - feat.started_at).total_seconds())
+            if feat.started_at and feat.completed_at
+            else 0
+        )
+
+    docs_dir = Path(base_dir) / "docs" if base_dir else None
+    metrics = (_read_json(docs_dir / "pipeline_metrics.json") or {}) if docs_dir else {}
+
+    summaries = _read_summaries(docs_dir) if docs_dir else {}
+
+    report = _resolve_live_feature_report(base_dir) if base_dir else None
+    if report is None and project_base and workflow_id:
+        report = _find_archived_feature_report(project_base, workflow_id)
+    if report is None:
+        report = _resolve_feature_record_report(designs_folder, design_id, feature_key)
+
+    return FeatureDetail(
+        id=feature_id,
+        name=name,
+        status=status,
+        iterations=metrics.get("iterations", 0),
+        total_time_seconds=duration,
+        stop_reason=metrics.get("stop_reason") or ("completed" if status == "completed" else "unknown"),
+        qa_passed=bool(metrics.get("qa_passed")),
+        product_validated=bool(metrics.get("product_validated")),
+        has_report=report is not None,
+        design_name=design_name,
+        project_path=project_base or "",
+        feature_folder=base_dir or "",
+        requirements_summary=summaries.get("requirements_summary", ""),
+        architecture_summary=summaries.get("architecture_summary", ""),
+        security_summary=summaries.get("security_summary", ""),
+        qa_summary=summaries.get("qa_summary", ""),
+        product_validation_summary=summaries.get("product_validation_summary", ""),
+        forensics_summary=summaries.get("forensics_summary", ""),
+        files_created=metrics.get("files_created", []),
+        issues_resolved=metrics.get("issues_resolved", []),
+        outstanding_issues=metrics.get("outstanding_issues", []),
+        cost_total=cost_total,
+        cost_breakdown=metrics.get("cost_breakdown", {}),
+        cost_currency=metrics.get("cost_currency", "USD"),
+        created_at=created_at,
+        docs=_list_docs(docs_dir) if docs_dir else [],
+    )
+
+
 @router.get("/features/{feature_id}", response_model=FeatureDetail)
 async def get_feature_detail(feature_id: str):
     cache_key = f"feature:{feature_id}"
     cached = _cached(cache_key, ttl=30.0)
     if cached is not None:
         return cached
+
+    db_detail = _db_feature_detail(feature_id)
+    if db_detail is not None:
+        return _store(cache_key, db_detail)
 
     # via _shared: FEATURES_DIR is a mutable module global rebound by
     # configure_autopilot_api and by test fixtures; a from-import would bind
@@ -550,34 +719,8 @@ async def get_feature_detail(feature_id: str):
     metrics = _read_json(feature_dir / "docs" / "pipeline_metrics.json") or {}
 
     docs_dir = feature_dir / "docs"
-    docs = []
-    if docs_dir.exists():
-        for f in sorted(docs_dir.iterdir()):
-            if f.is_file():
-                stat = f.stat()
-                docs.append(
-                    {
-                        "name": f.name,
-                        "size_bytes": stat.st_size,
-                        "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                        "type": "markdown" if f.suffix == ".md" else "json" if f.suffix == ".json" else "text" if f.suffix == ".txt" else "other",
-                    }
-                )
-
-    summaries = {}
-    summary_files = {
-        "requirements_summary": "requirements.md",
-        "architecture_summary": "architecture.md",
-        "security_summary": "security.md",
-        "qa_summary": "qa.md",
-        "product_validation_summary": "validation.md",
-        "forensics_summary": "forensics.md",
-    }
-    for key, fname in summary_files.items():
-        fpath = docs_dir / fname
-        if fpath.exists():
-            content = fpath.read_text(errors="replace")
-            summaries[key] = content[:500] + ("..." if len(content) > 500 else "")
+    docs = _list_docs(docs_dir)
+    summaries = _read_summaries(docs_dir)
 
     dir_name = feature_dir.name
     name = dir_name.split("_", 1)[1].replace("_", " ").replace("-", " ").title() if "_" in dir_name else dir_name

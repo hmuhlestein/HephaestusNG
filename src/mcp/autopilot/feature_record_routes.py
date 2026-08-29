@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
@@ -57,9 +57,8 @@ def _resolve_live_feature_report(working_directory: str) -> Optional[Path]:
     return _newest_glob_match(base / CONTEXT_DIR_NAME, "feature_report.html")
 
 
-def _find_archived_feature_report(project_base: str, workflow_id: str) -> Optional[Path]:
-    """Find a workflow's feature_report.html in the archived features
-    gallery, once its worktree (and Workflow.working_directory) is gone.
+def _iter_archived_feature_dirs(project_base: str, workflow_id: str) -> Iterator[Path]:
+    """Every archived features-gallery folder recorded for this workflow.
 
     PhaseManager._populate_feature_folder archives a durable copy to
     <project_base>/.hephaestus/features/<timestamp>_<design-name>/ at full
@@ -68,15 +67,14 @@ def _find_archived_feature_report(project_base: str, workflow_id: str) -> Option
     timestamp+design-name only, not feature-specific, so a design with
     more than one feature can't be matched by name alone -- match instead
     via the workflow_id each folder's own pipeline_metrics.json records.
-
-    Shared by get_project_design_status's has_report flag and
-    get_workflow_feature_report's actual file serving, so both agree on
-    exactly the same report once a feature has fully completed.
+    More than one folder can carry the same workflow_id (a shared-
+    integrations folder alongside the main one), so this yields all of
+    them, sorted, and callers take the first that has what they need.
     """
     features_gallery = Path(project_base) / CONTEXT_DIR_NAME / "features"
     if not features_gallery.is_dir():
-        return None
-    for gallery_dir in features_gallery.iterdir():
+        return
+    for gallery_dir in sorted(features_gallery.iterdir()):
         metrics_path = gallery_dir / "docs" / "pipeline_metrics.json"
         if not metrics_path.is_file():
             continue
@@ -84,8 +82,24 @@ def _find_archived_feature_report(project_base: str, workflow_id: str) -> Option
             metrics = json.loads(metrics_path.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        if metrics.get("workflow_id") != workflow_id:
-            continue
+        if metrics.get("workflow_id") == workflow_id:
+            yield gallery_dir
+
+
+def _find_archived_feature_dir(project_base: str, workflow_id: str) -> Optional[Path]:
+    """The archived features-gallery folder for a workflow, or None."""
+    return next(_iter_archived_feature_dirs(project_base, workflow_id), None)
+
+
+def _find_archived_feature_report(project_base: str, workflow_id: str) -> Optional[Path]:
+    """Find a workflow's feature_report.html in the archived features
+    gallery, once its worktree (and Workflow.working_directory) is gone.
+
+    Shared by get_project_design_status's has_report flag and
+    get_workflow_feature_report's actual file serving, so both agree on
+    exactly the same report once a feature has fully completed.
+    """
+    for gallery_dir in _iter_archived_feature_dirs(project_base, workflow_id):
         for candidate in (
             gallery_dir / "docs" / "doc_review" / "feature_report.html",
             gallery_dir / "docs" / "feature_report.html",
@@ -240,6 +254,46 @@ def _feature_record_cost(workflow_id: Optional[str]) -> float:
         return 0.0
 
 
+def _resolve_feature_record_report(
+    designs_folder: Optional[str], design_id: Optional[str], feature_key: Optional[str]
+) -> Optional[Path]:
+    """This feature's own doc_review report in the design's storage folder.
+
+    doc_review writes it to <design folder>/features/<feature_key>/
+    feature_report.html -- the location Feature.feature_record_path names.
+    That column can't be trusted to find it: every pipeline run creates a
+    fresh <timestamp>_<design-name>_<design-id>/ folder, while the recorded
+    path still points at the folder from the run that first decomposed the
+    design, so a report written by any later run sits somewhere the recorded
+    path never looks. Match instead on the two values that don't go stale --
+    the design id every folder name ends with, and the feature_key inside it
+    -- and take the newest report across all of them.
+    """
+    if not designs_folder or not design_id or not feature_key:
+        return None
+    specs_root = Path(designs_folder).parent
+    if not specs_root.is_dir():
+        return None
+    from src.autopilot.spec import _newest_glob_match
+
+    matches = []
+    for design_dir in specs_root.glob(f"*_{design_id}"):
+        record_dir = design_dir / "features" / feature_key
+        # _newest_glob_match only sees the suffixed names doc_review's
+        # dispatched task writes (feature_report-<task_id[:8]>.html); the bare
+        # name a direct write produces needs its own check -- see
+        # _resolve_live_feature_report, which pairs the two the same way.
+        bare = record_dir / "feature_report.html"
+        if bare.is_file():
+            matches.append(bare)
+        newest = _newest_glob_match(record_dir, "feature_report.html")
+        if newest:
+            matches.append(newest)
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p.stat().st_mtime)
+
+
 def _resolve_feature_docs_base(wf) -> Optional[str]:
     """Best-known directory to look for a feature's generated docs in.
 
@@ -250,13 +304,23 @@ def _resolve_feature_docs_base(wf) -> Optional[str]:
     merged into the project's main repo, so fall back to launch_params'
     project_path (observed live: core-infrastructure showed an empty Docs
     tab despite being done, purely because this fallback was missing).
+
+    Between the two sits the archived features-gallery folder holding the
+    copy of this workflow's own docs that PhaseManager took before the
+    worktree was removed. project_path is the whole project's docs/
+    directory -- not feature-specific, so it is only the last resort: it is
+    what made a completed feature's Docs tab list the project's own docs
+    (autopilot.md, heph-cli.md) instead of the feature's.
     """
     if wf.working_directory:
         return wf.working_directory
     launch_params = wf.launch_params or {}
-    if isinstance(launch_params, dict):
-        return launch_params.get("project_path")
-    return None
+    project_path = launch_params.get("project_path") if isinstance(launch_params, dict) else None
+    if project_path:
+        archived = _find_archived_feature_dir(project_path, wf.id)
+        if archived:
+            return str(archived)
+    return project_path
 
 @router.get("/feature-records/{feature_id}/docs")
 async def list_feature_record_docs(feature_id: str):
@@ -298,6 +362,27 @@ async def list_feature_record_docs(feature_id: str):
                     }
                 )
 
+        # Listed here rather than only under the workflow's docs dir below:
+        # doc_review's report lands in the design's storage folder, which the
+        # early returns that follow would skip entirely for a feature whose
+        # worktree is gone -- and the modal only shows its Report tab for a
+        # feature whose docs listing names feature_report.html.
+        record_report = _resolve_feature_record_report(
+            design.designs_folder if design else None,
+            feat.design_id,
+            feat.feature_key,
+        )
+        if record_report:
+            stat = record_report.stat()
+            docs.append(
+                {
+                    "name": "feature_report.html",
+                    "size_bytes": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    "type": "other",
+                }
+            )
+
         if not feat.workflow_id:
             return {"docs": docs}
         wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
@@ -311,8 +396,9 @@ async def list_feature_record_docs(feature_id: str):
     if not docs_dir.exists():
         return {"docs": docs}
 
+    listed = {d["name"] for d in docs}
     for f in sorted(docs_dir.iterdir()):
-        if f.is_file():
+        if f.is_file() and f.name not in listed:
             stat = f.stat()
             docs.append(
                 {
@@ -344,18 +430,34 @@ async def get_feature_record_doc(feature_id: str, doc_name: str):
                 raise HTTPException(404, "Document 'architect-scope.md' not found")
             return {"name": doc_name, "content": doc_path.read_text(errors="replace")}
 
-        if not feat.workflow_id:
-            raise HTTPException(404, f"Document '{doc_name}' not found")
-        wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
-        base_dir = _resolve_feature_docs_base(wf) if wf else None
-        if not base_dir:
-            raise HTTPException(404, "Feature's workflow has no known working directory")
-        docs_dir = str(Path(base_dir) / "docs")
+        # The one doc that may live outside the workflow's docs dir -- it is
+        # what list_feature_record_docs above surfaces from the design's
+        # storage folder, so this has to be able to serve it back.
+        record_report = None
+        if doc_name == "feature_report.html":
+            design = db.query(AutopilotDesign).filter_by(id=feat.design_id).first() if feat.design_id else None
+            record_report = _resolve_feature_record_report(
+                design.designs_folder if design else None,
+                feat.design_id,
+                feat.feature_key,
+            )
 
-    doc_path = _safe_path(docs_dir, doc_name)
-    if not doc_path.exists():
-        raise HTTPException(404, f"Document '{doc_name}' not found")
-    return {"name": doc_name, "content": doc_path.read_text(errors="replace")}
+        docs_dir = None
+        if feat.workflow_id:
+            wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+            base_dir = _resolve_feature_docs_base(wf) if wf else None
+            if base_dir:
+                docs_dir = str(Path(base_dir) / "docs")
+
+    # The workflow's own docs dir wins: it is the live copy when the worktree
+    # is still around, and identical to the record copy once it isn't.
+    if docs_dir:
+        doc_path = _safe_path(docs_dir, doc_name)
+        if doc_path.exists():
+            return {"name": doc_name, "content": doc_path.read_text(errors="replace")}
+    if record_report:
+        return {"name": doc_name, "content": record_report.read_text(errors="replace")}
+    raise HTTPException(404, f"Document '{doc_name}' not found")
 
 @router.get("/feature-records/{feature_id}/report")
 async def get_feature_record_report(feature_id: str):
@@ -368,14 +470,20 @@ async def get_feature_record_report(feature_id: str):
     Feature DB row's own id instead of needing its workflow_id threaded
     through as a separate prop.
     """
-    from src.core.database import Feature, Workflow, get_db
+    from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
     with get_db() as db:
         feat = db.query(Feature).filter_by(id=feature_id).first()
-        if not feat or not feat.workflow_id:
+        # No workflow_id is not fatal here: the design-folder report below is
+        # filed against the design, so it is servable either way.
+        if not feat:
             raise HTTPException(404, f"Feature '{feature_id}' not found")
-        wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+        wf = db.query(Workflow).filter_by(id=feat.workflow_id).first() if feat.workflow_id else None
         base_dir = _resolve_feature_docs_base(wf) if wf else None
+        design = db.query(AutopilotDesign).filter_by(id=feat.design_id).first() if feat.design_id else None
+        record_report = _resolve_feature_record_report(
+            design.designs_folder if design else None, feat.design_id, feat.feature_key
+        )
 
     report_path = None
     if base_dir:
@@ -398,10 +506,12 @@ async def get_feature_record_report(feature_id: str):
             lp = wf.launch_params or {}
             if isinstance(lp, dict):
                 project_base = lp.get("project_path")
-        if project_base:
+        if project_base and feat.workflow_id:
             archived = _find_archived_feature_report(project_base, feat.workflow_id)
             if archived:
                 report_path = archived
+    if report_path is None:
+        report_path = record_report
     if report_path is None or not report_path.is_file():
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
