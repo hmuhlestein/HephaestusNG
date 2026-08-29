@@ -8076,9 +8076,12 @@ class TestGotoTaskGoalIncludesFeedback:
             ))
 
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
-    def test_goto_task_goal_includes_feedback_and_instructions_path(
+    def test_goto_task_goal_references_instructions_path_not_inlined_feedback(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
+        """The goal condition points at the instructions file rather than
+        inlining feedback text -- /goal is re-sent on every attempted stop,
+        so a long feedback string would bloat every re-check."""
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
         from src.core.database import Task
@@ -8097,8 +8100,9 @@ class TestGotoTaskGoalIncludesFeedback:
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(phase_id="phase-goal").first()
             assert "Implement it" in task.done_definition
-            assert feedback in task.done_definition
+            assert feedback not in task.done_definition
             assert f".hephaestus/tasks/{task.id}.md" in task.done_definition
+            assert "read that file and fix what it identifies" in task.done_definition
 
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_fresh_task_goal_has_no_feedback_clause(
@@ -8146,9 +8150,11 @@ class TestCreativeCorrectiveTaskGoalIncludesFeedback:
             ))
 
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
-    def test_corrective_task_goal_includes_feedback_and_instructions_path(
+    def test_corrective_task_goal_references_instructions_path_not_inlined_feedback(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
+        """Same fix as the goto-task goal: point at the instructions file
+        rather than inlining feedback text."""
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_corrective_task
         from src.core.database import Task
@@ -8166,8 +8172,9 @@ class TestCreativeCorrectiveTaskGoalIncludesFeedback:
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id=task_id).first()
             assert "Implement it" in task.done_definition
-            assert feedback in task.done_definition
+            assert feedback not in task.done_definition
             assert f".hephaestus/tasks/{task.id}.md" in task.done_definition
+            assert "read that file and fix what it identifies" in task.done_definition
 
 
 class TestCreatePhaseTaskOrphanedPendingAge:

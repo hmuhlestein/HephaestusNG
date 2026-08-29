@@ -18,11 +18,11 @@ call satisfies the goal too.
 """
 
 import uuid
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.core.database import Task, Workflow
+from src.core.database import Phase, Task, Workflow
 
 
 @pytest.fixture
@@ -85,3 +85,79 @@ class TestSendGoalCommandFailureEscape:
 
         cli_agent.format_goal_command.assert_not_called()
         pane.send_keys.assert_not_called()
+
+
+class TestSendGoalCommandNamesInputFiles:
+    """The goal condition sent to the CLI's own self-checked-completion
+    hook must name this phase's actual resolved input file(s), not just
+    the (separately-delivered, best-effort) "INPUTS AVAILABLE" manifest --
+    the hook re-evaluates the goal on every attempted stop, so a named
+    file the agent never engaged with keeps failing the check instead of
+    silently going unread. Same class of enforcement as the server-side
+    verify_requirements_cover_scope_cli_flags/
+    verify_development_produced_a_commit hard floors, at the CLI's own
+    self-check layer instead of only at task-completion time."""
+
+    @pytest.fixture
+    def _task_with_phase(self, db_manager, tmp_path):
+        workflow_id = str(uuid.uuid4())
+        phase_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
+        with db_manager.session_scope() as session:
+            session.add(Workflow(
+                id=workflow_id, name="w", phases_folder_path="/tmp",
+                status="active", working_directory=str(tmp_path),
+            ))
+            session.add(Phase(
+                id=phase_id, workflow_id=workflow_id, order=5, name="development",
+                description="d", done_definitions=["x"],
+            ))
+            session.add(Task(
+                id=task_id, workflow_id=workflow_id, phase_id=phase_id,
+                raw_description="x", done_definition="Task marked as done",
+                status="in_progress",
+            ))
+        with db_manager.session_scope() as session:
+            return session.query(Task).filter_by(id=task_id).first()
+
+    @pytest.mark.asyncio
+    async def test_appends_resolved_input_filenames_to_the_goal(
+        self, db_manager, tmp_path, _task_with_phase
+    ):
+        pipeline = _launch_pipeline(db_manager)
+        pane = Mock()
+        cli_agent = Mock(needs_chunked_delivery=False)
+        cli_agent.format_goal_command = Mock(side_effect=lambda c: f"/goal {c}")
+
+        (tmp_path / ".hephaestus" / "architecture_design").mkdir(parents=True)
+        (tmp_path / ".hephaestus" / "architecture_design" / "architecture-abc123.md").write_text("x")
+        (tmp_path / ".hephaestus").joinpath("requirements-def456.md").write_text("x")
+
+        with patch(
+            "src.autopilot.spec.load_phase_inputs",
+            return_value={"development": {"required": ["architecture.md", "requirements.md"]}},
+        ), patch(
+            "src.autopilot.spec.input_producer_phases",
+            side_effect=lambda wf_id, name: ["architecture_design"] if name == "architecture.md" else [],
+        ):
+            await pipeline._send_goal_command(pane, cli_agent, _task_with_phase, "phase")
+
+        sent_condition = cli_agent.format_goal_command.call_args[0][0]
+        assert "architecture-abc123.md" in sent_condition
+        assert "requirements-def456.md" in sent_condition
+        assert "actually read and resolved" in sent_condition
+
+    @pytest.mark.asyncio
+    async def test_no_declared_inputs_leaves_goal_unchanged(
+        self, db_manager, tmp_path, _task_with_phase
+    ):
+        pipeline = _launch_pipeline(db_manager)
+        pane = Mock()
+        cli_agent = Mock(needs_chunked_delivery=False)
+        cli_agent.format_goal_command = Mock(side_effect=lambda c: f"/goal {c}")
+
+        with patch("src.autopilot.spec.load_phase_inputs", return_value={}):
+            await pipeline._send_goal_command(pane, cli_agent, _task_with_phase, "phase")
+
+        sent_condition = cli_agent.format_goal_command.call_args[0][0]
+        assert "actually read and resolved" not in sent_condition
