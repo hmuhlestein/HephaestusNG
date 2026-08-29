@@ -407,9 +407,21 @@ workflow:
         name: Doc Review
         order: 9
         color: "#06b6d4"
+      - id: wontfix
+        name: Won't Fix
+        order: 10
+        color: "#78716c"
+        # Closes a ticket honestly when there's genuinely no fix available
+        # right now (no upstream patch published, needs a separate human-
+        # supervised pass, etc.) -- resolving=true makes update_ticket_status
+        # set is_resolved the same as moving to "shipped" would, so open-
+        # ticket gates (verify_no_open_tickets, security_review's redirect)
+        # stop rejecting completion, without falsely claiming the underlying
+        # issue was fixed the way "shipped" would.
+        resolving: true
       - id: shipped
         name: Shipped
-        order: 10
+        order: 11
         color: "#3b82f6"
     ticket_types:
       - infrastructure
