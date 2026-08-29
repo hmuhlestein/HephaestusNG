@@ -505,7 +505,14 @@ def _discover_features_or_404(db, project_id: str):
     """Shared by both /speckit/features and /speckit/check: 404 on unknown
     project_id, else (features, primary_repo_id). Kept in one place so the
     primary-repo resolution used by both routes' repo_label semantics can't
-    drift out of sync again (adversarial review NIT on commit 2edde877)."""
+    drift out of sync again (adversarial review NIT on commit 2edde877).
+
+    Canonical interface for this route pair's repo_label semantics -- a
+    future architecture pass for either route should start from this
+    shared helper, not from independent inline lookups (architectural
+    review FIX-2 on this feature: the original architecture specified two
+    separate inline lookups, which is exactly what let the two routes'
+    repo_label handling drift out of sync in the first place)."""
     from src.autopilot.orchestrator.speckit import discover_speckit_features
     from src.core.database import AutopilotProject, ProjectRepo
 
