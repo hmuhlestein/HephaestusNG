@@ -331,6 +331,101 @@ class TestReleasePhaseTaskCreationClaim:
             assert exec1.started_at <= task.created_at
 
 
+class TestPhaseHasArbitrationInFlight:
+    """Tests for _phase_has_arbitration_in_flight, the shared guard that
+    stops _case_in_progress_complete's and _create_phase_task's own
+    unconditional claim-release finally blocks from wiping out a claim
+    _trigger_arbitration is still relying on -- see its own docstring for
+    the live incident (workflow a7695dc5) this closes."""
+
+    def test_no_tasks_at_all_is_not_in_flight(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.phase_transitions import _phase_has_arbitration_in_flight
+
+        with db_manager.session_scope() as session:
+            assert _phase_has_arbitration_in_flight(session, "phase-1") is False
+
+    def test_non_arbitration_task_is_not_in_flight(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.phase_transitions import _phase_has_arbitration_in_flight
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="pending",
+            ))
+
+        with db_manager.session_scope() as session:
+            assert _phase_has_arbitration_in_flight(session, "phase-1") is False
+
+    def test_pending_arbitration_task_is_in_flight(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _phase_has_arbitration_in_flight
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="pending",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+            ))
+
+        with db_manager.session_scope() as session:
+            assert _phase_has_arbitration_in_flight(session, "phase-1") is True
+
+    def test_done_arbitration_task_is_not_in_flight(self, db_manager, sample_workflow):
+        """Already resolved -- _resolve_arbitration_outcome's own finally
+        owns clearing the claim from here on, not this guard."""
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _phase_has_arbitration_in_flight
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="done",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+            ))
+
+        with db_manager.session_scope() as session:
+            assert _phase_has_arbitration_in_flight(session, "phase-1") is False
+
+    def test_failed_arbitration_dispatch_is_not_in_flight(self, db_manager, sample_workflow):
+        """A failed dispatch is a terminal, already-handled outcome
+        (_trigger_arbitration's own force_action="fail" path) -- must not
+        be mistaken for still-running and hold the claim hostage forever."""
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _phase_has_arbitration_in_flight
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="failed",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+            ))
+
+        with db_manager.session_scope() as session:
+            assert _phase_has_arbitration_in_flight(session, "phase-1") is False
+
+    def test_only_the_most_recent_task_governs(self, db_manager, sample_workflow):
+        """An old, already-done arbitration task followed by a normal
+        (non-arbitration) task must not read as in-flight."""
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _phase_has_arbitration_in_flight
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-old-arb", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="done",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+                created_at=datetime.utcnow() - timedelta(minutes=5),
+            ))
+            session.add(Task(
+                id="task-new", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="in_progress",
+                created_at=datetime.utcnow(),
+            ))
+
+        with db_manager.session_scope() as session:
+            assert _phase_has_arbitration_in_flight(session, "phase-1") is False
+
+
 class TestAdvancePhases:
     """Tests for _advance_phases function."""
 
@@ -1562,6 +1657,101 @@ class TestCaseInProgressComplete:
                 _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
             except RuntimeError:
                 pass
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
+
+    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
+    def test_claim_survives_an_arbitrate_transition(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """Regression, observed live (workflow a7695dc5): when
+        _fire_phase_transition's action is "arbitrate", _trigger_arbitration
+        (called from inside it) deliberately reuses THIS SAME claim to mark
+        "arbitration in flight" for _maybe_resolve_arbitration to find once
+        the arbiter agent finishes. The prior unconditional release here
+        wiped that claim out within milliseconds of the arbiter being
+        dispatched -- long before it could finish. _maybe_resolve_arbitration
+        then never found a claimed phase to resolve, so the arbiter's
+        eventual "continue" decision was silently dropped and the workflow
+        was abandoned after hours of zero agent activity. The claim must
+        stay held while the phase's latest task is a still-in-flight
+        (not-yet-done) arbitration task."""
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import (
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        self._seed_done_task(db_manager)
+
+        def _fake_trigger_arbitration(*args, **kwargs):
+            # Mirrors what the real _trigger_arbitration does: creates the
+            # arbitration task (not yet "done") while still holding this
+            # phase's task_creation_claimed_at claim.
+            with db_manager.session_scope() as session:
+                session.add(
+                    Task(
+                        id="task-arbitration-1",
+                        workflow_id="wf-1",
+                        phase_id="phase-1",
+                        raw_description="Arbitrate stuck phase: requirements",
+                        done_definition="d",
+                        status="pending",
+                        created_by_agent_id=ARBITRATION_CREATED_BY,
+                    )
+                )
+            return True
+
+        mock_fire.side_effect = _fake_trigger_arbitration
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+
+    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
+    def test_claim_is_released_once_arbitration_task_is_done(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """The other half of the fix: once the arbitration task has actually
+        completed (resolved or not), this function must not hold the claim
+        hostage forever -- only a genuinely still-running arbitration task
+        keeps it held."""
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import (
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        self._seed_done_task(db_manager)
+
+        def _fake_trigger_arbitration(*args, **kwargs):
+            with db_manager.session_scope() as session:
+                session.add(
+                    Task(
+                        id="task-arbitration-1",
+                        workflow_id="wf-1",
+                        phase_id="phase-1",
+                        raw_description="Arbitrate stuck phase: requirements",
+                        done_definition="d",
+                        status="done",
+                        created_by_agent_id=ARBITRATION_CREATED_BY,
+                    )
+                )
+            return True
+
+        mock_fire.side_effect = _fake_trigger_arbitration
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
 
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()

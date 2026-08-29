@@ -1351,6 +1351,41 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     db.commit()
 
 
+def _phase_has_arbitration_in_flight(db, phase_id: str) -> bool:
+    """True if phase_id's most recent task is a still-running (not yet
+    "done" or "failed") arbitration task.
+
+    Shared by every caller that fires a phase transition and then
+    unconditionally clears phase_id's task_creation_claimed_at claim once
+    that call returns -- correct when the action was continue/goto (the
+    claim's job was only to guard against concurrent re-evaluation), but
+    wrong when the action was "arbitrate": _trigger_arbitration (invoked
+    from inside that same transition call) deliberately reuses THIS SAME
+    claim to mark "arbitration in flight" so _maybe_resolve_arbitration can
+    find and act on the arbiter's eventual decision. Clearing it right
+    away wipes that out within milliseconds of the arbiter being
+    dispatched -- long before it can finish. Observed live (workflow
+    a7695dc5): an arbiter's "continue" decision was silently dropped this
+    way, and the workflow sat with zero agent activity for hours before
+    the abandonment sweep failed it. "done"/"failed" are both already-
+    resolved terminal states (a failed dispatch is handled by
+    _trigger_arbitration's own force_action="fail" path, not left
+    dangling) -- only a genuinely still-running status means the arbiter
+    hasn't reported back yet and the claim must keep guarding it.
+    """
+    latest_task = (
+        db.query(Task)
+        .filter_by(phase_id=phase_id)
+        .order_by(Task.created_at.desc())
+        .first()
+    )
+    return (
+        latest_task is not None
+        and latest_task.created_by_agent_id == ARBITRATION_CREATED_BY
+        and latest_task.status not in ("done", "failed")
+    )
+
+
 def _case_start_first_phase(db, workflow_id: str, pending: list, in_progress: list, completed: list, logger: "OrchestratorLogger") -> Optional[bool]:
     """Case 0: No in-progress phase and first phase is pending — start it.
 
@@ -2009,6 +2044,26 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             # to ever arbitrate it -- worse than the original bug, since
             # there wasn't even a pause to notice.
             #
+            # EXCEPT when the action was "arbitrate": _trigger_arbitration
+            # (called from inside _fire_phase_transition above) deliberately
+            # reuses this SAME claim to mark "arbitration in flight" for
+            # _maybe_resolve_arbitration to find once the arbiter agent
+            # finishes (see _trigger_arbitration's and _resolve_arbitration_
+            # outcome's own docstrings). Clearing it here unconditionally
+            # wiped that out within milliseconds of the arbiter being
+            # dispatched -- long before it could finish, let alone before
+            # CLAIM_STALE_TIMEOUT_SECONDS. Observed live (workflow
+            # a7695dc5): an arbiter's "continue" decision was written to
+            # arbitration_result.json, but _maybe_resolve_arbitration never
+            # found a claimed phase to resolve it against -- this exact
+            # clear had already beaten it to it -- so the decision was
+            # silently dropped, the workflow sat with zero agent activity
+            # for hours, and the abandonment sweep eventually failed it
+            # with a misleading "lost mid-flight across a backend restart"
+            # reason. Skip the clear whenever the phase's latest task is a
+            # still-in-flight (not yet "done") arbitration task; once it
+            # resolves, _resolve_arbitration_outcome's own finally clears it.
+            #
             # Bypass update (synchronize_session=False), not load-then-
             # mutate-then-commit: this project runs with
             # expire_on_commit=False (see DatabaseManager), so `phase`
@@ -2020,8 +2075,9 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             # Setting an in-memory attribute back to a value it already
             # appears to hold produces no dirty column for SQLAlchemy to
             # write, so the commit was a silent no-op in testing.
-            db.query(PhaseExecution).filter_by(phase_id=phase_id).update({"task_creation_claimed_at": None}, synchronize_session=False)
-            db.commit()
+            if not _phase_has_arbitration_in_flight(db, phase_id):
+                db.query(PhaseExecution).filter_by(phase_id=phase_id).update({"task_creation_claimed_at": None}, synchronize_session=False)
+                db.commit()
     return None
 
 
@@ -3061,12 +3117,22 @@ def _create_phase_task(
         # execution to "in_progress", which would be wrong on a bail-out
         # (e.g. "existing active task found", "retry bound hit") where
         # nothing was actually started.
+        #
+        # EXCEPT when one of the bail-out branches above called
+        # _fire_phase_transition (the forensics_analysis clean-skip path)
+        # WITHOUT force_continue, and that evaluation came back "arbitrate"
+        # for this SAME phase_id -- _trigger_arbitration (invoked from
+        # inside it) then deliberately reuses this exact claim to mark
+        # "arbitration in flight" for _maybe_resolve_arbitration to find
+        # later. See _phase_has_arbitration_in_flight's docstring for the
+        # live incident (workflow a7695dc5) this guards against.
         if own_claim:
             with get_db() as _release_db:
-                _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
-                    {"task_creation_claimed_at": None}, synchronize_session=False
-                )
-                _release_db.commit()
+                if not _phase_has_arbitration_in_flight(_release_db, phase_id):
+                    _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
+                        {"task_creation_claimed_at": None}, synchronize_session=False
+                    )
+                    _release_db.commit()
 
 
 def _create_corrective_task(
