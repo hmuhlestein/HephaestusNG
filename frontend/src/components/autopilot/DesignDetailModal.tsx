@@ -18,6 +18,8 @@ interface DesignDetailModalProps {
   // Only for display and rerun (which posts a filename): status is fetched
   // by id, and a directory-sourced design has no filename at all.
   filename: string | null;
+  // Shown in place of the filename when there is none (AutopilotDesign.spec_key).
+  specKey: string;
   onClose: () => void;
   onRerun?: (filename: string | null) => void;
 }
@@ -32,7 +34,7 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; labe
 
 type DetailTab = 'overview' | 'docs';
 
-const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, designId, filename, onClose, onRerun }) => {
+const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, designId, filename, specKey, onClose, onRerun }) => {
   const queryClient = useQueryClient();
   const { projects } = useProject();
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
@@ -154,7 +156,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, design
                   <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">
                     {status?.name || filename?.replace(/\.md$/, '').replace(/_/g, ' ')}
                   </h2>
-                  <p className="text-xs text-gray-500 font-mono mt-0.5">{filename}</p>
+                  <p className="text-xs text-gray-500 font-mono mt-0.5">{filename ?? specKey}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">

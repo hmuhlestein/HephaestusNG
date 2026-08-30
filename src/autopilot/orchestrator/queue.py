@@ -710,6 +710,16 @@ def pick_next_design(
                         design_path = None
 
                 if design_path is None:
+                    if not design.filename:
+                        # No file_path (or it is gone) and no filename to fall
+                        # back to -- a directory-backed design that somehow
+                        # reached this branch. Joining None onto a path raises
+                        # TypeError and takes the whole queue scan down.
+                        logger.warning(
+                            f"Design {design.id[:8]} ({design.spec_key}) has no readable "
+                            f"source file: file_path missing and no filename to resolve"
+                        )
+                        return None
                     # Fall back to filename-based path
                     design_path = Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
 

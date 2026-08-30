@@ -369,8 +369,13 @@ async def get_design_status(
             if wf.working_directory:
                 features_dir = Path(wf.working_directory) / CONTEXT_DIR_NAME / "features"
                 if features_dir.exists():
+                    # filename is None for a directory-backed design, which
+                    # can reach this endpoint now that it is addressed by id
+                    # -- fall back to the design's own name, which is what
+                    # the feature folder is named from anyway.
+                    needle = (filename or design_name or "").replace(".md", "").lower()
                     for d in sorted(features_dir.iterdir(), reverse=True):
-                        if d.is_dir() and filename.replace(".md", "").lower() in d.name.lower():
+                        if needle and d.is_dir() and needle in d.name.lower():
                             feature_folder = str(d)
                             break
                 if feature_folder:

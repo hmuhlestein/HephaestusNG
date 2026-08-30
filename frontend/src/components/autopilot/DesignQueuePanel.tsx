@@ -55,7 +55,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   const { loading: projectsLoading } = useProject();
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
-  const [detailDesign, setDetailDesign] = useState<{ id: string; filename: string | null } | null>(null);
+  const [detailDesign, setDetailDesign] = useState<{ id: string; filename: string | null; spec_key: string } | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedFeature, setSelectedFeature] = useState<any | null>(null);
 
@@ -343,7 +343,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   // The design row itself, not its filename: status is fetched by id now
   // (a directory-sourced design has no filename at all), while rerun and the
   // header still show the file it came from.
-  const handleDetail = (design: { id: string; filename: string | null }) => {
+  const handleDetail = (design: { id: string; filename: string | null; spec_key: string }) => {
     setDetailDesign(design);
   };
 
@@ -527,6 +527,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           projectId={projectId}
           designId={detailDesign.id}
           filename={detailDesign.filename}
+          specKey={detailDesign.spec_key}
           onClose={() => setDetailDesign(null)}
           onRerun={() => {
             queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
@@ -639,7 +640,7 @@ interface SortableDesignItemProps {
   isActive?: boolean;
   onRemove: (designId: string) => void;
   onArchive: (designId: string) => void;
-  onDetail: (design: { id: string; filename: string | null }) => void;
+  onDetail: (design: { id: string; filename: string | null; spec_key: string }) => void;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
   onReviewFeature?: (featureId: string, feature: any) => void;
