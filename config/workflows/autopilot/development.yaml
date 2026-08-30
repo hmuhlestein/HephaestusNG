@@ -21,7 +21,6 @@ done_definitions:
   - "For each new feature: an acceptance test was stash-verified to fail without the implementation and pass with it — same discipline, `git stash push -u` so brand-new untracked source files are actually removed"
   - "`ruff check .` and `ruff format --check .` pass with ZERO errors (logging not print, imports at top, sorted) and `mypy` passes — run `ruff check --fix . && ruff format .` first, then verify clean before marking done"
   - "Implementation status documented"
-  - "Phase 4 review tasks created"
   - "Task marked as done"
 outputs:
   - "source code in project path"
@@ -170,6 +169,13 @@ additional_notes: |
   per component BEFORE writing any code. Each subtask = one file or one
   logical unit ("Add Feature class to database.py", "Add run_phase0 to
   orchestrator.py"). Implement them one at a time: implement → commit → next.
+
+  create_task is ONLY for subtasks within THIS phase (development). Do not
+  use it to hand work or findings to a later phase (e.g. adversarial_review,
+  security_review) -- the orchestrator creates that phase's task
+  automatically once you mark this task done. If you have a concern or
+  finding you want a later phase to specifically check, file it with
+  create_ticket instead; later phases read open tickets on their own.
 
   COMMIT AFTER EACH COMPONENT: `git add -p && git commit` after every
   logical unit. Small commits = recoverable progress on session restart.
