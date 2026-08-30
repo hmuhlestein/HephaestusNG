@@ -1,6 +1,7 @@
 """Tests for autopilot API endpoints."""
 
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, Mock, patch
@@ -1646,6 +1647,10 @@ def project_dirs(tmp_path):
     project_dir = tmp_path / "myproject"
     design_dir = project_dir / ".hephaestus" / "specs"
     design_dir.mkdir(parents=True)
+    # A project directory has to be a git repository -- creating one on a
+    # plain directory is refused now (see _validate_base_dir), because
+    # autopilot cannot make the worktree every phase runs in without it.
+    subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
 
     (design_dir / "01-auth.md").write_text("# Auth Design\nImplement OAuth2.")
     (design_dir / "02-payments.md").write_text("# Payments\nStripe integration.")
@@ -1733,6 +1738,35 @@ class TestProjects:
             },
         )
         assert resp.status_code == 400
+
+    def test_start_rejects_a_non_git_project_directory(self, project_client, tmp_path):
+        """Same check on the other entry point: /start is where an existing
+        project with a since-broken base_dir shows up, and it used to reserve
+        a concurrency slot and launch a pipeline that could only fail."""
+        client, _ = project_client
+        plain_dir = tmp_path / "start-not-a-repo"
+        plain_dir.mkdir()
+
+        resp = client.post(f"/api/autopilot/start?project_path={plain_dir}")
+        assert resp.status_code == 400
+        assert "not a git repository" in resp.json()["detail"]
+
+    def test_create_project_rejects_a_non_git_directory(self, project_client, tmp_path):
+        """Without a repo there is no worktree, so no phase can ever run --
+        and activation already refuses the same directory. Rejecting at
+        creation reports it where the directory is actually chosen, instead
+        of as an unrelated-looking failure deep inside Phase 0."""
+        client, _ = project_client
+        plain_dir = tmp_path / "not-a-repo"
+        plain_dir.mkdir()
+
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Plain", "base_dir": str(plain_dir)},
+        )
+        assert resp.status_code == 400
+        assert "not a git repository" in resp.json()["detail"]
+        assert "git init" in resp.json()["detail"]
 
     def test_create_project_duplicate_dir(self, project_client):
         client, dirs = project_client

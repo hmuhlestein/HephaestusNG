@@ -16,6 +16,8 @@ DatabaseManager instances (most fixtures predate FK enforcement), which
 would otherwise let a wrong-order/missing delete succeed silently and
 give false confidence."""
 
+import subprocess
+
 from src.core.database import (
     AutopilotDesign,
     DatabaseManager,
@@ -47,6 +49,9 @@ def test_delete_project_deletes_full_workflow_subtree(tmp_path, monkeypatch):
     project_dir = tmp_path / "myproject"
     design_dir = project_dir / ".hephaestus" / "specs"
     design_dir.mkdir(parents=True)
+    # POST /projects refuses a non-repo directory (a project that is not a
+    # git repository can never run a phase) -- see _validate_base_dir.
+    subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
     (design_dir / "01-auth.md").write_text("# Auth Design\nImplement OAuth2.")
 
     db_path = str(tmp_path / "test.db")

@@ -289,6 +289,14 @@ def _validate_base_dir(base_dir: str) -> str:
         raise HTTPException(400, f"Not a directory: {base}")
     if not os.access(base, os.R_OK | os.W_OK):
         raise HTTPException(403, f"Insufficient permissions: {base}")
+    # Rejected here rather than at first use: activation already refuses a
+    # non-repo (_apply_active_project), so a project created on one could
+    # never be activated anyway -- it just failed later, and less clearly.
+    from src.core.repo_resolution import git_repo_error
+
+    repo_problem = git_repo_error(base)
+    if repo_problem:
+        raise HTTPException(400, repo_problem)
     return str(base)
 
 @router.get("/projects", response_model=List[ProjectItem])

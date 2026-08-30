@@ -56,3 +56,42 @@ def test_a_failing_metrics_patch_does_not_report_a_failed_launch(orch_logger):
     assert "Could not patch pipeline_metrics.json" in Path(
         orch_logger.log_file
     ).read_text()
+
+
+def test_every_level_accepts_exc_info(orch_logger):
+    """Second instance of the same gap: six orchestrator call sites pass
+    exc_info=True to a `logger` parameter that shadows their module-level
+    logging.Logger, so the call lands here instead. Without the kwarg each
+    raised TypeError instead of logging."""
+    for level in ("debug", "info", "warning", "error"):
+        getattr(orch_logger, level)("level check", exc_info=True)
+
+    assert Path(orch_logger.log_file).read_text().count("level check") == 4
+
+
+def test_a_worktree_failure_is_logged_instead_of_replaced(orch_logger):
+    """The exact shape of the live failure: _create_integration_worktree's
+    handler logs with exc_info=True. When that raised, the TypeError replaced
+    the real exception and propagated, so the pipeline reported
+    "OrchestratorLogger.error() got an unexpected keyword argument
+    'exc_info'" and never recorded that the project simply was not a git
+    repository."""
+    try:
+        try:
+            raise ValueError("Cannot open git repository at /tmp/parent")
+        except Exception as inner:
+            orch_logger.error(f"[WORKTREE] Failed to create worktree: {inner}", exc_info=True)
+    except Exception as escaped:  # pragma: no cover - fails the assert below
+        pytest.fail(f"error() raised out of the handler: {escaped!r}")
+
+    written = Path(orch_logger.log_file).read_text()
+    assert "Cannot open git repository" in written
+    assert "Traceback (most recent call last)" in written
+
+
+def test_exc_info_outside_an_exception_handler_logs_no_traceback(orch_logger):
+    orch_logger.error("nothing is being handled", exc_info=True)
+
+    written = Path(orch_logger.log_file).read_text()
+    assert "nothing is being handled" in written
+    assert "NoneType" not in written

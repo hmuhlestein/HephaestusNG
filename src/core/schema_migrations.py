@@ -1001,7 +1001,15 @@ def migrate_speckit_design_columns(engine):
             if filename_col is None or filename_col[3] == 0:
                 return  # table missing (fresh DB, handled by create_all) or already nullable
             col_list = ", ".join(row[1] for row in info)
+            # legacy_alter_table: since SQLite 3.25 a plain RENAME also
+            # rewrites the FK clauses of every OTHER table referencing this
+            # one, so workflows.design_id and features.design_id would follow
+            # autopilot_designs to the temporary name -- which the DROP below
+            # then deletes, leaving them permanently dangling. See
+            # repair_dangling_autopilot_designs_fk for what that costs.
+            conn.execute(text("PRAGMA legacy_alter_table=ON"))
             conn.execute(text("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old"))
+            conn.execute(text("PRAGMA legacy_alter_table=OFF"))
             conn.commit()
 
         from src.core.database import AutopilotDesign
@@ -1086,7 +1094,15 @@ def migrate_speckit_design_source_dir_unique(engine):
             conn.commit()
 
             col_list = ", ".join(row[1] for row in info)
+            # legacy_alter_table: since SQLite 3.25 a plain RENAME also
+            # rewrites the FK clauses of every OTHER table referencing this
+            # one, so workflows.design_id and features.design_id would follow
+            # autopilot_designs to the temporary name -- which the DROP below
+            # then deletes, leaving them permanently dangling. See
+            # repair_dangling_autopilot_designs_fk for what that costs.
+            conn.execute(text("PRAGMA legacy_alter_table=ON"))
             conn.execute(text("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old"))
+            conn.execute(text("PRAGMA legacy_alter_table=OFF"))
             conn.commit()
 
         from src.core.database import AutopilotDesign
@@ -1152,6 +1168,84 @@ def drop_speckit_autoscan_enabled_column(engine):
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
+def repair_dangling_autopilot_designs_fk(engine):
+    """Point workflows/features' design_id back at autopilot_designs.
+
+    The rebuild-and-swap migrations above (rename -> recreate -> copy ->
+    drop) ran before the legacy_alter_table guard existed, so SQLite
+    rewrote both referencing tables to REFERENCES "autopilot_designs_old"
+    (id) -- a table the same migration then dropped. Under PRAGMA
+    foreign_keys=ON every INSERT into workflows or features then fails with
+    "no such table: main.autopilot_designs_old", so no workflow can be
+    created and therefore no design in ANY project can start (observed
+    live: Phase 0 launched, created its worktree, and died on the workflow
+    INSERT).
+
+    Rewrites the two stored CREATE TABLE statements in place instead of
+    rebuilding the tables. Rebuilding `workflows` would rename it in turn
+    and rewrite every FK pointing AT it (tasks, phases, features, ...) --
+    turning one dangling reference into several, which is the same mistake
+    one level up.
+    """
+    dangling = '"autopilot_designs_old"'
+    try:
+        with engine.connect() as conn:
+            broken = [
+                r[0]
+                for r in conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE :pat"),
+                    {"pat": f"%{dangling}%"},
+                ).fetchall()
+            ]
+            if not broken:
+                return
+            # A leftover autopilot_designs_old means a rebuild is still
+            # mid-swap; _resume_interrupted_autopilot_designs_rebuild owns
+            # that case and has to finish first, or this would repoint the
+            # references while the real rows still live in the old table.
+            if conn.execute(text("PRAGMA table_info(autopilot_designs_old)")).fetchall():
+                logger.warning(
+                    "autopilot_designs_old still present -- deferring dangling-FK "
+                    "repair until the interrupted rebuild is resumed"
+                )
+                return
+
+        # AUTOCOMMIT: writable_schema edits must not sit inside a transaction,
+        # and RESET reloads the schema for every other connection.
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.execute(text("PRAGMA writable_schema=ON"))
+            conn.execute(
+                text(
+                    "UPDATE sqlite_master SET sql = replace(sql, "
+                    "'\"autopilot_designs_old\"', '\"autopilot_designs\"') "
+                    "WHERE type='table' AND sql LIKE '%\"autopilot_designs_old\"%'"
+                )
+            )
+            conn.execute(text("PRAGMA writable_schema=RESET"))
+
+        with engine.connect() as conn:
+            integrity = conn.execute(text("PRAGMA quick_check")).fetchone()[0]
+            still_broken = [
+                r[0]
+                for r in conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE '%autopilot_designs_old%'")
+                ).fetchall()
+            ]
+            if integrity != "ok" or still_broken:
+                logger.error(
+                    f"Dangling autopilot_designs FK repair did not verify "
+                    f"(quick_check={integrity!r}, still referencing={still_broken}) "
+                    f"-- restore from a backup"
+                )
+                return
+        logger.info(
+            f"Repaired dangling autopilot_designs_old foreign key on: {', '.join(broken)}"
+        )
+    except Exception as e:
+        logger.warning(f"Dangling autopilot_designs FK repair failed: {e}")
+
+
 SCHEMA_MIGRATIONS = [
     ("_migrate_task_dependency_columns", migrate_task_dependency_columns),
     ("_migrate_autopilot_designs_columns", migrate_autopilot_designs_columns),
@@ -1183,4 +1277,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_speckit_auto_scan_enabled_column", migrate_speckit_auto_scan_column),
     ("_drop_speckit_auto_scan_column", drop_speckit_auto_scan_column),
     ("_drop_speckit_autoscan_enabled_column", drop_speckit_autoscan_enabled_column),
+    # Last: repairs damage the rebuild-and-swap migrations above can do, so it
+    # always sees their final state within the same startup pass.
+    ("_repair_dangling_autopilot_designs_fk", repair_dangling_autopilot_designs_fk),
 ]
