@@ -559,35 +559,72 @@ class RepairService:
             "message": f"Pipeline restarted for {spec_key}",
         }
 
-    async def repair(self, project_path: str, filename: str) -> Dict[str, Any]:
+    async def repair(self, project_path: str, design_id: str) -> Dict[str, Any]:
         """Repair a design: spin up a recovery workflow and a review agent that checks
         and fixes stuck/incomplete tasks. (Branch reconciliation is obsolete under
-        per-task worktree isolation — failed worktrees are discarded, never merged.)"""
+        per-task worktree isolation — failed worktrees are discarded, never merged.)
+
+        Keyed by design_id, like rerun and every other design endpoint: a
+        directory-backed design has no filename to be addressed by, and the
+        queue_dir/<filename> path this used to build for one never existed.
+        """
         logger.info("[REPAIR] Received repair request")
 
         project = Path(project_path).resolve()
         if not project.exists():
             raise HTTPException(400, f"Project path does not exist: {project_path}")
 
+        from src.core.database import AutopilotDesign, get_db
+
+        with get_db() as db:
+            design = db.query(AutopilotDesign).filter_by(id=design_id).first()
+            if not design:
+                raise HTTPException(404, f"Design not found: {design_id}")
+            spec_key = design.spec_key
+            design_source = self._design_source_path(design, project)
+
         # Generate repair ID for tracking
         repair_id = str(uuid.uuid4())[:8]
 
         # Run repair in background thread pool (not async - uses sync subprocess calls)
         loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, self._run_repair, repair_id, filename, project)
+        loop.run_in_executor(
+            None, self._run_repair, repair_id, design_id, spec_key, design_source, project
+        )
 
         return {
             "repair_id": repair_id,
+            "design_id": design_id,
+            "spec_key": spec_key,
             "status": "started",
-            "message": f"Repair started for {filename}. Check /api/autopilot/queue/repair/{repair_id} for results.",
+            "message": f"Repair started for {spec_key}. Check /api/autopilot/queue/repair/{repair_id} for results.",
         }
 
-    def _spawn_repair_review_agent(self, wf_id: str, filename: str, project: Path, reason: str, actions_taken: list):
+    @staticmethod
+    def _design_source_path(design, project: Path) -> Optional[Path]:
+        """The design's source on disk: a directory for a directory-backed
+        design, a file for a file-backed one, or None when neither resolves."""
+        if design.source_dir:
+            return Path(design.source_dir)
+        if design.file_path:
+            return Path(design.file_path)
+        if design.filename:
+            return project / DESIGN_CONTEXT_SUBDIR / design.filename
+        return None
+
+    def _spawn_repair_review_agent(
+        self,
+        wf_id: str,
+        spec_key: str,
+        design_source: Optional[Path],
+        reason: str,
+        actions_taken: list,
+    ):
         """Spawn a review agent that checks each task, acts, and monitors completion."""
         from src.autopilot.orchestrator.engine_client import api_post, get_tasks
 
         try:
-            logger.info(f"[REPAIR-AGENT] Starting for workflow {wf_id[:8]}, design={filename}")
+            logger.info(f"[REPAIR-AGENT] Starting for workflow {wf_id[:8]}, design={spec_key}")
 
             # Get tasks for this workflow
             failed_tasks = get_tasks(status="failed", workflow_id=wf_id)
@@ -610,7 +647,10 @@ class RepairService:
                 task_summary.append(f"  IN_PROGRESS: {t.get('id', '')[:8]} - {desc}")
 
             review_instructions = get_prompt("repair_agent_instructions", {
-                "filename": filename,
+                # The prompt's placeholder is still called filename; what it
+                # wants is a human label for the design, which spec_key is for
+                # every kind of design.
+                "filename": spec_key,
                 "wf_id_short": wf_id[:8],
                 "reason": reason,
                 "done_count": len(done_tasks),
@@ -618,7 +658,7 @@ class RepairService:
                 "pending_count": len(pending_tasks),
                 "in_progress_count": len(in_progress_tasks),
                 "task_summary": chr(10).join(task_summary) if task_summary else "No tasks found",
-                "design_doc_path": project / DESIGN_CONTEXT_SUBDIR / filename,
+                "design_doc_path": design_source or "(no source file on disk)",
             })
 
             # Create the task
@@ -683,11 +723,18 @@ class RepairService:
         except Exception as e:
             logger.error(f"[REPAIR-AGENT] Exception: {e}", exc_info=True)
 
-    def _run_repair(self, repair_id: str, filename: str, project: Path):
+    def _run_repair(
+        self,
+        repair_id: str,
+        design_id: str,
+        spec_key: str,
+        design_source: Optional[Path],
+        project: Path,
+    ):
         """Background repair task."""
         from src.core.database import Workflow, get_db
 
-        logger.info(f"[REPAIR] Starting repair {repair_id} for {filename}")
+        logger.info(f"[REPAIR] Starting repair {repair_id} for {spec_key}")
 
         findings = []
         actions_taken = []
@@ -700,14 +747,20 @@ class RepairService:
             with get_db() as db:
                 workflow = Workflow(
                     id=wf_id,
-                    name=f"Repair: {filename}",
+                    name=f"Repair: {spec_key}",
                     definition_id="autopilot",
-                    description=f"Repair: {filename}",
+                    description=f"Repair: {spec_key}",
                     phases_folder_path=str(project),
                     status="active",
+                    # design_id, not just a launch_params path: it is the link
+                    # every other consumer matches on, and the only one a
+                    # directory-backed design has. design_document points at
+                    # the design's real source (a specs/ directory for one of
+                    # those), not a queue_dir/<filename> that never existed.
+                    design_id=design_id,
                     launch_params=json.dumps(
                         {
-                            "design_document": str(project / DESIGN_CONTEXT_SUBDIR / filename),
+                            "design_document": str(design_source) if design_source else None,
                             "project_path": str(project),
                             "repair_mode": True,
                         }
@@ -722,7 +775,9 @@ class RepairService:
 
             # 2. Spawn review agent on the new workflow
             logger.info("[REPAIR] Step 2: Spawning review agent")
-            self._spawn_repair_review_agent(wf_id, filename, project, "Repair initiated", actions_taken)
+            self._spawn_repair_review_agent(
+                wf_id, spec_key, design_source, "Repair initiated", actions_taken
+            )
             logger.info("[REPAIR] Step 2 complete: spawn_repair_review_agent returned")
 
             # 3. Find any existing workflows for context
@@ -730,13 +785,21 @@ class RepairService:
             with get_db() as db:
                 workflows = db.query(Workflow).filter(Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS)).all()
 
+                # design_id is the real link; the design_document substring
+                # stays as a fallback for workflows predating that column.
+                source_name = design_source.name if design_source else None
                 existing_workflow_ids = []
                 for wf in workflows:
-                    if wf.launch_params:
+                    if wf.id == wf_id:
+                        continue
+                    if wf.design_id == design_id:
+                        existing_workflow_ids.append(wf.id)
+                        continue
+                    if source_name and wf.launch_params:
                         try:
                             params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
-                            doc = params.get("design_document", "")
-                            if filename in doc:
+                            doc = params.get("design_document") or ""
+                            if source_name in doc:
                                 existing_workflow_ids.append(wf.id)
                         except Exception:
                             pass
@@ -759,7 +822,8 @@ class RepairService:
             logger.info("[REPAIR] Step 4: Storing results")
             result = {
                 "repair_id": repair_id,
-                "filename": filename,
+                "design_id": design_id,
+                "spec_key": spec_key,
                 "findings": findings,
                 "actions_taken": actions_taken,
                 "summary": {
@@ -768,44 +832,69 @@ class RepairService:
                     "workflows_created": 1,
                 },
             }
-
-            result_file = Path(AUTOPILOT_STATE_DIR) / f"repair_{repair_id}.json"
-            result_file.write_text(json.dumps(result, indent=2))
+            self._store_repair_result(repair_id, result)
             logger.info(f"[REPAIR] Repair {repair_id} complete. Actions: {len(actions_taken)}, Findings: {len(findings)}")
 
         except Exception as e:
             logger.error(f"[REPAIR] Exception during repair: {e}", exc_info=True)
             findings.append({"type": "error", "message": str(e)})
-            result = {
-                "repair_id": repair_id,
-                "filename": filename,
-                "findings": findings,
-                "actions_taken": actions_taken,
-                "summary": {"error": str(e)},
-            }
-            result_file = Path(AUTOPILOT_STATE_DIR) / f"repair_{repair_id}.json"
-            result_file.write_text(json.dumps(result, indent=2))
+            self._store_repair_result(
+                repair_id,
+                {
+                    "repair_id": repair_id,
+                    "design_id": design_id,
+                    "spec_key": spec_key,
+                    "findings": findings,
+                    "actions_taken": actions_taken,
+                    "summary": {"error": str(e)},
+                },
+            )
+
+    REPAIR_RESULT_KEY_PREFIX = "autopilot_repair_result_"
+
+    @classmethod
+    def _store_repair_result(cls, repair_id: str, result: Dict[str, Any]) -> None:
+        """Persist a repair's outcome in ProjectContext rather than a
+        repair_<id>.json under AUTOPILOT_STATE_DIR.
+
+        Same reasoning PersistentPipelineState was moved off files for: a file
+        beside the database is a second, non-transactional source of truth
+        that a DB reset does not carry along, and it outlives the rows it
+        describes with no owner.
+        """
+        from src.autopilot.orchestrator.state import _set_project_context
+        from src.core.database import get_db
+
+        try:
+            with get_db() as db:
+                _set_project_context(db, f"{cls.REPAIR_RESULT_KEY_PREFIX}{repair_id}", result)
+        except Exception as e:
+            logger.error(f"[REPAIR] Could not store result for {repair_id}: {e}")
 
     def get_repair_status(self, repair_id: str) -> Dict[str, Any]:
         """Get repair status and results."""
         logger.info(f"[REPAIR] Status check for {repair_id}")
-        result_file = Path(AUTOPILOT_STATE_DIR) / f"repair_{repair_id}.json"
-        if not result_file.exists():
-            logger.info(f"[REPAIR] {repair_id} still running (no result file yet)")
+        from src.autopilot.orchestrator.state import _get_project_context
+        from src.core.database import get_db
+
+        try:
+            with get_db() as db:
+                result = _get_project_context(db, f"{self.REPAIR_RESULT_KEY_PREFIX}{repair_id}")
+        except Exception as e:
+            logger.error(f"[REPAIR] {repair_id} error reading results: {e}")
+            return {"repair_id": repair_id, "status": "error", "message": str(e)}
+
+        if result is None:
+            logger.info(f"[REPAIR] {repair_id} still running (no result stored yet)")
             return {
                 "repair_id": repair_id,
                 "status": "running",
                 "message": "Repair still in progress...",
             }
 
-        try:
-            result: Dict[str, Any] = json.loads(result_file.read_text())
-            result["status"] = "completed"
-            logger.info(f"[REPAIR] {repair_id} completed")
-            return result
-        except Exception as e:
-            logger.error(f"[REPAIR] {repair_id} error reading results: {e}")
-            return {"repair_id": repair_id, "status": "error", "message": str(e)}
+        result["status"] = "completed"
+        logger.info(f"[REPAIR] {repair_id} completed")
+        return result
 
 
 repair_service = RepairService()
