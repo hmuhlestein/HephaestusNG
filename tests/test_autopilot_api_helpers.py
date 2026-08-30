@@ -164,27 +164,72 @@ class TestReadJson:
         assert result == []
 
 
-# ── _load_queue_order / _save_queue_order ─────────────────────────
+# ── queue ordering (AutopilotDesign.ordinal) ─────────────────────
 
 
 class TestQueueOrder:
-    def test_save_and_load(self, tmp_path):
-        from src.mcp.autopilot.queue_routes import _load_queue_order, _save_queue_order
+    """The queue's order lives in AutopilotDesign.ordinal. It used to be
+    mirrored into .hephaestus/.queue_order.json -- a second source of truth
+    for the same ordering, written from two routes, and a list of filenames
+    that recorded a literal null for every directory-backed design."""
 
-        order_file = tmp_path / "order.json"
-        with patch(
-            "src.mcp.autopilot.queue_routes._get_queue_order_path", return_value=order_file
-        ):
-            _save_queue_order(["a.md", "b.md", "c.md"])
-            result = _load_queue_order()
-            assert result == ["a.md", "b.md", "c.md"]
+    def test_pin_to_front_sorts_below_every_other_design(self, tmp_path, monkeypatch):
+        from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager
+        from src.mcp.autopilot.queue_routes import _design_rows_by_filename, _pin_design_to_front
 
-    def test_load_missing(self):
-        from src.mcp.autopilot.queue_routes import _load_queue_order
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(tmp_path / "test.db"))
+        db = DatabaseManager(str(tmp_path / "test.db"))
+        db.create_tables()
+        with db.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+            for i, name in enumerate(["a.md", "b.md", "c.md"], start=1):
+                session.add(
+                    AutopilotDesign(
+                        id=f"des-{name}", project_id="proj-1", filename=name,
+                        name=name, ordinal=i, status="pending",
+                    )
+                )
 
-        with patch("src.mcp.autopilot.queue_routes._get_queue_order_path", return_value=None):
-            result = _load_queue_order()
-            assert result == []
+        with db.session_scope() as session:
+            rows = _design_rows_by_filename(session, "proj-1")
+            assert set(rows) == {"a.md", "b.md", "c.md"}
+            _pin_design_to_front(session, rows["c.md"])
+
+        with db.session_scope() as session:
+            ordered = [
+                d.filename
+                for d in session.query(AutopilotDesign)
+                .filter_by(project_id="proj-1")
+                .order_by(AutopilotDesign.ordinal)
+                .all()
+            ]
+        assert ordered[0] == "c.md"
+
+    def test_a_design_without_a_filename_is_not_in_the_filename_view(self, tmp_path, monkeypatch):
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            DatabaseManager,
+            directory_spec_key,
+        )
+        from src.mcp.autopilot.queue_routes import _design_rows_by_filename
+
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(tmp_path / "test2.db"))
+        db = DatabaseManager(str(tmp_path / "test2.db"))
+        db.create_tables()
+        with db.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+            session.add(
+                AutopilotDesign(
+                    id="des-dir", project_id="proj-1",
+                    spec_key=directory_spec_key("001-x"), filename=None,
+                    source_dir=str(tmp_path / "specs" / "001-x"),
+                    name="001-x", ordinal=1, status="pending",
+                )
+            )
+
+        with db.session_scope() as session:
+            assert _design_rows_by_filename(session, "proj-1") == {}
 
 
 # ── POST /start concurrency cap ──────────────────────────────────

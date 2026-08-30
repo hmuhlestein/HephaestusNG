@@ -4,7 +4,9 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import func
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -20,31 +22,38 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-def _get_queue_order_path(project_id: Optional[str] = None) -> Optional[Path]:
-    try:
-        # Write alongside other server state under .hephaestus/, not inside
-        # the tracked docs/spec/ directory (which would pollute git status).
-        effective_dir = _get_effective_queue_dir(project_id)
-        hephaestus_dir = Path(effective_dir).parent.parent / CONTEXT_DIR_NAME
-        hephaestus_dir.mkdir(parents=True, exist_ok=True)
-        return hephaestus_dir / ".queue_order.json"
-    except (FileNotFoundError, RuntimeError):
-        return None
+def _design_rows_by_filename(db, project_id: Optional[str]) -> Dict[str, Any]:
+    """This project's file-backed design rows, keyed by filename.
 
-def _load_queue_order(project_id: Optional[str] = None) -> List[str]:
-    path = _get_queue_order_path(project_id)
-    if path and path.exists():
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            pass
-    return []
+    The queue's order lives in AutopilotDesign.ordinal -- the same column
+    pick_next_design orders by. It used to be mirrored into a
+    .hephaestus/.queue_order.json list of filenames, written from here and
+    from the design-reorder route: a second source of truth for something the
+    database already held, and one that structurally could not represent a
+    directory-backed design, whose filename is NULL (the mirror recorded a
+    literal null for it).
+    """
+    from src.core.database import AutopilotDesign, AutopilotProject
 
-def _save_queue_order(order: List[str], project_id: Optional[str] = None):
-    path = _get_queue_order_path(project_id)
-    if path:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(order))
+    if project_id:
+        rows = db.query(AutopilotDesign).filter_by(project_id=project_id).all()
+    else:
+        proj = db.query(AutopilotProject).filter_by(is_active=True).first()
+        rows = db.query(AutopilotDesign).filter_by(project_id=proj.id).all() if proj else []
+    return {d.filename: d for d in rows if d.filename}
+
+
+def _pin_design_to_front(db, design) -> None:
+    """Give a design an ordinal below every other one in its project."""
+    from src.core.database import AutopilotDesign
+
+    lowest = (
+        db.query(func.min(AutopilotDesign.ordinal))
+        .filter_by(project_id=design.project_id)
+        .scalar()
+    )
+    design.ordinal = (lowest if lowest is not None else 0) - 1
+
 
 @router.get("/queue", response_model=List[DesignQueueItem])
 async def list_design_queue(project_id: Optional[str] = None):
@@ -59,15 +68,25 @@ async def list_design_queue(project_id: Optional[str] = None):
         raise HTTPException(404, str(e))
 
     queue_path = Path(effective_dir)
-    saved_order = _load_queue_order(project_id)
 
     files_by_name: Dict[str, Path] = {}
     for ext in ALLOWED_EXTENSIONS:
         for f in queue_path.glob(f"*{ext}"):
             files_by_name[f.name] = f
 
-    ordered_names = [n for n in saved_order if n in files_by_name]
-    unordered = [n for n in files_by_name if n not in saved_order]
+    from src.core.database import get_db
+
+    with get_db() as db:
+        ordinals = {
+            name: row.ordinal for name, row in _design_rows_by_filename(db, project_id).items()
+        }
+
+    # A file with a design row sorts by its ordinal; one without a row (dropped
+    # into the queue dir but not yet synced) falls in behind them by mtime.
+    ordered_names = sorted(
+        (n for n in files_by_name if n in ordinals), key=lambda n: ordinals[n]
+    )
+    unordered = [n for n in files_by_name if n not in ordinals]
     all_names = ordered_names + sorted(unordered, key=lambda n: files_by_name[n].stat().st_mtime)
 
     items = []
@@ -108,7 +127,15 @@ async def reorder_queue(req: QueueReorderRequest):
         if fname not in existing:
             raise HTTPException(400, f"Unknown file: {fname}")
 
-    _save_queue_order(req.filenames, req.project_id)
+    from src.core.database import get_db
+
+    with get_db() as db:
+        by_filename = _design_rows_by_filename(db, req.project_id)
+        for i, fname in enumerate(req.filenames):
+            row = by_filename.get(fname)
+            if row:
+                row.ordinal = i + 1
+        db.commit()
     _invalidate("queue", f"queue:{req.project_id}" if req.project_id else "queue")
     return {"order": req.filenames}
 
@@ -122,14 +149,12 @@ async def requeue_design(request: dict):
         raise HTTPException(400, "filename is required")
     req_project_id = request.get("project_id")
 
-    # Get the queue order
-    order = _load_queue_order(req_project_id)
-
-    # Move to front
-    if filename in order:
-        order.remove(filename)
-    order.insert(0, filename)
-    _save_queue_order(order, req_project_id)
+    # Move to front. ordinal is what pick_next_design orders by.
+    with get_db() as db:
+        row = _design_rows_by_filename(db, req_project_id).get(filename)
+        if row:
+            _pin_design_to_front(db, row)
+            db.commit()
     _invalidate("queue", f"queue:{req_project_id}" if req_project_id else "queue")
 
     # Pause any active workflow processing this design
@@ -291,8 +316,6 @@ async def rerun_design(request: dict):
     return await repair_service.rerun(
         project_path,
         design_id,
-        load_queue_order=_load_queue_order,
-        save_queue_order=_save_queue_order,
         invalidate=_invalidate,
     )
 

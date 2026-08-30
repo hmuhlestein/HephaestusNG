@@ -94,8 +94,6 @@ async def test_rerun_clears_phase0_workflow_id_before_deleting_its_workflow(seed
         result = await RepairService().rerun(
             project_path=str(dirs["project_dir"]),
             design_id="des-1",
-            load_queue_order=lambda project_id: [],
-            save_queue_order=lambda order, project_id: None,
             invalidate=lambda *a, **k: None,
         )
 
@@ -218,8 +216,6 @@ async def test_rerun_deletes_feature_before_its_workflow(seeded_db_with_feature)
         result = await RepairService().rerun(
             project_path=str(dirs["project_dir"]),
             design_id="des-1",
-            load_queue_order=lambda project_id: [],
-            save_queue_order=lambda order, project_id: None,
             invalidate=lambda *a, **k: None,
         )
 

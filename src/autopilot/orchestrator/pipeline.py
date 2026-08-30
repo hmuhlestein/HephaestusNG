@@ -2934,8 +2934,6 @@ def run_continuous_pipeline(args) -> None:
         except Exception as e:
             logger.warning(f"Could not resolve current_project_id for {project_path}; stop/pause signals keyed by project_id won't reach this pipeline: {e}")
 
-    processed_file = log_dir / "processed.json"
-
     sdk, cli_tool = _build_and_start_pipeline_sdk(args, project_path, logger)
 
     # Register orchestrator as an agent, keyed by project_id so a second
@@ -3275,8 +3273,10 @@ def run_continuous_pipeline(args) -> None:
                     feature_report = _empty_report(next_design)
 
                 next_design.status = status
+                # PersistentPipelineState.save() below is what persists this
+                # set; the processed.json this also wrote was never read back
+                # by anything after that moved into the database.
                 processed_hashes.add(next_design.content_hash)
-                processed_file.write_text(json.dumps(list(processed_hashes)))
 
                 _persist_design_outcome(next_design, status, logger)
 

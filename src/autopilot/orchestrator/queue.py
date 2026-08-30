@@ -234,30 +234,9 @@ def scan_design_queue(
                     )
                 )
 
-    # Check for manual reorder file — stored in .hephaestus/ (not in docs/spec/)
-    order_file = queue_dir.parent.parent / CONTEXT_DIR_NAME / ".queue_order.json"
-    if order_file.exists():
-        try:
-            saved_order = json.loads(order_file.read_text())
-            # Create lookup by filename -- Spec Kit entries all share the
-            # basename "spec.md" (path is .../specs/<NNN-name>/spec.md), so
-            # a plain d.path.name key collapses every Spec Kit feature but
-            # the last one in this dict. Key those by their unique feature
-            # dir name instead; design.md-style entries (unaffected by
-            # saved_order, which only ever names real queue-dir filenames)
-            # keep the existing bare-filename key.
-            by_filename = {(d.speckit_feature_dir.name if d.speckit_feature_dir else d.path.name): d for d in designs}
-            # Order by saved order, then append any new files not in saved order
-            ordered = []
-            for fname in saved_order:
-                if fname in by_filename:
-                    ordered.append(by_filename.pop(fname))
-            # Add remaining files (not in saved order) sorted by name
-            ordered.extend(sorted(by_filename.values(), key=lambda d: d.path.name.lower()))
-            return ordered
-        except (json.JSONDecodeError, KeyError):
-            pass  # Fall back to default sort
-
+    # No reorder file: the queue's order lives in AutopilotDesign.ordinal,
+    # which pick_next_design (the DB path above) orders by. This filesystem
+    # scan is the fallback for when that read fails, and sorts by name.
     designs.sort(key=lambda d: d.path.name.lower())
     return designs
 
