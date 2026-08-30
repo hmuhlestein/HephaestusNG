@@ -301,15 +301,15 @@ async def repair_design(request: dict):
     """Repair a design: spin up a recovery workflow and a review agent that checks
     and fixes stuck/incomplete tasks. (Branch reconciliation is obsolete under
     per-task worktree isolation — failed worktrees are discarded, never merged.)"""
-    filename = request.get("filename")
-    if not filename:
-        raise HTTPException(400, "filename is required")
+    design_id = request.get("design_id")
+    if not design_id:
+        raise HTTPException(400, "design_id is required")
 
     project_path = request.get("project_path")
     if not project_path:
         raise HTTPException(400, "project_path is required")
 
-    return await repair_service.repair(project_path, filename)
+    return await repair_service.repair(project_path, design_id)
 
 @router.get("/queue/repair/{repair_id}")
 async def get_repair_status(repair_id: str):
