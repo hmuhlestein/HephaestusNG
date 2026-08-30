@@ -208,7 +208,7 @@ async def list_project_designs(project_id: str, archived: bool = Query(False)):
         return _store(cache_key, result)
 
 
-def _set_design_archived(project_id: str, filename: str, archived: bool) -> DesignItem:
+def _set_design_archived(project_id: str, design_id: str, archived: bool) -> DesignItem:
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
@@ -216,7 +216,7 @@ def _set_design_archived(project_id: str, filename: str, archived: bool) -> Desi
         if not proj:
             raise HTTPException(404, "Project not found")
 
-        d = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+        d = db.query(AutopilotDesign).filter_by(project_id=project_id, id=design_id).first()
         if not d:
             raise HTTPException(404, "Design not found")
 
@@ -240,10 +240,17 @@ def _set_design_archived(project_id: str, filename: str, archived: bool) -> Desi
     return item
 
 
-@router.post("/projects/{project_id}/designs/{filename}/archive", response_model=DesignItem)
+# Keyed by design_id, not filename: a Spec Kit autoscan design's filename is
+# a synthetic relative path ("speckit/<repo>/<n>-<slug>.md"), and a directory-
+# sourced design (source_dir set, NFR-02) has no filename at all (NULL) -- an
+# id is the one identifier every design row actually has. archive/unarchive
+# need no file-path resolution at all, so switching them to id has no other
+# consequence; remove_project_design still derives the row's own filename
+# from the id lookup wherever it genuinely needs a file path.
+@router.post("/projects/{project_id}/designs/{design_id}/archive", response_model=DesignItem)
 async def archive_project_design(
     project_id: str,
-    filename: str,
+    design_id: str,
     agent_id: str = Header("ui-user", alias="X-Agent-ID"),
 ):
     """Hide a design from the default queue view without touching its file,
@@ -251,18 +258,18 @@ async def archive_project_design(
     destructive delete, this is purely a visibility flag."""
     if not await verify_agent_authentication(agent_id):
         raise HTTPException(status_code=401, detail="Agent not authenticated. Provide valid X-Agent-ID header.")
-    return _set_design_archived(project_id, filename, True)
+    return _set_design_archived(project_id, design_id, True)
 
 
-@router.post("/projects/{project_id}/designs/{filename}/unarchive", response_model=DesignItem)
+@router.post("/projects/{project_id}/designs/{design_id}/unarchive", response_model=DesignItem)
 async def unarchive_project_design(
     project_id: str,
-    filename: str,
+    design_id: str,
     agent_id: str = Header("ui-user", alias="X-Agent-ID"),
 ):
     if not await verify_agent_authentication(agent_id):
         raise HTTPException(status_code=401, detail="Agent not authenticated. Provide valid X-Agent-ID header.")
-    return _set_design_archived(project_id, filename, False)
+    return _set_design_archived(project_id, design_id, False)
 
 
 @router.post("/projects/{project_id}/designs", response_model=DesignItem)
@@ -684,10 +691,10 @@ async def reorder_project_designs(
     return {"order": req.design_ids}
 
 
-@router.delete("/projects/{project_id}/designs/{filename}")
+@router.delete("/projects/{project_id}/designs/{design_id}")
 async def remove_project_design(
     project_id: str,
-    filename: str,
+    design_id: str,
     agent_id: str = Header("ui-user", alias="X-Agent-ID"),
 ):
     # SECURITY: Verify agent authentication before removing designs
@@ -697,7 +704,7 @@ async def remove_project_design(
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
 
-    logger.info(f"[DELETE] remove_project_design called: project={project_id}, file={filename}")
+    logger.info(f"[DELETE] remove_project_design called: project={project_id}, design_id={design_id}")
     from src.core.database import (
         Agent,
         AgentResult,
@@ -730,7 +737,11 @@ async def remove_project_design(
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
 
-        d = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+        d = db.query(AutopilotDesign).filter_by(project_id=project_id, id=design_id).first()
+        # Directory-sourced designs (source_dir set, NFR-02) have filename=NULL
+        # -- everything below that resolves a single on-disk file only applies
+        # to a file-sourced design and is skipped when this is None.
+        filename = d.filename if d else None
         if d:
             # Cascade: terminate agents, delete tasks, workflows, features
             design_features = db.query(Feature).filter_by(design_id=d.id).all()
@@ -934,43 +945,51 @@ async def remove_project_design(
 
             removed = cleanup_workflow_sessions(session_infos)
             if removed:
-                logger.info(f"[DELETE-DESIGN] Removed {removed} orphaned CLI session file(s) for {filename}")
+                logger.info(f"[DELETE-DESIGN] Removed {removed} orphaned CLI session file(s) for design {design_id}")
         except Exception as e:
-            logger.warning(f"[DELETE-DESIGN] Failed to clean up CLI sessions for {filename}: {e}")
+            logger.warning(f"[DELETE-DESIGN] Failed to clean up CLI sessions for design {design_id}: {e}")
 
-    design_dir = _get_design_queue_dir(base_dir)
-    filepath = _resolve_design_filepath(
-        d.file_path if d else None, _safe_path(str(design_dir), filename)
-    )
-    if filepath.exists():
-        filepath.unlink()
-        found = True
+    # Directory-sourced designs have no single on-disk file to resolve/unlink
+    # here -- their content lives across multiple files under source_dir,
+    # which this delete cascade doesn't touch. `found` is already True from
+    # the DB row delete above in that case.
+    filepath = None
+    if filename:
+        design_dir = _get_design_queue_dir(base_dir)
+        filepath = _resolve_design_filepath(
+            d.file_path if d else None, _safe_path(str(design_dir), filename)
+        )
+        if filepath.exists():
+            filepath.unlink()
+            found = True
 
     if not found:
-        raise HTTPException(404, f"Design '{filename}' not found")
+        raise HTTPException(404, f"Design '{design_id}' not found")
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
 
     # Also remove from the persisted processed-designs set so re-adding
-    # triggers reprocessing
-    try:
-        import hashlib
+    # triggers reprocessing -- only meaningful for a file-sourced design
+    # (the processed-set is keyed by file content hash).
+    if filename:
+        try:
+            import hashlib
 
-        from src.autopilot.orchestrator.state import PersistentPipelineState
+            from src.autopilot.orchestrator.state import PersistentPipelineState
 
-        # Compute hash of the design file to remove it
-        if filepath.exists():
-            content = filepath.read_bytes()
-        else:
-            # File already deleted, try to compute from remaining data
-            content = filename.encode()
-        h = hashlib.sha256(content).hexdigest()[:16]
+            # Compute hash of the design file to remove it
+            if filepath is not None and filepath.exists():
+                content = filepath.read_bytes()
+            else:
+                # File already deleted, try to compute from remaining data
+                content = filename.encode()
+            h = hashlib.sha256(content).hexdigest()[:16]
 
-        PersistentPipelineState(project_id=project_id).remove_processed_hash(h)
-    except Exception:
-        pass  # Non-critical
+            PersistentPipelineState(project_id=project_id).remove_processed_hash(h)
+        except Exception:
+            pass  # Non-critical
 
-    return {"removed": filename}
+    return {"removed": design_id}
 
 
 @router.get("/projects/{project_id}/designs/{filename}/content")

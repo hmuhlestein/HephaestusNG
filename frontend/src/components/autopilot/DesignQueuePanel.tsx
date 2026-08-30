@@ -180,18 +180,18 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   });
 
   const removeMutation = useMutation({
-    mutationFn: (filename: string) => {
+    mutationFn: (designId: string) => {
       if (!projectId) throw new Error('No project selected');
-      return apiService.removeAutopilotProjectDesign(projectId, filename);
+      return apiService.removeAutopilotProjectDesign(projectId, designId);
     },
-    onMutate: async (filename: string) => {
+    onMutate: async (designId: string) => {
       // Same dedup race as archiveMutation above -- cancel the in-flight
       // 5s poll first so invalidateQueries below can't be satisfied by a
       // stale, pre-removal response.
       await queryClient.cancelQueries({ queryKey: ['autopilot-project-designs', projectId] });
       const prev = queryClient.getQueryData<any[]>(['autopilot-project-designs', projectId]);
       queryClient.setQueryData(['autopilot-project-designs', projectId], (old: any[] | undefined) =>
-        old?.filter((d) => d.filename !== filename)
+        old?.filter((d) => d.id !== designId)
       );
       return { prev };
     },
@@ -200,18 +200,18 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       toast.success('Design removed');
     },
-    onError: (error: any, _filename, ctx: any) => {
+    onError: (error: any, _designId, ctx: any) => {
       if (ctx?.prev) queryClient.setQueryData(['autopilot-project-designs', projectId], ctx.prev);
       toast.error(error?.response?.data?.detail || 'Failed to remove design');
     },
   });
 
   const archiveMutation = useMutation({
-    mutationFn: (filename: string) => {
+    mutationFn: (designId: string) => {
       if (!projectId) throw new Error('No project selected');
-      return apiService.archiveAutopilotProjectDesign(projectId, filename);
+      return apiService.archiveAutopilotProjectDesign(projectId, designId);
     },
-    onMutate: async (filename: string) => {
+    onMutate: async (designId: string) => {
       // Cancel in-flight refetches first -- otherwise the active list's
       // 5s poll can have a fetch already in flight when the archive call
       // resolves, and TanStack Query's request dedup lets that stale
@@ -221,7 +221,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       await queryClient.cancelQueries({ queryKey: ['autopilot-project-designs', projectId] });
       const prev = queryClient.getQueryData<any[]>(['autopilot-project-designs', projectId]);
       queryClient.setQueryData(['autopilot-project-designs', projectId], (old: any[] | undefined) =>
-        old?.filter((d) => d.filename !== filename)
+        old?.filter((d) => d.id !== designId)
       );
       return { prev };
     },
@@ -230,7 +230,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs-archived', projectId] });
       toast.success('Design archived');
     },
-    onError: (error: any, _filename, ctx: any) => {
+    onError: (error: any, _designId, ctx: any) => {
       if (ctx?.prev) queryClient.setQueryData(['autopilot-project-designs', projectId], ctx.prev);
       toast.error(error?.response?.data?.detail || 'Failed to archive design');
     },
@@ -476,12 +476,12 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                     resume: workflowActionMutation.isPending && workflowActionMutation.variables?.filename === item.filename && workflowActionMutation.variables?.action === 'resume',
                     rerun: rerunDesignMutation.isPending && rerunDesignMutation.variables === item.filename,
                   }}
-                  onRemove={(filename) => {
+                  onRemove={(designId) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {
-                      removeMutation.mutate(filename);
+                      removeMutation.mutate(designId);
                     }
                   }}
-                  onArchive={(filename) => archiveMutation.mutate(filename)}
+                  onArchive={(designId) => archiveMutation.mutate(designId)}
                   reviewMode={reviewMode}
                 />
               ))}
@@ -623,8 +623,8 @@ interface SortableDesignItemProps {
   item: any;
   index: number;
   isActive?: boolean;
-  onRemove: (filename: string) => void;
-  onArchive: (filename: string) => void;
+  onRemove: (designId: string) => void;
+  onArchive: (designId: string) => void;
   onDetail: (filename: string) => void;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
@@ -851,14 +851,14 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
               <FileText className="w-4 h-4" />
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); onArchive(item.filename); }}
+              onClick={(e) => { e.stopPropagation(); onArchive(item.id); }}
               className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
               title="Archive"
             >
               <Archive className="w-4 h-4" />
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); onRemove(item.filename); }}
+              onClick={(e) => { e.stopPropagation(); onRemove(item.id); }}
               className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400"
               title="Remove"
             >

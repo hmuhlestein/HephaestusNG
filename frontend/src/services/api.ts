@@ -923,17 +923,17 @@ export const apiService = {
     return data;
   },
 
-  removeAutopilotProjectDesign: async (projectId: string, filename: string): Promise<void> => {
-    await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}`);
+  removeAutopilotProjectDesign: async (projectId: string, designId: string): Promise<void> => {
+    await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(designId)}`);
   },
 
-  archiveAutopilotProjectDesign: async (projectId: string, filename: string): Promise<any> => {
-    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/archive`);
+  archiveAutopilotProjectDesign: async (projectId: string, designId: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(designId)}/archive`);
     return data;
   },
 
-  unarchiveAutopilotProjectDesign: async (projectId: string, filename: string): Promise<any> => {
-    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/unarchive`);
+  unarchiveAutopilotProjectDesign: async (projectId: string, designId: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(designId)}/unarchive`);
     return data;
   },
 

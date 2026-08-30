@@ -2351,14 +2351,15 @@ class TestProjectDesigns:
     def test_remove_design_resolves_docs_destination(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
-        client.post(
+        add_resp = client.post(
             f"/api/autopilot/projects/{pid}/designs",
             json={"name": "Docs Remove", "content": "remove me", "destination": "docs"},
         )
+        design_id = add_resp.json()["id"]
         docs_file = dirs["project_dir"] / "docs" / "Docs_Remove.md"
         assert docs_file.exists()
 
-        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/Docs_Remove.md")
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/{design_id}")
         assert resp.status_code == 200
         assert not docs_file.exists()
         # Must not have gone looking in (or deleted anything from) the
@@ -2373,10 +2374,11 @@ class TestProjectDesigns:
         docs/bugfix defaults, or a user-picked folder)."""
         client, dirs = project_client
         pid = self._create_project(client, dirs)
-        client.post(
+        add_resp = client.post(
             f"/api/autopilot/projects/{pid}/designs",
             json={"name": "Nested Bug", "content": "repro steps", "destination": "docs/bugfix"},
         )
+        design_id = add_resp.json()["id"]
         nested_file = dirs["project_dir"] / "docs" / "bugfix" / "Nested_Bug.md"
         assert nested_file.exists()
 
@@ -2387,7 +2389,7 @@ class TestProjectDesigns:
         status_resp = client.get(f"/api/autopilot/projects/{pid}/designs/Nested_Bug.md/status")
         assert status_resp.status_code == 200
 
-        delete_resp = client.delete(f"/api/autopilot/projects/{pid}/designs/Nested_Bug.md")
+        delete_resp = client.delete(f"/api/autopilot/projects/{pid}/designs/{design_id}")
         assert delete_resp.status_code == 200
         assert not nested_file.exists()
 
@@ -2395,7 +2397,9 @@ class TestProjectDesigns:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/01-auth.md")
+        from src.mcp.autopilot.project_routes import _design_id
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/{_design_id(pid, '01-auth.md')}")
         assert resp.status_code == 200
 
         # Verify file was deleted
@@ -2410,7 +2414,7 @@ class TestProjectDesigns:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/nonexistent.md")
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/des-nonexistent")
         assert resp.status_code == 404
 
     def test_get_design_content(self, project_client):
@@ -2607,7 +2611,7 @@ class TestProjectDesigns:
             )
             db.commit()
 
-        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/orphan-design.md")
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/{design_id}")
         assert resp.status_code == 200, resp.text
 
         with get_db() as db:
@@ -2631,10 +2635,11 @@ class TestProjectDesigns:
 
         with get_db() as db:
             design = db.query(AutopilotDesign).filter_by(project_id=pid, filename="01-auth.md").first()
+            design_id = design.id
             db.add(
                 Workflow(
                     id="wf-cost-1", name="autopilot", phases_folder_path="/tmp",
-                    status="failed", definition_id="autopilot", design_id=design.id,
+                    status="failed", definition_id="autopilot", design_id=design_id,
                 )
             )
             db.add(
@@ -2651,7 +2656,7 @@ class TestProjectDesigns:
             )
             db.commit()
 
-        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/01-auth.md")
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/{design_id}")
         assert resp.status_code == 200, resp.text
 
         with get_db() as db:
@@ -3275,11 +3280,16 @@ class TestArchiveProjectDesign:
         )
         return resp.json()["id"]
 
+    def _auth_design_id(self, pid):
+        from src.mcp.autopilot.project_routes import _design_id
+
+        return _design_id(pid, "01-auth.md")
+
     def test_archive_hides_from_default_list_but_not_archived_list(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        resp = client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/archive")
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs/{self._auth_design_id(pid)}/archive")
         assert resp.status_code == 200, resp.text
         assert resp.json()["archived_at"] is not None
 
@@ -3293,9 +3303,10 @@ class TestArchiveProjectDesign:
     def test_unarchive_restores_to_default_list(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
-        client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/archive")
+        design_id = self._auth_design_id(pid)
+        client.post(f"/api/autopilot/projects/{pid}/designs/{design_id}/archive")
 
-        resp = client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/unarchive")
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs/{design_id}/unarchive")
         assert resp.status_code == 200, resp.text
         assert resp.json()["archived_at"] is None
 
@@ -3316,7 +3327,7 @@ class TestArchiveProjectDesign:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/archive")
+        client.post(f"/api/autopilot/projects/{pid}/designs/{self._auth_design_id(pid)}/archive")
 
         resp = client.post(f"/api/autopilot/projects/{pid}/designs/reload")
         assert resp.status_code == 200, resp.text
@@ -3328,8 +3339,46 @@ class TestArchiveProjectDesign:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        resp = client.post(f"/api/autopilot/projects/{pid}/designs/nonexistent.md/archive")
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs/des-nonexistent/archive")
         assert resp.status_code == 404
+
+    def test_archive_and_remove_work_for_a_directory_sourced_design(self, project_client):
+        """Archive/unarchive/remove used to be keyed by filename in the URL
+        path -- a Spec-Kit directory-sourced design has filename=NULL
+        (source_dir is set instead, per NFR-02), so none of these three
+        endpoints could ever find such a design at all. Now keyed by id,
+        the one identifier every design row actually has."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, get_db
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-dir-sourced-archive",
+                    project_id=pid,
+                    filename=None,
+                    name="001-conversation-history",
+                    source_dir="/tmp/specs/001-conversation-history",
+                    status="pending",
+                )
+            )
+            db.commit()
+
+        archive_resp = client.post(f"/api/autopilot/projects/{pid}/designs/des-dir-sourced-archive/archive")
+        assert archive_resp.status_code == 200, archive_resp.text
+        assert archive_resp.json()["archived_at"] is not None
+
+        unarchive_resp = client.post(f"/api/autopilot/projects/{pid}/designs/des-dir-sourced-archive/unarchive")
+        assert unarchive_resp.status_code == 200, unarchive_resp.text
+        assert unarchive_resp.json()["archived_at"] is None
+
+        remove_resp = client.delete(f"/api/autopilot/projects/{pid}/designs/des-dir-sourced-archive")
+        assert remove_resp.status_code == 200, remove_resp.text
+
+        with get_db() as db:
+            assert db.query(AutopilotDesign).filter_by(id="des-dir-sourced-archive").first() is None
 
 
 class TestWorkflowFeatureReport:
@@ -4555,7 +4604,11 @@ class TestRouterAggregation:
         ("POST", "/api/autopilot/projects/{project_id}/designs"),
         ("POST", "/api/autopilot/projects/{project_id}/designs/reload"),
         ("PUT", "/api/autopilot/projects/{project_id}/designs/reorder"),
-        ("DELETE", "/api/autopilot/projects/{project_id}/designs/{filename}"),
+        # design_id, not filename: a directory-sourced design has
+        # filename=NULL (source_dir set instead, per NFR-02), so filename
+        # could never address one -- id is the identifier every design row
+        # actually has.
+        ("DELETE", "/api/autopilot/projects/{project_id}/designs/{design_id}"),
         ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/content"),
         ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/status"),
         ("PATCH", "/api/autopilot/projects/{project_id}/review-mode"),

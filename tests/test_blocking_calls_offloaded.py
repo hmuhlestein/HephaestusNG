@@ -171,9 +171,9 @@ async def test_remove_project_design_offloads_tmux_kill(db, tmp_path):
         ),
         patch.object(design_file_routes, "_invalidate", return_value=None),
     ):
-        result = await design_file_routes.remove_project_design("proj-1", "des.md", agent_id="ui-user")
+        result = await design_file_routes.remove_project_design("proj-1", "des-1", agent_id="ui-user")
 
-    assert result == {"removed": "des.md"}
+    assert result == {"removed": "des-1"}
     fake_loop.run_in_executor.assert_called_once()
     executor_arg, fn_arg = fake_loop.run_in_executor.call_args.args
     assert executor_arg is None

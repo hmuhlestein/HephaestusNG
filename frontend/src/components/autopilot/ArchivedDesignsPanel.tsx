@@ -26,9 +26,9 @@ const ArchivedDesignsPanel: React.FC<ArchivedDesignsPanelProps> = ({ projectId }
   };
 
   const unarchiveMutation = useMutation({
-    mutationFn: (filename: string) => {
+    mutationFn: (designId: string) => {
       if (!projectId) throw new Error('No project selected');
-      return apiService.unarchiveAutopilotProjectDesign(projectId, filename);
+      return apiService.unarchiveAutopilotProjectDesign(projectId, designId);
     },
     onSuccess: () => {
       invalidateBoth();
@@ -40,9 +40,9 @@ const ArchivedDesignsPanel: React.FC<ArchivedDesignsPanelProps> = ({ projectId }
   });
 
   const removeMutation = useMutation({
-    mutationFn: (filename: string) => {
+    mutationFn: (designId: string) => {
       if (!projectId) throw new Error('No project selected');
-      return apiService.removeAutopilotProjectDesign(projectId, filename);
+      return apiService.removeAutopilotProjectDesign(projectId, designId);
     },
     onSuccess: () => {
       invalidateBoth();
@@ -98,7 +98,9 @@ const ArchivedDesignsPanel: React.FC<ArchivedDesignsPanelProps> = ({ projectId }
           <div className="flex-1 min-w-0">
             <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">{item.name}</h4>
             <div className="flex items-center gap-3 mt-1">
-              <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">{item.filename}</span>
+              {item.filename && (
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">{item.filename}</span>
+              )}
               {item.archived_at && (
                 <span className="text-xs text-gray-400 dark:text-gray-500">
                   Archived {formatDistanceToNow(new Date(item.archived_at), { addSuffix: true })}
@@ -108,7 +110,7 @@ const ArchivedDesignsPanel: React.FC<ArchivedDesignsPanelProps> = ({ projectId }
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => unarchiveMutation.mutate(item.filename)}
+              onClick={() => unarchiveMutation.mutate(item.id)}
               disabled={unarchiveMutation.isPending}
               className="p-2 rounded-lg hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400"
               title="Restore to queue"
@@ -118,7 +120,7 @@ const ArchivedDesignsPanel: React.FC<ArchivedDesignsPanelProps> = ({ projectId }
             <button
               onClick={() => {
                 if (confirm(`Permanently delete "${item.name}"? This cannot be undone.`)) {
-                  removeMutation.mutate(item.filename);
+                  removeMutation.mutate(item.id);
                 }
               }}
               disabled={removeMutation.isPending}
