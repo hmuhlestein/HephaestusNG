@@ -159,8 +159,25 @@ class GuardianDispatcher:
                 except Exception:
                     pass  # non-fatal; don't interrupt the monitoring cycle
 
+            # Resolve this agent's own CLI interface once -- used both to
+            # tell detect_agent_exited when the CLI's own ready UI is still
+            # up (so a stray line ending in "%"/"$" isn't misread as a
+            # shell prompt) and, below, for the garbled-output TUI patterns.
+            # Not a global default: a mixed fleet (e.g. pi + claude) would
+            # otherwise check every agent's output against one CLI's
+            # patterns regardless of what CLI it's actually running.
+            cli_agent = None
+            health_check_pattern = None
+            try:
+                from src.interfaces.cli_interface import get_cli_agent
+
+                cli_agent = get_cli_agent(agent.cli_type)
+                health_check_pattern = cli_agent.get_health_check_pattern()
+            except Exception:
+                pass  # No CLI agent configured — exit-detection just skips this signal
+
             # DETECT: Agent exited to command line (shows $, %, >>>, bquote>)
-            if self.guardian.detect_agent_exited(tmux_output):
+            if self.guardian.detect_agent_exited(tmux_output, health_check_pattern=health_check_pattern):
                 # Check if task is already done before restarting
                 task = await loop.run_in_executor(
                     None, lambda: session.query(Task).filter_by(id=agent.current_task_id).first()
@@ -177,16 +194,9 @@ class GuardianDispatcher:
                 return None
 
             # Detect garbled TUI output (CLI rendering corruption)
-            # Get TUI status patterns from this agent's own CLI interface --
-            # not a global default, since a mixed fleet (e.g. pi + claude)
-            # would otherwise check every agent's output against pi's
-            # patterns regardless of what CLI it's actually running.
             tui_patterns = None
             try:
-                from src.interfaces.cli_interface import get_cli_agent
-
-                cli_agent = get_cli_agent(agent.cli_type)
-                tui_patterns = cli_agent.get_tui_status_patterns()
+                tui_patterns = cli_agent.get_tui_status_patterns() if cli_agent else None
             except Exception:
                 pass  # No CLI agent configured — use no patterns (strictest check)
             if self.guardian.detect_garbled_output(

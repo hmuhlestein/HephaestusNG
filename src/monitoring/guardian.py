@@ -620,25 +620,41 @@ class Guardian:
 
         return True, "eligible"
 
-    def detect_agent_exited(self, tmux_output: str) -> bool:
+    def detect_agent_exited(self, tmux_output: str, health_check_pattern: Optional[str] = None) -> bool:
         """Detect if agent has exited to the command line.
 
         Looks for shell prompts like '$', '%', '>>>', 'bquote>' which indicate
         the agent session ended and we're at a shell.
+
+        health_check_pattern (cli_agent.get_health_check_pattern()), when
+        given, is checked first: if the CLI's own ready-for-input UI is
+        still present anywhere in tmux_output, the agent plainly has not
+        exited, no matter what any individual line looks like below. Same
+        principle as the fix to _detect_launch_failure (launch_pipeline.py)
+        -- a confirmed-alive signal must win over a generic pattern match.
+
+        The trailing "%"/"$" check below is also scoped to exclude a digit
+        right before the prompt character: a real shell prompt's "%"/"$"
+        is preceded by a path, hostname, or "~", never a bare number, so
+        this excludes a legitimate progress or cost line ("Building... 87
+        %", "Remaining: $45 $") from being misread as a shell prompt.
         """
         if not tmux_output:
             return False
+        if health_check_pattern:
+            try:
+                if re.search(health_check_pattern, tmux_output):
+                    return False
+            except re.error:
+                pass
         lines = tmux_output.strip().split("\n")[-5:]  # Check last 5 lines
         for line in lines:
             line = line.strip()
             # Shell prompts at start of line
             if line.startswith(("$ ", "% ", ">>> ", "bquote> ")):
                 return True
-            # Python REPL
-            if line.startswith(">>> "):
-                return True
             # zsh/bash prompt patterns
-            if line.endswith(" %") or line.endswith(" $"):
+            if re.search(r"(?<!\d) %$", line) or re.search(r"(?<!\d) \$$", line):
                 return True
         return False
 
