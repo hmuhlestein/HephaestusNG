@@ -5,13 +5,10 @@ substantive business logic -- stopping/resetting a design's state and
 restarting its pipeline, spinning up a recovery review agent for stuck
 tasks -- that belongs next to orchestrator.py, not in a route handler.
 
-`load_queue_order`/`save_queue_order`/`invalidate` are injected by the
-caller (queue_routes.py's own local helpers + `_shared._invalidate`)
-rather than imported here: this module lives in src/autopilot/, and
-nothing in src/autopilot/ imports from src/mcp/ anywhere else in this
-codebase -- importing them directly would be a new, backwards layering
-dependency for the sake of 3 small file-based queue-order helpers that are
-also used by 3 unrelated routes (list/reorder/requeue) in that same file.
+`invalidate` is injected by the caller (`_shared._invalidate`) rather than
+imported here: this module lives in src/autopilot/, and nothing in
+src/autopilot/ imports from src/mcp/ anywhere else in this codebase --
+importing it directly would be a new, backwards layering dependency.
 """
 
 import asyncio
@@ -42,8 +39,6 @@ class RepairService:
         self,
         project_path: str,
         design_id: str,
-        load_queue_order: Callable[[Optional[str]], List[str]],
-        save_queue_order: Callable[[List[str], Optional[str]], None],
         invalidate: Callable[..., None],
     ) -> Dict[str, Any]:
         """Rerun a design: stop everything, move to front, start pipeline."""
@@ -449,21 +444,14 @@ class RepairService:
         except Exception as e:
             logger.error(f"Error starting branch cleanup: {e}")
 
-        # Step 4: Move design to front of queue. ordinal is what
-        # pick_next_design actually orders by; the .queue_order.json mirror is
-        # keyed by filename and can only carry a design that has one.
+        # Step 4: Move design to front of queue -- ordinal is what
+        # pick_next_design orders by, and now the only place the order lives.
         with get_db() as db:
             _row = db.query(AutopilotDesign).filter_by(id=design_id).first()
             if _row:
                 _count = db.query(AutopilotDesign).filter_by(project_id=_row.project_id).count()
                 _row.ordinal = -(_count + 1)  # sorts before every existing row
                 db.commit()
-        if filename:
-            order = load_queue_order(rerun_start_project_id)
-            if filename in order:
-                order.remove(filename)
-            order.insert(0, filename)
-            save_queue_order(order, rerun_start_project_id)
         invalidate("queue", f"queue:{rerun_start_project_id}")
 
         # Step 5: Clear pipeline state so orchestrator starts fresh

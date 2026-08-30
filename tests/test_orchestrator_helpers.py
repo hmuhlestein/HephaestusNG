@@ -543,21 +543,19 @@ class TestScanDesignQueue:
         designs = scan_design_queue(tmp_path, set())
         assert len(designs) == 0
 
-    def test_queue_order(self, tmp_path):
+    def test_queue_order_is_by_name(self, tmp_path):
+        """The filesystem scan is the fallback for when the DB read fails, and
+        sorts by name. Ordering itself lives in AutopilotDesign.ordinal, which
+        pick_next_design reads -- it used to be mirrored into a
+        .hephaestus/.queue_order.json this consulted here, a second source of
+        truth for the same thing."""
         from src.autopilot.orchestrator.queue import scan_design_queue
 
-        # The function looks for order file at queue_dir.parent.parent / .hephaestus / .queue_order.json
-        # So we need to set up the directory structure accordingly
-        project_root = tmp_path.parent.parent
-        hephaestus_dir = project_root / ".hephaestus"
-        hephaestus_dir.mkdir(exist_ok=True)
-
-        (tmp_path / "a.md").write_text("a")
         (tmp_path / "b.md").write_text("b")
-        (hephaestus_dir / ".queue_order.json").write_text(json.dumps(["b.md", "a.md"]))
+        (tmp_path / "a.md").write_text("a")
+
         designs = scan_design_queue(tmp_path, set())
-        assert designs[0].path.name == "b.md"
-        assert designs[1].path.name == "a.md"
+        assert [d.path.name for d in designs] == ["a.md", "b.md"]
 
 
 class TestPickNextDesign:
@@ -9189,7 +9187,10 @@ class TestPersistDesignOutcome:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
             session.add(
                 AutopilotDesign(
-                    id="design-1", project_id="proj-1", filename=None, name="001-foo",
+                    id="design-1", project_id="proj-1",
+                    # No filename to default spec_key from -- a directory-backed
+                    # design names its own source.
+                    spec_key="_workspace:001-foo", filename=None, name="001-foo",
                     source_dir=str(tmp_path / "specs" / "001-foo"),
                     status="decomposing",
                 )

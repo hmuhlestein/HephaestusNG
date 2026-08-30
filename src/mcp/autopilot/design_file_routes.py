@@ -699,15 +699,11 @@ async def reorder_project_designs(
                 raise HTTPException(400, f"Unknown design id: {design_id}")
             by_id[design_id].ordinal = i + 1
 
-        # Also save order to file for orchestrator to read
-        project = db.query(AutopilotProject).get(project_id)
-        if project:
-            hephaestus_dir = Path(project.base_dir) / CONTEXT_DIR_NAME
-            hephaestus_dir.mkdir(parents=True, exist_ok=True)
-            order_file = hephaestus_dir / ".queue_order.json"
-            # Map design_ids back to filenames
-            ordered_filenames = [by_id[did].filename for did in req.design_ids]
-            order_file.write_text(json.dumps(ordered_filenames))
+        # No file mirror: ordinal above is what the orchestrator reads
+        # (pick_next_design orders by it). The .queue_order.json this used to
+        # write was a second source of truth for the same ordering, and being
+        # a list of filenames it recorded a literal null for every
+        # directory-backed design.
 
     _invalidate("queue", f"project_designs:{project_id}")
     return {"order": req.design_ids}

@@ -28,15 +28,12 @@ def queue_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def isolate_queue_order(monkeypatch, tmp_path):
-    """Neutralize the on-disk queue-order bookkeeping and cache invalidation.
-
-    Those are orthogonal to the scoping this file tests, and both touch
-    real state outside the test DB.
-    """
+    """Neutralize cache invalidation, which is orthogonal to the scoping this
+    file tests and touches state outside the test DB. The queue order itself
+    now lives in AutopilotDesign.ordinal, inside the test DB, so there is no
+    on-disk bookkeeping left to stub."""
     import src.mcp.autopilot.queue_routes as qr
 
-    monkeypatch.setattr(qr, "_load_queue_order", lambda pid=None: [])
-    monkeypatch.setattr(qr, "_save_queue_order", lambda order, pid=None: None)
     monkeypatch.setattr(qr, "_invalidate", lambda *a, **k: None)
 
 

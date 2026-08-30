@@ -192,8 +192,29 @@ class TestDesignQueue:
         assert resp.json()["content"] == "# Hello"
 
     def test_reorder(self, client, autopilot_dirs):
-        for name in ["a.md", "b.md", "c.md"]:
-            (autopilot_dirs["queue"] / name).write_text(name)
+        """Order is stored on the design rows (AutopilotDesign.ordinal), so a
+        queue file needs one -- there is nowhere else to record the position of
+        a file that is not a design yet, and nothing that would read it."""
+        from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager
+
+        db = DatabaseManager(None)
+        with db.session_scope() as session:
+            session.add(
+                AutopilotProject(
+                    id="proj-reorder",
+                    name="reorder",
+                    base_dir=str(autopilot_dirs["queue"].parent.parent),
+                    is_active=True,
+                )
+            )
+            for i, name in enumerate(["a.md", "b.md", "c.md"], start=1):
+                (autopilot_dirs["queue"] / name).write_text(name)
+                session.add(
+                    AutopilotDesign(
+                        id=f"des-{name}", project_id="proj-reorder", filename=name,
+                        name=name, ordinal=i, status="pending",
+                    )
+                )
 
         resp = client.post(
             "/api/autopilot/queue/reorder", json={"filenames": ["c.md", "a.md", "b.md"]}

@@ -96,8 +96,6 @@ async def test_a_directory_backed_design_can_be_rerun(speckit_project):
         result = await RepairService().rerun(
             project_path=str(speckit_project["project_dir"]),
             design_id="des-speckit",
-            load_queue_order=lambda project_id: [],
-            save_queue_order=lambda order, project_id: None,
             invalidate=lambda *a, **k: None,
         )
 
@@ -124,8 +122,6 @@ async def test_an_unknown_design_id_is_a_404(speckit_project):
         await RepairService().rerun(
             project_path=str(speckit_project["project_dir"]),
             design_id="des-nope",
-            load_queue_order=lambda project_id: [],
-            save_queue_order=lambda order, project_id: None,
             invalidate=lambda *a, **k: None,
         )
     assert exc.value.status_code == 404
