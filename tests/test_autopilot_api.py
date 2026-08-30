@@ -807,7 +807,10 @@ class TestFeatures:
                 )
                 session.add(
                     AutopilotDesign(
-                        id=f"design-{n}", project_id=f"proj-{n}", name=f"design {n}"
+                        id=f"design-{n}",
+                        project_id=f"proj-{n}",
+                        spec_key=f"design-{n}.md",
+                        name=f"design {n}",
                     )
                 )
                 session.add(
@@ -857,7 +860,9 @@ class TestFeatures:
         db = DatabaseManager(None)
         with db.session_scope() as session:
             session.add(
-                AutopilotDesign(id="des-d", project_id="proj-d", name="My Spec")
+                AutopilotDesign(
+                    id="des-d", project_id="proj-d", spec_key="my-spec", name="My Spec"
+                )
             )
             session.add(
                 Workflow(
@@ -967,6 +972,7 @@ class TestFeatures:
                 AutopilotDesign(
                     id="des-x",
                     project_id="proj-x",
+                    spec_key="my-spec",
                     name="My Spec",
                     designs_folder=str(recorded),
                 )
@@ -2046,6 +2052,7 @@ class TestProjectDesigns:
                 AutopilotDesign(
                     id="des-dir-sourced",
                     project_id=pid,
+                    spec_key="_workspace:001-conversation-history",
                     filename=None,
                     name="001-conversation-history",
                     source_dir="/tmp/specs/001-conversation-history",
@@ -3396,6 +3403,7 @@ class TestArchiveProjectDesign:
                 AutopilotDesign(
                     id="des-dir-sourced-archive",
                     project_id=pid,
+                    spec_key="_workspace:001-archive-me",
                     filename=None,
                     name="001-conversation-history",
                     source_dir="/tmp/specs/001-conversation-history",

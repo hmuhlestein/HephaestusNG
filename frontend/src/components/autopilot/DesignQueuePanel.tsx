@@ -366,10 +366,16 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     });
   };
 
-  const filteredQueue = items.filter((item: any) =>
-    !search || item.name.toLowerCase().includes(search.toLowerCase()) ||
-    item.filename.toLowerCase().includes(search.toLowerCase())
-  );
+  // A directory-backed design has no filename at all, so match its spec_key
+  // instead. The unguarded item.filename here threw on one and took the whole
+  // list down with it.
+  const filteredQueue = items.filter((item: any) => {
+    if (!search) return true;
+    const needle = search.toLowerCase();
+    return [item.name, item.filename, item.spec_key].some(
+      (field: string | null | undefined) => field?.toLowerCase().includes(needle)
+    );
+  });
 
   if (!projectId && projectsLoading) {
     return (
@@ -466,7 +472,11 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                       // terminates every active agent/workflow system-wide,
                       // not just this design's -- confirm before firing since
                       // this icon is one click away, unlike the modal's button.
-                      if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
+                      // /autopilot/queue/rerun addresses a design by
+                      // filename, which a directory-backed design has none of.
+                      if (!item.filename) {
+                        toast.error('This design has no source file to rerun');
+                      } else if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
                         rerunDesignMutation.mutate(item.filename);
                       }
                     } else {
@@ -665,8 +675,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
     if (saved) {
       try {
         const expandedSet = new Set(JSON.parse(saved));
-        const isExpanded = expandedSet.has(item.filename);
-        // console.log('[DesignQueuePanel] Restoring expanded state:', { filename: item.filename, isExpanded, savedItems: [...expandedSet] });
+        const isExpanded = expandedSet.has(item.id);
         return isExpanded;
       } catch { return false; }
     }
@@ -700,12 +709,11 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
       expandedSet = new Set();
     }
     if (newExpanded) {
-      expandedSet.add(item.filename);
+      expandedSet.add(item.id);
     } else {
-      expandedSet.delete(item.filename);
+      expandedSet.delete(item.id);
     }
     localStorage.setItem('autopilot-expanded-designs', JSON.stringify([...expandedSet]));
-    console.log('[DesignQueuePanel] Saved expanded state:', { filename: item.filename, newExpanded, items: [...expandedSet] });
   };
 
   const {
@@ -771,7 +779,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
               {item.name}
             </h4>
             <div className="flex items-center gap-3 mt-1">
-              <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">{item.filename}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">{item.filename ?? item.spec_key}</span>
               <span className="text-xs text-gray-400 dark:text-gray-500">{formatBytes(item.size_bytes)}</span>
               {item.modified_at && (
                 <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">

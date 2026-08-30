@@ -378,7 +378,7 @@ def _sync_speckit_designs(db, project) -> None:
     """
     if not getattr(project, "speckit_auto_scan_enabled", False):
         return
-    from src.core.database import AutopilotDesign, utc_now
+    from src.core.database import AutopilotDesign, directory_spec_key, utc_now
     from src.core.speckit_detection import find_speckit_features
 
     try:
@@ -404,19 +404,18 @@ def _sync_speckit_designs(db, project) -> None:
         content_hash = hashlib.sha256(spec_bytes).hexdigest()[:16]  # matches file_hash's truncation
         size_bytes = len(spec_bytes)
 
-        # repo_label is None for a feature detected at the project's
-        # workspace root rather than inside a specific registered repo
-        # (e.g. `specify init` run at the workspace root of a multi-repo
-        # project) -- "_workspace" keeps the filename deterministic and
-        # readable instead of the literal string "None".
-        filename = f"speckit/{feat.repo_label or '_workspace'}/{feat.number}-{feat.slug}.md"
+        # A Spec Kit feature is a directory, not a file: there is no filename
+        # to store, and the synthetic one this used to put in `filename`
+        # ("speckit/<repo>/<n>-<slug>.md") named nothing on disk while looking
+        # exactly like something that did.
+        spec_key = directory_spec_key(f"{feat.number}-{feat.slug}", feat.repo_label)
 
         try:
-            # REQ-08 dedup key: (project_id, filename) -- the real unique
+            # REQ-08 dedup key: (project_id, spec_key) -- the real unique
             # constraint. content_hash is compared only to decide whether an
             # existing PENDING row needs its snapshot refreshed, never used
             # as the existence check itself.
-            existing = db.query(AutopilotDesign).filter_by(project_id=project.id, filename=filename).first()
+            existing = db.query(AutopilotDesign).filter_by(project_id=project.id, spec_key=spec_key).first()
             if existing:
                 if existing.status != "pending":
                     # Already processing/active/completed/failed/skipped --
@@ -437,7 +436,8 @@ def _sync_speckit_designs(db, project) -> None:
             design = AutopilotDesign(
                 id=f"des-{_uuid.uuid4().hex[:12]}",
                 project_id=project.id,
-                filename=filename,
+                spec_key=spec_key,
+                filename=None,
                 name=f"{feat.number}-{feat.slug}",
                 ordinal=max_ordinal + 1,
                 size_bytes=size_bytes,
@@ -761,7 +761,7 @@ def pick_next_design(
     try:
         import uuid as _uuid
 
-        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.database import AutopilotDesign, AutopilotProject, ProjectRepo, directory_spec_key
         from src.core.database import get_db as _get_db
 
         with _get_db() as _db:
@@ -777,9 +777,14 @@ def pick_next_design(
                     # not a trustworthy dedup key on its own.
                     db_design = _db.query(AutopilotDesign).filter_by(project_id=project.id, source_dir=str(next_design.source_dir)).first()
                     if not db_design:
+                        _repo_label = None
+                        if next_design.repo_id:
+                            _repo = _db.query(ProjectRepo).filter_by(id=next_design.repo_id).first()
+                            _repo_label = _repo.label if _repo else None
                         db_design = AutopilotDesign(
                             id=f"des-{_uuid.uuid4().hex[:12]}",
                             project_id=project.id,
+                            spec_key=directory_spec_key(Path(next_design.source_dir).name, _repo_label),
                             filename=None,
                             file_path=None,
                             source_dir=str(next_design.source_dir),

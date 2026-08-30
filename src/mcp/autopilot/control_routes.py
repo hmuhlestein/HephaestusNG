@@ -417,7 +417,7 @@ def _resolve_and_enqueue_speckit_feature(
         discover_speckit_features,
         resolve_feature_selection,
     )
-    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, directory_spec_key, get_db
 
     with get_db() as db:
         project = db.query(AutopilotProject).filter_by(id=project_id).first()
@@ -452,6 +452,9 @@ def _resolve_and_enqueue_speckit_feature(
                 AutopilotDesign(
                     id=f"des-{_uuid.uuid4().hex[:12]}",
                     project_id=project_id,
+                    spec_key=directory_spec_key(
+                        f"{selected.number}-{selected.slug}", selected.repo_label
+                    ),
                     filename=None,
                     name=f"{selected.number}-{selected.slug}",
                     ordinal=top_ordinal,
