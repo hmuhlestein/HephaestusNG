@@ -14,9 +14,12 @@ import { useProject } from '@/context/ProjectContext';
 
 interface DesignDetailModalProps {
   projectId: string;
-  filename: string;
+  designId: string;
+  // Only for display and rerun (which posts a filename): status is fetched
+  // by id, and a directory-sourced design has no filename at all.
+  filename: string | null;
   onClose: () => void;
-  onRerun?: (filename: string) => void;
+  onRerun?: (filename: string | null) => void;
 }
 
 const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
@@ -29,14 +32,14 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; labe
 
 type DetailTab = 'overview' | 'docs';
 
-const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filename, onClose, onRerun }) => {
+const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, designId, filename, onClose, onRerun }) => {
   const queryClient = useQueryClient();
   const { projects } = useProject();
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
 
   const { data: status, isLoading } = useQuery({
-    queryKey: ['design-status', projectId, filename],
-    queryFn: () => apiService.getAutopilotProjectDesignStatus(projectId, filename),
+    queryKey: ['design-status', projectId, designId],
+    queryFn: () => apiService.getAutopilotProjectDesignStatus(projectId, designId),
     refetchInterval: 5000,
   });
 
@@ -48,6 +51,10 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
       // than one project can be active at once).
       const project = projects.find((p) => p.id === projectId);
       if (!project) throw new Error('Project not found');
+      // /autopilot/queue/rerun addresses a design by filename, which a
+      // directory-sourced design does not have -- the button below is
+      // disabled for one, so this only guards a programmatic call.
+      if (!filename) throw new Error('This design has no source file to rerun');
       return api.post('/autopilot/queue/rerun', {
         filename,
         project_path: project.base_dir,
@@ -74,7 +81,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     },
     onSuccess: () => {
       toast.success('Run paused — Resume to continue from the last committed phase');
-      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
+      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, designId] });
     },
     onError: (e: any) => toast.error(e?.response?.data?.detail || e?.message || 'Failed to pause'),
   });
@@ -89,7 +96,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     },
     onSuccess: () => {
       toast.success('Run stopped');
-      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
+      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, designId] });
     },
     onError: (e: any) => toast.error(e?.response?.data?.detail || e?.message || 'Failed to stop'),
   });
@@ -110,7 +117,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
           ? `Resumed ${data.resumed_agents} agent(s) from last checkpoint`
           : 'Run reactivated — continuing from last committed phase'
       );
-      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
+      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, designId] });
     },
     onError: (e: any) => {
       toast.error(e?.response?.data?.detail || 'Failed to resume');
@@ -145,7 +152,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                 </div>
                 <div>
                   <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">
-                    {status?.name || filename.replace(/\.md$/, '').replace(/_/g, ' ')}
+                    {status?.name || filename?.replace(/\.md$/, '').replace(/_/g, ' ')}
                   </h2>
                   <p className="text-xs text-gray-500 font-mono mt-0.5">{filename}</p>
                 </div>
@@ -354,7 +361,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                         rerunMutation.mutate();
                       }
                     }}
-                    disabled={rerunMutation.isPending}
+                    disabled={rerunMutation.isPending || !filename}
                     variant="outline"
                     className="text-violet-600 dark:text-violet-400 border-violet-200 dark:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30"
                     title="Restart this design's pipeline from scratch (deletes its worktree, discarding uncommitted work) and pause every other running pipeline"

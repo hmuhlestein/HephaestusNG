@@ -937,13 +937,13 @@ export const apiService = {
     return data;
   },
 
-  getAutopilotProjectDesignContent: async (projectId: string, filename: string): Promise<{ filename: string; content: string }> => {
-    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/content`);
+  getAutopilotProjectDesignContent: async (projectId: string, designId: string): Promise<{ filename: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(designId)}/content`);
     return data;
   },
 
-  getAutopilotProjectDesignStatus: async (projectId: string, filename: string): Promise<any> => {
-    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/status`);
+  getAutopilotProjectDesignStatus: async (projectId: string, designId: string): Promise<any> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(designId)}/status`);
     return data;
   },
 

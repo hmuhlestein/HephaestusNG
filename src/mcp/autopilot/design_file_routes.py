@@ -16,7 +16,7 @@ import json
 import logging
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -101,30 +101,27 @@ def _get_design_queue_dir(project_base: str) -> Path:
     return Path(project_base) / DESIGN_CONTEXT_SUBDIR
 
 
-def _validate_design_filename(filename: str) -> None:
-    """Reject path traversal without rejecting a legitimate relative filename.
+def _resolve_design_file(design, base_dir: str) -> Optional[Path]:
+    """The single on-disk file backing a design row, or None when it has none.
 
-    A Spec Kit design's filename IS a relative path --
-    "speckit/<repo>/<number>-<slug>.md", the (project_id, filename) dedup key
-    the autoscan writes (orchestrator/queue.py) -- so the old blanket "any /
-    is invalid" refused those designs on every endpoint that addresses one by
-    name. Traversal is what actually has to be stopped: a ".." segment, an
-    absolute path, or a ~ expansion. The resolved path is still confined to
-    the queue directory by the caller's own containment check below.
+    A directory-sourced design (source_dir set, filename NULL per NFR-02)
+    spreads its content across a specs/<NNN-name>/ directory: there is no one
+    file to read, and callers have to say so rather than 404 as though the
+    design did not exist. file_path wins when set -- a destination="docs"
+    design (add_project_design, LoadDesignModal's default) lives under docs/,
+    not the queue dir, and resolving it there 404'd content/status/delete for
+    every locally-uploaded design even though the file existed.
+
+    Takes the row rather than a filename because the filename is no longer an
+    address: it is nullable, and the Spec Kit autoscan stores a synthetic
+    relative path in it ("speckit/<repo>/<n>-<slug>.md" -- the
+    (project_id, filename) dedup key, not a locator).
     """
-    pure = PurePosixPath(filename)
-    if not filename or pure.is_absolute() or ".." in pure.parts or filename.startswith("~"):
-        raise HTTPException(400, "Invalid filename")
-
-
-def _resolve_design_filepath(file_path: Optional[str], fallback: Path) -> Path:
-    """Prefer AutopilotDesign.file_path when set over a queue-dir-relative
-    fallback. destination="docs" designs (add_project_design) live under
-    docs/, not .hephaestus/specs/ -- without this, content/status/delete
-    404 against the wrong directory for every locally-uploaded design
-    (LoadDesignModal's default destination), even though the file exists.
-    """
-    return Path(file_path) if file_path else fallback
+    if design.file_path:
+        return Path(design.file_path)
+    if design.filename:
+        return _safe_path(str(_get_design_queue_dir(base_dir)), design.filename)
+    return None
 
 
 @router.post("/projects/{project_id}/sync", response_model=List[DesignItem])
@@ -969,15 +966,10 @@ async def remove_project_design(
     # here -- their content lives across multiple files under source_dir,
     # which this delete cascade doesn't touch. `found` is already True from
     # the DB row delete above in that case.
-    filepath = None
-    if filename:
-        design_dir = _get_design_queue_dir(base_dir)
-        filepath = _resolve_design_filepath(
-            d.file_path if d else None, _safe_path(str(design_dir), filename)
-        )
-        if filepath.exists():
-            filepath.unlink()
-            found = True
+    filepath = _resolve_design_file(d, base_dir) if d else None
+    if filepath and filepath.exists():
+        filepath.unlink()
+        found = True
 
     if not found:
         raise HTTPException(404, f"Design '{design_id}' not found")
@@ -1008,28 +1000,36 @@ async def remove_project_design(
     return {"removed": design_id}
 
 
-@router.get("/projects/{project_id}/designs/{filename:path}/content")
-async def get_project_design_content(project_id: str, filename: str):
+@router.get("/projects/{project_id}/designs/{design_id}/content")
+async def get_project_design_content(project_id: str, design_id: str):
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        base_dir = proj.base_dir
-        design = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
-        file_path_col = design.file_path if design else None
+        design = db.query(AutopilotDesign).filter_by(project_id=project_id, id=design_id).first()
+        # A row that does not exist is a 404 here rather than further down:
+        # keyed by filename, this fell through a missing row and read
+        # queue_dir/<filename> anyway, serving a file with nothing behind it.
+        if not design:
+            raise HTTPException(404, f"Design '{design_id}' not found")
+        filename = design.filename
+        filepath = _resolve_design_file(design, proj.base_dir)
 
-    design_dir = _get_design_queue_dir(base_dir)
-    _validate_design_filename(filename)
-    filepath = _resolve_design_filepath(file_path_col, _safe_path(str(design_dir), filename))
+    if filepath is None:
+        raise HTTPException(
+            409,
+            "Design is directory-sourced -- its content spans a specs/<name>/ "
+            "directory, so there is no single file to return",
+        )
     if not filepath.exists():
-        raise HTTPException(404, f"Design '{filename}' not found")
+        raise HTTPException(404, f"Design file is missing: {filepath}")
     return {"filename": filename, "content": filepath.read_text(errors="replace")}
 
 
-@router.get("/projects/{project_id}/designs/{filename:path}/status")
-async def get_project_design_status(project_id: str, filename: str):
+@router.get("/projects/{project_id}/designs/{design_id}/status")
+async def get_project_design_status(project_id: str, design_id: str):
     """Get full status for a design: workflow, tasks, branch, feature folder."""
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
@@ -1038,17 +1038,24 @@ async def get_project_design_status(project_id: str, filename: str):
         if not proj:
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
-        design = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
-        file_path_col = design.file_path if design else None
+        design = db.query(AutopilotDesign).filter_by(project_id=project_id, id=design_id).first()
+        if not design:
+            raise HTTPException(404, f"Design '{design_id}' not found")
+        filename = design.filename
+        row_name = design.name
+        filepath = _resolve_design_file(design, base_dir)
 
-    design_dir = _get_design_queue_dir(base_dir)
-    _validate_design_filename(filename)
-    filepath = _resolve_design_filepath(file_path_col, _safe_path(str(design_dir), filename))
-    if not filepath.exists():
-        raise HTTPException(404, f"Design '{filename}' not found")
+    # A missing (or absent) file is no longer fatal: this endpoint reports
+    # workflow and task progress, which exists whether or not the design's
+    # source document is still on disk -- and a directory-sourced design has
+    # no single file by definition. Only the echoed content goes empty.
+    design_content = ""
+    design_name = row_name
+    if filepath and filepath.exists():
+        design_content = filepath.read_text(errors="replace")
+        design_name = filepath.stem.replace("_", " ").replace("-", " ")
 
-    design_content = filepath.read_text(errors="replace")
-    design_name = filepath.stem.replace("_", " ").replace("-", " ")
-
-    return await get_design_status(project_id, filename, base_dir, design_content, design_name)
+    return await get_design_status(
+        project_id, filename, base_dir, design_content, design_name, design_id=design_id
+    )
 

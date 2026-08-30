@@ -8,7 +8,9 @@ the HTTP layer.
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+from sqlalchemy import or_
 
 from src.core.constants import (
     CONTEXT_DIR_NAME,
@@ -89,30 +91,58 @@ def _resolve_latest_agent_per_task(db, task_ids) -> Dict[str, Agent]:
     }
 
 
+def _design_row(db, project_id: str, design_id: Optional[str], filename: Optional[str]):
+    """The design row, by id when the caller has one. filename is only a
+    fallback for callers that predate id addressing -- it is NULL for a
+    directory-sourced design and non-unique as an address in general."""
+    if design_id:
+        return db.query(AutopilotDesign).filter_by(project_id=project_id, id=design_id).first()
+    if filename:
+        return db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+    return None
+
+
 async def get_design_status(
     project_id: str,
-    filename: str,
+    filename: Optional[str],
     base_dir: str,
     design_content: str,
     design_name: str,
+    design_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Aggregate workflow/task/feature status for one design document.
 
-    Caller (the route handler) has already resolved and validated
-    project_id/filename into base_dir/design_content/design_name.
+    Caller (the route handler) has already resolved project_id/design_id into
+    base_dir/design_content/design_name. filename is whatever the row carries
+    -- None for a directory-sourced design -- and is used only for the legacy
+    workflow match below and for echoing back.
     """
-    # Find all workflows that processed this design
+    # Find all workflows that processed this design. Workflow.design_id is the
+    # real link and is what a Spec Kit design matches on: its filename is a
+    # synthetic key ("speckit/<repo>/<n>-<slug>.md") that appears nowhere in
+    # launch_params, which records the actual spec.md path -- so the LIKE
+    # alone found nothing for one, and its status read as "never ran". The
+    # LIKE stays as a fallback because design_id was added later and is still
+    # NULL on older rows (19 of 53 autopilot workflows here), whose history
+    # would otherwise disappear from this view.
     with get_db() as db:
-        # Use LIKE query for efficiency instead of loading all workflows
-        matching_workflows = (
-            db.query(Workflow)
-            .filter(
-                Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
-                Workflow.launch_params.like(f"%{filename}%"),
+        match_clauses = []
+        if design_id:
+            match_clauses.append(Workflow.design_id == design_id)
+        if filename:
+            match_clauses.append(Workflow.launch_params.like(f"%{filename}%"))
+        if not match_clauses:
+            matching_workflows = []
+        else:
+            matching_workflows = (
+                db.query(Workflow)
+                .filter(
+                    Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
+                    or_(*match_clauses),
+                )
+                .order_by(Workflow.created_at.desc())
+                .all()
             )
-            .order_by(Workflow.created_at.desc())
-            .all()
-        )
 
         # Self-heal each matched workflow's own status before using it below --
         # derive_workflow_status is the centralized "did every phase actually
@@ -222,7 +252,7 @@ async def get_design_status(
         _design_raw_error = None
         _design_workflow_type = "feature"
         with get_db() as _db:
-            _design = _db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+            _design = _design_row(_db, project_id, design_id, filename)
             if _design:
                 from src.core.status_derivation import derive_design_status
 
@@ -562,7 +592,7 @@ async def get_design_status(
                     phase0_has_report = (Path(phase0_wf.working_directory) / CONTEXT_DIR_NAME / "doc_review" / "feature_report.html").is_file() or \
                                         (Path(phase0_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file()
                 if not phase0_has_report:
-                    phase0_design = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+                    phase0_design = _design_row(db, project_id, design_id, filename)
                     if phase0_design and phase0_design.designs_folder:
                         phase0_has_report = (Path(phase0_design.designs_folder) / "feature_report.html").is_file()
 
@@ -592,8 +622,8 @@ async def get_design_status(
         if not features:
             features.append(
                 {
-                    "id": f"placeholder-{filename}",
-                    "name": design_name or filename.replace(".md", ""),
+                    "id": f"placeholder-{design_id or filename}",
+                    "name": design_name or (filename or "").replace(".md", ""),
                     "feature_key": "pending-decomposition",
                     "status": "pending",
                     "scope": "Awaiting Phase 0 decomposition",

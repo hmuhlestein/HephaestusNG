@@ -1691,6 +1691,13 @@ def project_client(tmp_path, project_dirs, monkeypatch):
     api_mod._cache.clear()
 
 
+def _design_id_for(client, pid, filename):
+    """Designs are addressed by id. A test that knows only the filename looks
+    the id up the same way the UI does -- from the project's design list."""
+    designs = client.get(f"/api/autopilot/projects/{pid}/designs").json()
+    return next(d["id"] for d in designs if d["filename"] == filename)
+
+
 class TestProjects:
     def test_create_project(self, project_client):
         client, dirs = project_client
@@ -2352,7 +2359,8 @@ class TestProjectDesigns:
             json={"name": "Docs Test", "content": "hello from docs", "destination": "docs"},
         )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/Docs_Test.md/content")
+        did = _design_id_for(client, pid, "Docs_Test.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/content")
         assert resp.status_code == 200
         assert resp.json()["content"] == "hello from docs"
 
@@ -2364,7 +2372,8 @@ class TestProjectDesigns:
             json={"name": "Docs Status", "content": "status body", "destination": "docs"},
         )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/Docs_Status.md/status")
+        did = _design_id_for(client, pid, "Docs_Status.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200
 
     def test_remove_design_resolves_docs_destination(self, project_client):
@@ -2401,11 +2410,13 @@ class TestProjectDesigns:
         nested_file = dirs["project_dir"] / "docs" / "bugfix" / "Nested_Bug.md"
         assert nested_file.exists()
 
-        content_resp = client.get(f"/api/autopilot/projects/{pid}/designs/Nested_Bug.md/content")
+        did = _design_id_for(client, pid, "Nested_Bug.md")
+        content_resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/content")
         assert content_resp.status_code == 200
         assert content_resp.json()["content"] == "repro steps"
 
-        status_resp = client.get(f"/api/autopilot/projects/{pid}/designs/Nested_Bug.md/status")
+        did = _design_id_for(client, pid, "Nested_Bug.md")
+        status_resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert status_resp.status_code == 200
 
         delete_resp = client.delete(f"/api/autopilot/projects/{pid}/designs/{design_id}")
@@ -2440,7 +2451,8 @@ class TestProjectDesigns:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/01-auth.md/content")
+        did = _design_id_for(client, pid, "01-auth.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/content")
         assert resp.status_code == 200
         assert "OAuth2" in resp.json()["content"]
 
@@ -2714,7 +2726,8 @@ class TestProjectDesigns:
             )
             db.commit()
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/failed-design.md/status")
+        did = _design_id_for(client, pid, "failed-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == "failed"
@@ -2771,7 +2784,8 @@ class TestProjectDesigns:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/cost-design.md/status")
+        did = _design_id_for(client, pid, "cost-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["features"][0]["cost_total_usd"] == 1.5
@@ -2827,7 +2841,8 @@ class TestProjectDesigns:
                 details={"cli_type": "pi", "task_id": "task-cli-1"},
             ))
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/cli-design.md/status")
+        did = _design_id_for(client, pid, "cli-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         task = resp.json()["features"][0]["tasks"][0]
         assert task["created_at"].endswith("Z"), "must carry an explicit UTC marker"
@@ -2897,7 +2912,8 @@ class TestProjectDesigns:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/stale-design.md/status")
+        did = _design_id_for(client, pid, "stale-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] != "active"
@@ -2981,7 +2997,8 @@ class TestProjectDesigns:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/orphan-design.md/status")
+        did = _design_id_for(client, pid, "orphan-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] != "paused"
@@ -3078,7 +3095,8 @@ class TestProjectDesigns:
         )
         (gallery_dir / "docs" / "feature_report.html").write_text("<html>report</html>")
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/report-design.md/status")
+        did = _design_id_for(client, pid, "report-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         features = resp.json()["features"]
         feat = next(f for f in features if f["id"] == "feat-report-1")
@@ -3128,9 +3146,8 @@ class TestProjectDesigns:
                 )
             )
 
-        resp = client.get(
-            f"/api/autopilot/projects/{pid}/designs/budget-paused-design.md/status"
-        )
+        did = _design_id_for(client, pid, "budget-paused-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == "paused"
@@ -3167,7 +3184,8 @@ class TestProjectDesigns:
             )
             db.commit()
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/ok-design.md/status")
+        did = _design_id_for(client, pid, "ok-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         assert resp.json()["error"] is None
 
@@ -3273,7 +3291,8 @@ class TestProjectDesigns:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/goto-design.md/status")
+        did = _design_id_for(client, pid, "goto-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         tasks = resp.json()["features"][0]["tasks"]
         assert len(tasks) == 1
@@ -3712,7 +3731,8 @@ class TestPhase0PseudoFeatureReviewFields:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/phase0-design.md/status")
+        did = _design_id_for(client, pid, "phase0-design.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         features = resp.json()["features"]
         phase0 = next(f for f in features if f["id"] == "phase0-wf-phase0-paused")
@@ -3770,7 +3790,8 @@ class TestPhase0PseudoFeatureReviewFields:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/phase0-active.md/status")
+        did = _design_id_for(client, pid, "phase0-active.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         features = resp.json()["features"]
         phase0 = next(f for f in features if f["id"] == "phase0-wf-phase0-active")
@@ -3837,7 +3858,8 @@ class TestPhase0PseudoFeatureReviewFields:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/phase0-orphaned.md/status")
+        did = _design_id_for(client, pid, "phase0-orphaned.md")
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/{did}/status")
         assert resp.status_code == 200, resp.text
         features = resp.json()["features"]
         phase0 = next(f for f in features if f["id"] == "phase0-wf-phase0-orphaned")
@@ -4631,8 +4653,8 @@ class TestRouterAggregation:
         # {filename:path}: a Spec Kit autoscan design's filename is a
         # relative path ("speckit/<repo>/<n>-<slug>.md"), so a single-
         # segment param never matched one -- same route, wider converter.
-        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename:path}/content"),
-        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename:path}/status"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{design_id}/content"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{design_id}/status"),
         ("PATCH", "/api/autopilot/projects/{project_id}/review-mode"),
         ("POST", "/api/autopilot/projects/{project_id}/sync"),
         ("GET", "/api/autopilot/queue"),
