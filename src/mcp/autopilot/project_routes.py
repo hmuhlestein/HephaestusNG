@@ -241,6 +241,7 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
         {
             "id": d.id,
             "filename": d.filename,
+            "spec_key": d.spec_key,
             "name": d.name,
             "ordinal": d.ordinal,
             "size_bytes": d.size_bytes,

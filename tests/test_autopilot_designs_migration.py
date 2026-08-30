@@ -202,6 +202,7 @@ def test_autopilot_designs_source_dir_unique_constraint_enforced():
                 AutopilotDesign(
                     id="des-race-1",
                     project_id="proj-race",
+                    spec_key="_workspace:007-foo",
                     filename=None,
                     name="007-foo",
                     source_dir="/tmp/race/specs/007-foo",
@@ -214,6 +215,8 @@ def test_autopilot_designs_source_dir_unique_constraint_enforced():
                 AutopilotDesign(
                     id="des-race-2",
                     project_id="proj-race",
+                    # Same source, same key -- that is the duplicate under test.
+                    spec_key="_workspace:007-foo",
                     filename=None,
                     name="007-foo-dup",
                     source_dir="/tmp/race/specs/007-foo",
@@ -269,6 +272,7 @@ def test_migrate_speckit_design_source_dir_unique_resolves_pre_existing_duplicat
         session.execute(
             old_table.insert().values(
                 id="des-old-1",
+                spec_key="_workspace:007-foo",
                 project_id="proj-old",
                 filename=None,
                 name="007-foo",
@@ -284,6 +288,7 @@ def test_migrate_speckit_design_source_dir_unique_resolves_pre_existing_duplicat
         session.execute(
             old_table.insert().values(
                 id="des-old-2",
+                spec_key="_workspace:007-foo-dup",
                 project_id="proj-old",
                 filename=None,
                 name="007-foo-dup",
@@ -358,6 +363,7 @@ def test_migrate_speckit_design_source_dir_unique_resumes_after_interrupted_rebu
         session.execute(
             old_table.insert().values(
                 id="des-crash-1",
+                spec_key="_workspace:009-bar",
                 project_id="proj-crash",
                 filename=None,
                 name="009-bar",
@@ -449,6 +455,7 @@ def test_migrate_speckit_design_columns_resumes_after_interrupted_rebuild():
         session.execute(
             old_table.insert().values(
                 id="des-cols-crash-1",
+                spec_key="_workspace:009-bar-cols",
                 project_id="proj-cols-crash",
                 filename="design.md",
                 name="Design",
@@ -523,6 +530,7 @@ def test_resume_helper_shared_across_both_design_migrations():
         session.execute(
             old_table.insert().values(
                 id="des-shared-1",
+                spec_key="_workspace:shared",
                 project_id="proj-shared",
                 filename="design.md",
                 name="Design",
@@ -593,6 +601,7 @@ def test_migrate_speckit_design_source_dir_unique_resumes_when_new_table_already
         session.execute(
             old_table.insert().values(
                 id="des-crash2-1",
+                spec_key="_workspace:010-baz",
                 project_id="proj-crash2",
                 filename=None,
                 name="010-baz",

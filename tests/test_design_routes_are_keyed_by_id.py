@@ -18,7 +18,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager
+from src.core.database import (
+    AutopilotDesign,
+    AutopilotProject,
+    DatabaseManager,
+    directory_spec_key,
+)
 
 SPECKIT_FILENAME = "speckit/_workspace/001-conversation-history.md"
 
@@ -70,6 +75,9 @@ def client(tmp_path, monkeypatch):
             AutopilotDesign(
                 id="des-dir",
                 project_id="proj-1",
+                # No filename to default spec_key from -- a directory-backed
+                # design has to name its own source.
+                spec_key=directory_spec_key("001-conversation-history"),
                 filename=None,
                 source_dir=str(spec.parent),
                 name="001-conversation-history",

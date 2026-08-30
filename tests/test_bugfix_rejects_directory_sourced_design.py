@@ -75,6 +75,7 @@ def test_pick_next_design_returns_pinned_directory_sourced_row(bugfix_db, tmp_pa
             AutopilotDesign(
                 id="des-pin1",
                 project_id="proj-pin",
+                spec_key="_workspace:des-pin1",
                 filename=None,
                 name="001-x",
                 ordinal=-1,

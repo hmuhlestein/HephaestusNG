@@ -1332,6 +1332,18 @@ class Feature(Base):
     workflow = relationship("Workflow", foreign_keys=[workflow_id])
 
 
+def _default_spec_key(context):
+    """A file-backed design's spec_key IS its filename, so fill it in rather
+    than making every writer repeat it.
+
+    A directory-backed design has no filename and must pass spec_key itself
+    (directory_spec_key below). If it forgets, this returns None and NOT NULL
+    fires -- a loud IntegrityError at the write, rather than a plausible-
+    looking key invented from whatever happened to be at hand.
+    """
+    return context.get_current_parameters().get("filename")
+
+
 class AutopilotDesign(Base):
     """A design document within a project's design queue."""
 
@@ -1339,6 +1351,15 @@ class AutopilotDesign(Base):
 
     id = Column(String, primary_key=True)  # Format: des-{uuid}
     project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
+    # Per-project unique identity of the source this design came from -- the
+    # thing that answers "have I queued this already", for every kind of
+    # design. A file-backed design uses its filename; a directory-backed one
+    # uses directory_spec_key() below. Distinct from `filename` because those
+    # answers are not always a file: a Spec Kit feature is a directory, and
+    # overloading `filename` with a synthesized stand-in is what made three
+    # separate consumers treat it as a path (URL segments, a launch_params
+    # substring match, and a queue_dir join).
+    spec_key = Column(String(500), nullable=False, default=_default_spec_key)
     # Nullable: a Spec-Kit directory-sourced design (source_dir set below) has
     # no single filename. filename/file_path and source_dir are mutually
     # exclusive per row (NFR-02).
@@ -1396,9 +1417,26 @@ class AutopilotDesign(Base):
     features = relationship("Feature", back_populates="design", cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+        # On spec_key, not filename: SQLite treats NULLs as distinct, so a
+        # constraint over a nullable filename never protected the
+        # directory-sourced designs that have none -- the same design could
+        # be queued twice. spec_key is NOT NULL, so this covers every kind.
+        UniqueConstraint("project_id", "spec_key", name="uq_design_project_spec_key"),
         UniqueConstraint("project_id", "source_dir", name="uq_design_project_source_dir"),
     )
+
+
+def directory_spec_key(dir_name: str, repo_label: Optional[str] = None) -> str:
+    """spec_key for a design backed by a directory rather than a file.
+
+    "<repo-label>:<dir-name>" -- e.g. "front-end:001-payments", or
+    "_workspace:001-conversation-history" for a feature at a multi-repo
+    project's workspace root, where there is no owning repo. The repo label is
+    part of it because the same feature number can legitimately exist in more
+    than one repo of a project; the colon is deliberate, so that nothing --
+    a router, a Path() join, or a reader -- can mistake the value for a path.
+    """
+    return f"{repo_label or '_workspace'}:{dir_name}"
 
 
 class PhasePromptVersion(Base):

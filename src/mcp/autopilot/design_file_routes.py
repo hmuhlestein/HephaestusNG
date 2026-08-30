@@ -51,6 +51,11 @@ class DesignItem(BaseModel):
     # one directory-sourced design, hiding every design (file- and
     # directory-sourced alike) for that project.
     filename: Optional[str] = None
+    # The per-project identity of the design's source (AutopilotDesign.
+    # spec_key): its filename when it has one, "<repo-label>:<dir-name>" when
+    # it is directory-backed. The UI shows and searches this for a design that
+    # has no filename to show.
+    spec_key: str = ""
     name: str
     ordinal: int
     size_bytes: int
@@ -208,6 +213,7 @@ async def list_project_designs(project_id: str, archived: bool = Query(False)):
             DesignItem(
                 id=d.id,
                 filename=d.filename,
+                spec_key=d.spec_key,
                 name=d.name,
                 ordinal=d.ordinal,
                 size_bytes=d.size_bytes,
@@ -238,6 +244,7 @@ def _set_design_archived(project_id: str, design_id: str, archived: bool) -> Des
         item = DesignItem(
             id=d.id,
             filename=d.filename,
+            spec_key=d.spec_key,
             name=d.name,
             ordinal=d.ordinal,
             size_bytes=d.size_bytes,
@@ -376,6 +383,7 @@ async def add_project_design(
                 return DesignItem(
                     id=existing.id,
                     filename=existing.filename,
+                    spec_key=existing.spec_key,
                     name=existing.name,
                     ordinal=existing.ordinal,
                     size_bytes=existing.size_bytes,
@@ -425,6 +433,7 @@ async def add_project_design(
     return DesignItem(
         id=design_id,
         filename=filename,
+        spec_key=filename,
         name=req.name,
         ordinal=max_ord + 1,
         size_bytes=stat.st_size,

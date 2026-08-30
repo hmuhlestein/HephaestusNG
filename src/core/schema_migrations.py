@@ -21,6 +21,7 @@ on the next startup of every deployed instance.
 """
 
 import logging
+from pathlib import Path
 
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlalchemy import text
@@ -1168,6 +1169,103 @@ def drop_speckit_autoscan_enabled_column(engine):
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
+def migrate_design_spec_key(engine):
+    """Give every design a spec_key and move uniqueness onto it.
+
+    filename was doing two jobs: naming a file in the queue directory, and
+    answering "have I queued this source already". Those coincide for a
+    file-backed design and not at all for a directory-backed one, so the Spec
+    Kit autoscan synthesized a path-shaped stand-in
+    ("speckit/<repo>/<n>-<slug>.md") and stored it there. Nothing existed at
+    that path; three consumers nonetheless treated it as one.
+
+    spec_key holds the identity: the filename for a file-backed design,
+    directory_spec_key() for a directory-backed one. filename goes back to
+    meaning a real file, NULL when there isn't one. Uniqueness moves with the
+    job -- and gains coverage, since SQLite treats NULLs as distinct and the
+    old constraint therefore never protected directory-sourced rows.
+    """
+    try:
+        if _resume_interrupted_autopilot_designs_rebuild(engine):
+            return
+
+        with engine.connect() as conn:
+            info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+            if not info:
+                return  # fresh DB -- create_all builds it with the column
+            if any(row[1] == "spec_key" for row in info):
+                return  # already applied
+
+            old_cols = [row[1] for row in info]
+            # Backfill before the swap so the NOT NULL column is never empty:
+            # the filename for a file-backed row, and the colon form derived
+            # from source_dir (plus its repo label, when it has one) for a
+            # directory-backed row. A row with neither -- there should be none
+            # -- falls back to its id, which is unique by construction.
+            rows = conn.execute(
+                text(
+                    "SELECT d.id, d.filename, d.source_dir, r.label "
+                    "FROM autopilot_designs d "
+                    "LEFT JOIN project_repos r ON r.id = d.repo_id"
+                )
+            ).fetchall()
+            conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN spec_key VARCHAR(500)"))
+            from src.core.database import directory_spec_key
+
+            for design_id, filename, source_dir, repo_label in rows:
+                if source_dir:
+                    key = directory_spec_key(Path(source_dir).name, repo_label)
+                elif filename:
+                    # Pre-existing autoscan rows carry the synthetic
+                    # "speckit/<repo>/<n>-<slug>.md" in filename. Convert them
+                    # to the colon form and clear the filename, which never
+                    # named a file that existed.
+                    if filename.startswith("speckit/"):
+                        parts = filename[len("speckit/"):].rsplit("/", 1)
+                        label = parts[0] if len(parts) == 2 else None
+                        stem = parts[-1]
+                        if stem.endswith(".md"):
+                            stem = stem[: -len(".md")]
+                        key = directory_spec_key(stem, label if label != "_workspace" else None)
+                    else:
+                        key = filename
+                else:
+                    key = design_id
+                conn.execute(
+                    text("UPDATE autopilot_designs SET spec_key = :k WHERE id = :i"),
+                    {"k": key, "i": design_id},
+                )
+            conn.execute(
+                text(
+                    "UPDATE autopilot_designs SET filename = NULL "
+                    "WHERE filename LIKE 'speckit/%'"
+                )
+            )
+            conn.commit()
+
+            col_list = ", ".join(old_cols + ["spec_key"])
+            # legacy_alter_table: see repair_dangling_autopilot_designs_fk --
+            # without it this rename repoints workflows/features at a table
+            # the DROP below deletes.
+            conn.execute(text("PRAGMA legacy_alter_table=ON"))
+            conn.execute(text("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old"))
+            conn.execute(text("PRAGMA legacy_alter_table=OFF"))
+            conn.commit()
+
+        from src.core.database import AutopilotDesign
+
+        AutopilotDesign.__table__.create(engine)
+        with engine.connect() as conn:
+            conn.execute(
+                text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
+            )
+            conn.execute(text("DROP TABLE autopilot_designs_old"))
+            conn.commit()
+            logger.info("Rebuilt autopilot_designs with spec_key and uq_design_project_spec_key")
+    except Exception as e:
+        logger.warning(f"design spec_key migration failed: {e}")
+
+
 def repair_dangling_autopilot_designs_fk(engine):
     """Point workflows/features' design_id back at autopilot_designs.
 
@@ -1277,6 +1375,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_speckit_auto_scan_enabled_column", migrate_speckit_auto_scan_column),
     ("_drop_speckit_auto_scan_column", drop_speckit_auto_scan_column),
     ("_drop_speckit_autoscan_enabled_column", drop_speckit_autoscan_enabled_column),
+    ("_migrate_design_spec_key", migrate_design_spec_key),
     # Last: repairs damage the rebuild-and-swap migrations above can do, so it
     # always sees their final state within the same startup pass.
     ("_repair_dangling_autopilot_designs_fk", repair_dangling_autopilot_designs_fk),
