@@ -125,15 +125,11 @@ class AutopilotService:
         # repo_resolution.py's resolve_repo_path/get_project_repos, and
         # design_file_routes.py's own "base_dir need not itself be a git
         # repo" note.
-        has_registered_repo = False
-        if self.project_id:
-            from src.core.database import get_db
-            from src.core.repo_resolution import get_project_repos
+        from src.core.repo_resolution import git_repo_error
 
-            with get_db() as db:
-                has_registered_repo = bool(get_project_repos(db, self.project_id))
-        if not has_registered_repo and not (project / ".git").exists():
-            raise ValueError(f"Project path is not a git repository: {project_path}")
+        repo_problem = git_repo_error(project, project_id=self.project_id)
+        if repo_problem:
+            raise ValueError(repo_problem)
 
         dq = design_queue or str(project / DESIGN_CONTEXT_SUBDIR)
         Path(dq).mkdir(parents=True, exist_ok=True)

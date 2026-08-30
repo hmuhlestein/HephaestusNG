@@ -199,6 +199,15 @@ class TestStartPipelineConcurrencyCap:
     real git-repo project directory and worktree machinery unrelated to
     what this is regression-testing."""
 
+    @pytest.fixture(autouse=True)
+    def _stub_the_git_repo_check(self):
+        """/start now refuses a directory that is not a git repository before
+        it reserves a slot (git_repo_error). These tests deliberately pass a
+        path that does not exist -- see the class docstring -- so the rule is
+        stubbed out rather than given a real repo it is not testing."""
+        with patch("src.core.repo_resolution.git_repo_error", return_value=None):
+            yield
+
     @pytest.mark.asyncio
     async def test_rejects_when_over_concurrency_cap(self):
         from fastapi import HTTPException

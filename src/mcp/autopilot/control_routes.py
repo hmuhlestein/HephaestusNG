@@ -501,15 +501,19 @@ async def start_pipeline(
     from src.autopilot.service import get_registry
     from src.core.repo_resolution import git_repo_error
 
-    # Before anything is created or reserved: a project directory that is not
-    # a git repository cannot get past the worktree every phase needs, and
-    # that failure surfaces deep inside Phase 0 where it reads as an
-    # unrelated error. Refusing here says what is actually wrong.
-    repo_problem = git_repo_error(project_path)
+    project_id = _get_or_create_project_id(project_path)
+
+    # Before a slot is reserved or a pipeline launched: a project directory
+    # that is not a git repository cannot get past the worktree every phase
+    # needs, and that failure surfaces deep inside Phase 0 where it reads as
+    # an unrelated error. AutopilotService.start() enforces the same rule and
+    # raises, but only once the pipeline is already being brought up.
+    # Deliberately after _get_or_create_project_id, matching that check's own
+    # ordering: without a project_id a multi-repo workspace's registered
+    # ProjectRepo rows are invisible here and it would be refused outright.
+    repo_problem = git_repo_error(project_path, project_id=project_id)
     if repo_problem:
         raise HTTPException(400, repo_problem)
-
-    project_id = _get_or_create_project_id(project_path)
 
     if feature is not None:
         _resolve_and_enqueue_speckit_feature(project_id, project_path, feature, repo)
