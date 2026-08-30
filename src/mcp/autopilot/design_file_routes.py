@@ -16,7 +16,7 @@ import json
 import logging
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -99,6 +99,22 @@ def _get_design_queue_dir(project_base: str) -> Path:
     Designs are stored outside the git repo so commits don't delete them.
     """
     return Path(project_base) / DESIGN_CONTEXT_SUBDIR
+
+
+def _validate_design_filename(filename: str) -> None:
+    """Reject path traversal without rejecting a legitimate relative filename.
+
+    A Spec Kit design's filename IS a relative path --
+    "speckit/<repo>/<number>-<slug>.md", the (project_id, filename) dedup key
+    the autoscan writes (orchestrator/queue.py) -- so the old blanket "any /
+    is invalid" refused those designs on every endpoint that addresses one by
+    name. Traversal is what actually has to be stopped: a ".." segment, an
+    absolute path, or a ~ expansion. The resolved path is still confined to
+    the queue directory by the caller's own containment check below.
+    """
+    pure = PurePosixPath(filename)
+    if not filename or pure.is_absolute() or ".." in pure.parts or filename.startswith("~"):
+        raise HTTPException(400, "Invalid filename")
 
 
 def _resolve_design_filepath(file_path: Optional[str], fallback: Path) -> Path:
@@ -992,7 +1008,7 @@ async def remove_project_design(
     return {"removed": design_id}
 
 
-@router.get("/projects/{project_id}/designs/{filename}/content")
+@router.get("/projects/{project_id}/designs/{filename:path}/content")
 async def get_project_design_content(project_id: str, filename: str):
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
@@ -1005,16 +1021,14 @@ async def get_project_design_content(project_id: str, filename: str):
         file_path_col = design.file_path if design else None
 
     design_dir = _get_design_queue_dir(base_dir)
-    # Validate filename doesn't contain path traversal
-    if ".." in filename or "/" in filename:
-        raise HTTPException(400, "Invalid filename")
-    filepath = _resolve_design_filepath(file_path_col, design_dir / filename)
+    _validate_design_filename(filename)
+    filepath = _resolve_design_filepath(file_path_col, _safe_path(str(design_dir), filename))
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
     return {"filename": filename, "content": filepath.read_text(errors="replace")}
 
 
-@router.get("/projects/{project_id}/designs/{filename}/status")
+@router.get("/projects/{project_id}/designs/{filename:path}/status")
 async def get_project_design_status(project_id: str, filename: str):
     """Get full status for a design: workflow, tasks, branch, feature folder."""
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
@@ -1028,9 +1042,8 @@ async def get_project_design_status(project_id: str, filename: str):
         file_path_col = design.file_path if design else None
 
     design_dir = _get_design_queue_dir(base_dir)
-    if ".." in filename or "/" in filename:
-        raise HTTPException(400, "Invalid filename")
-    filepath = _resolve_design_filepath(file_path_col, design_dir / filename)
+    _validate_design_filename(filename)
+    filepath = _resolve_design_filepath(file_path_col, _safe_path(str(design_dir), filename))
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
 

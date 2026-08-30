@@ -124,14 +124,12 @@ def _create_offline(name: str, path: str, is_default: bool):
         print(f"Error: Database not found at {db_path}. Run 'heph init' first.")
         return 1
 
-    # Verify path exists and is a git repo
-    p = Path(path)
-    if not p.exists():
-        print(f"Error: Path does not exist: {path}")
-        return 1
-    if not (p / ".git").exists():
-        print(f"Error: Not a git repository: {path}")
-        print(f"Run 'git init' in {path} first.")
+    # Same rule (and wording) as POST /projects -- see git_repo_error.
+    from src.core.repo_resolution import git_repo_error
+
+    repo_problem = git_repo_error(path, allow_workspace_root=True)
+    if repo_problem:
+        print(f"Error: {repo_problem}")
         return 1
 
     from src.core.database import AutopilotProject, DatabaseManager

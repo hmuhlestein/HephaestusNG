@@ -39,10 +39,14 @@ def _validate_repo_path(path: str) -> str:
     typo'd/nonexistent path is caught immediately rather than surfacing
     opaquely at first WorktreeManager.reload()."""
     resolved = Path(path).expanduser().resolve()
-    if not resolved.is_dir():
-        raise HTTPException(400, f"path is not a directory: {resolved}")
-    if not (resolved / ".git").exists():
-        raise HTTPException(400, "path is not a git repository")
+    # Strict: a child repo IS the git repository the project resolves to, so
+    # neither the multi-repo exemption nor the workspace-root allowance can
+    # apply to it.
+    from src.core.repo_resolution import git_repo_error
+
+    repo_problem = git_repo_error(resolved)
+    if repo_problem:
+        raise HTTPException(400, repo_problem)
     if not os.access(resolved, os.R_OK | os.W_OK):
         raise HTTPException(403, f"Insufficient permissions: {resolved}")
     return str(resolved)

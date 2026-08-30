@@ -31,32 +31,60 @@ class RepoNotFoundError(Exception):
         super().__init__(f"repo_id={repo_id!r} not found for project {project_id!r}")
 
 
-def git_repo_error(path) -> Optional[str]:
+def git_repo_error(
+    path,
+    project_id: Optional[str] = None,
+    allow_workspace_root: bool = False,
+) -> Optional[str]:
     """Why `path` cannot back a project, or None if it can.
 
-    Returns the message instead of raising so the API routes (which turn it
-    into a 400) and any non-HTTP caller share one wording. Worth checking at
-    the point a directory is chosen because nothing downstream reports it
-    usefully: the first thing a pipeline does for a design is create a git
-    worktree, so a project directory that is not a repository fails deep
-    inside Phase 0 -- observed live as a design that failed in 50ms having
-    recorded no reason at all.
+    One copy of the rule AutopilotService.start() and _apply_active_project
+    were each enforcing separately: the directory is a git repository, OR the
+    project is a multi-repo workspace whose git operations resolve through
+    registered ProjectRepo rows instead (resolve_repo_path below) -- such a
+    workspace root deliberately need not be a repo itself. Pass project_id
+    wherever it is known, or that exemption is silently unavailable and a
+    legitimate multi-repo project gets refused.
+
+    allow_workspace_root is for the one caller that runs before any repo can
+    be registered -- creating the project -- where the only evidence of a
+    workspace is a child directory that is itself a repository. Without it,
+    a multi-repo project could not be created at all: its repos cannot be
+    added until the project exists.
+
+    Returns the message rather than raising so HTTP routes (400), the CLI
+    (stderr), and the service layer (ValueError) all say the same thing.
     """
     p = Path(path).expanduser()
     if not p.is_dir():
         return f"Not a directory: {p}"
     # .exists(), not .is_dir(): a linked worktree or submodule checkout has
-    # .git as a FILE. Same test _apply_active_project and _validate_repo_path
-    # already use.
-    if not (p / ".git").exists():
-        return (
-            f"{p} is not a git repository. Autopilot creates a git worktree "
-            "before it can run any phase, so no design can start here. Run "
-            "`git init` (plus one commit, so the worktree has a HEAD to "
-            "branch from) in that directory, or choose one that is already a "
-            "repository."
-        )
-    return None
+    # .git as a FILE.
+    if (p / ".git").exists():
+        return None
+
+    if project_id:
+        from src.core.database import get_db
+
+        with get_db() as db:
+            if get_project_repos(db, project_id):
+                return None
+
+    if allow_workspace_root:
+        try:
+            for child in p.iterdir():
+                if child.is_dir() and (child / ".git").exists():
+                    return None
+        except OSError:
+            pass
+
+    return (
+        f"{p} is not a git repository. Autopilot creates a git worktree "
+        "before it can run any phase, so no design can start here. Run "
+        "`git init` (plus one commit, so the worktree has a HEAD to branch "
+        "from) in that directory, choose one that is already a repository, "
+        "or register the repositories it contains as project repos."
+    )
 
 
 def resolve_repo_path(db: Session, project_id: str, repo_id: Optional[str]) -> Path:

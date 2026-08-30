@@ -41,28 +41,14 @@ def _apply_active_project(proj):
     config = get_config()
     new_path = Path(proj.base_dir)
 
-    # Validate path exists and is a git repo (fast check — just look for .git)
-    if not new_path.exists() or not new_path.is_dir():
-        raise ValueError(
-            f"Cannot activate project — path does not exist: {new_path}"
-        )
+    # Shared with POST /projects, POST /autopilot/start, AutopilotService.
+    # start() and both CLI commands, so every door states the same rule --
+    # including its multi-repo exemption, which each used to re-implement.
+    from src.core.repo_resolution import git_repo_error
 
-    # Multi-repo project: the workspace root deliberately need not be a
-    # git repo itself -- real git operations resolve through registered
-    # ProjectRepo rows instead (see repo_resolution.py and
-    # AutopilotService.start()'s identical check/rationale).
-    has_registered_repo = False
-    project_id = getattr(proj, "id", None)
-    if project_id:
-        from src.core.database import get_db
-        from src.core.repo_resolution import get_project_repos
-
-        with get_db() as db:
-            has_registered_repo = bool(get_project_repos(db, project_id))
-    if not has_registered_repo and not (new_path / ".git").exists():
-        raise ValueError(
-            f"Cannot activate project — not a git repository: {new_path}"
-        )
+    repo_problem = git_repo_error(new_path, project_id=getattr(proj, "id", None))
+    if repo_problem:
+        raise ValueError(f"Cannot activate project — {repo_problem}")
 
     # Update config immediately — no git reload here
     config.git.main_repo_path = new_path
@@ -292,9 +278,12 @@ def _validate_base_dir(base_dir: str) -> str:
     # Rejected here rather than at first use: activation already refuses a
     # non-repo (_apply_active_project), so a project created on one could
     # never be activated anyway -- it just failed later, and less clearly.
+    # allow_workspace_root: a multi-repo project's repos cannot be registered
+    # until the project itself exists, so at this point a child repository is
+    # the only evidence that root is a workspace rather than a mistake.
     from src.core.repo_resolution import git_repo_error
 
-    repo_problem = git_repo_error(base)
+    repo_problem = git_repo_error(base, allow_workspace_root=True)
     if repo_problem:
         raise HTTPException(400, repo_problem)
     return str(base)
@@ -481,7 +470,12 @@ async def activate_project(project_id: str):
 
         # Apply to runtime config
         from types import SimpleNamespace
-        _apply_active_project(SimpleNamespace(base_dir=proj.base_dir, id=proj.id))
+        try:
+            _apply_active_project(SimpleNamespace(base_dir=proj.base_dir, id=proj.id))
+        except ValueError as e:
+            # A directory that cannot back a project is the caller's problem,
+            # not a server fault -- this reached the UI as an opaque 500.
+            raise HTTPException(400, str(e))
 
         count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
 

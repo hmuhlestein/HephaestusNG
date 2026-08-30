@@ -153,15 +153,15 @@ def start_pipeline(args):
     project_path = Path(args.project_path).resolve()
     design_queue = args.design_queue or str(project_path / DESIGN_CONTEXT_SUBDIR)
 
-    if not project_path.exists():
-        print(f"Error: Project path does not exist: {project_path}")
-        return 1
+    # Same rule (and wording) as POST /autopilot/start, which this posts to
+    # -- see git_repo_error. No project_id to resolve the multi-repo exemption
+    # with here, so a workspace root is left to the API's own check, which
+    # runs after _get_or_create_project_id and can see its ProjectRepo rows.
+    from src.core.repo_resolution import git_repo_error
 
-    # Verify it's a git repo (required for worktree-based agent isolation)
-    git_dir = project_path / ".git"
-    if not git_dir.exists():
-        print(f"Error: Project path is not a git repository: {project_path}")
-        print(f"Run 'git init' in {project_path} first.")
+    repo_problem = git_repo_error(project_path, allow_workspace_root=True)
+    if repo_problem:
+        print(f"Error: {repo_problem}")
         return 1
 
     os.makedirs(design_queue, exist_ok=True)

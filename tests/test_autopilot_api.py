@@ -1768,6 +1768,25 @@ class TestProjects:
         assert "not a git repository" in resp.json()["detail"]
         assert "git init" in resp.json()["detail"]
 
+    def test_create_project_accepts_a_multi_repo_workspace_root(
+        self, project_client, tmp_path
+    ):
+        """A multi-repo project's root deliberately is not a repo itself --
+        git resolves through its registered ProjectRepo rows (see
+        repo_resolution). Those cannot be added until the project exists, so
+        refusing the root outright makes such a project uncreatable."""
+        client, _ = project_client
+        workspace = tmp_path / "workspace"
+        (workspace / "front-end").mkdir(parents=True)
+        (workspace / "back-end").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=workspace / "front-end", check=True)
+
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Workspace", "base_dir": str(workspace)},
+        )
+        assert resp.status_code == 200, resp.text
+
     def test_create_project_duplicate_dir(self, project_client):
         client, dirs = project_client
         client.post(
@@ -4609,8 +4628,11 @@ class TestRouterAggregation:
         # could never address one -- id is the identifier every design row
         # actually has.
         ("DELETE", "/api/autopilot/projects/{project_id}/designs/{design_id}"),
-        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/content"),
-        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/status"),
+        # {filename:path}: a Spec Kit autoscan design's filename is a
+        # relative path ("speckit/<repo>/<n>-<slug>.md"), so a single-
+        # segment param never matched one -- same route, wider converter.
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename:path}/content"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename:path}/status"),
         ("PATCH", "/api/autopilot/projects/{project_id}/review-mode"),
         ("POST", "/api/autopilot/projects/{project_id}/sync"),
         ("GET", "/api/autopilot/queue"),
