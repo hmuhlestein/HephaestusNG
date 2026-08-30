@@ -634,3 +634,147 @@ def test_migrate_speckit_design_source_dir_unique_resumes_when_new_table_already
             assert leftover is None
 
         engine.dispose()
+
+
+def _force_fk_enforcement(engine):
+    from sqlalchemy import event
+
+    def _on(dbapi_conn, connection_record, *_args):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    event.listen(engine, "connect", _on)
+    event.listen(engine, "checkout", _on)
+
+
+def test_design_rebuild_survives_a_dangling_fk_drop_failure():
+    """Regression, observed live: migrate_design_spec_key's INSERT
+    successfully copied every design's row into the freshly-rebuilt
+    autopilot_designs, but its own DROP TABLE autopilot_designs_old then
+    hit a live FOREIGN KEY violation -- workflows.design_id already
+    (dangling, from an earlier not-yet-repaired incident) referenced the
+    literal table name "autopilot_designs_old". With no commit between
+    the INSERT and the DROP, the connection's implicit rollback on that
+    exception discarded the INSERT too: every design in every project
+    vanished from autopilot_designs until manually recovered from the
+    still-present old table.
+
+    Must now: (1) survive the DROP failure without losing the copied
+    rows, and (2) actually succeed at completing the rebuild by
+    repointing the dangling FK before attempting the DROP, rather than
+    leaving autopilot_designs_old behind every time."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+
+        from sqlalchemy.orm import sessionmaker
+
+        from src.core.database import AutopilotProject
+        from src.core.schema_migrations import migrate_design_spec_key
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        AutopilotProject.__table__.create(engine)
+
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE autopilot_designs (
+                        id VARCHAR PRIMARY KEY,
+                        project_id VARCHAR NOT NULL,
+                        filename VARCHAR(500) NOT NULL,
+                        name VARCHAR(500) NOT NULL,
+                        ordinal INTEGER NOT NULL DEFAULT 0,
+                        size_bytes INTEGER NOT NULL DEFAULT 0,
+                        extension VARCHAR(10) NOT NULL DEFAULT '.md',
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        created_at DATETIME NOT NULL,
+                        modified_at DATETIME,
+                        source_dir TEXT,
+                        repo_id VARCHAR,
+                        cost_total_usd FLOAT NOT NULL DEFAULT 0.0,
+                        workflow_type VARCHAR(20) NOT NULL DEFAULT 'feature'
+                    )
+                    """
+                )
+            )
+            # The dangling reference this migration must repoint before its
+            # own DROP: a workflow whose FK already says
+            # "autopilot_designs_old", left over from an earlier,
+            # not-yet-repaired rebuild-and-swap incident. How this
+            # accumulated historically (repeated rename cycles) isn't
+            # reproduced step by step here -- only the end state matters:
+            # a table whose stored schema references that literal name.
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE workflows (
+                        id VARCHAR PRIMARY KEY,
+                        design_id VARCHAR REFERENCES "autopilot_designs_old"(id)
+                    )
+                    """
+                )
+            )
+            # migrate_design_spec_key LEFT JOINs project_repos to resolve a
+            # directory-sourced design's repo label -- must exist even
+            # though this test has no directory-sourced rows.
+            conn.execute(text("CREATE TABLE project_repos (id VARCHAR PRIMARY KEY, label VARCHAR)"))
+            conn.commit()
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        now = datetime.datetime.utcnow()
+        session.execute(
+            AutopilotProject.__table__.insert().values(
+                id="proj-dangling", name="p", base_dir="/tmp/dangling", is_active=True, created_at=now, updated_at=now,
+            )
+        )
+        session.execute(
+            text(
+                "INSERT INTO autopilot_designs (id, project_id, filename, name, created_at) "
+                "VALUES ('des-dangling-1', 'proj-dangling', 'design.md', 'Design', :now)"
+            ),
+            {"now": now},
+        )
+        # FK enforcement is off for this one setup insert: workflows.design_id
+        # already dangles at a nonexistent table by construction (see comment
+        # above), so a real FK check here would refuse it -- the same way it
+        # would have refused every workflow insert live, until the migration
+        # under test repoints it. Enforcement is turned ON right after, for
+        # the actual migration call this test exists to exercise.
+        session.execute(
+            text("INSERT INTO workflows (id, design_id) VALUES ('wf-dangling-1', 'des-dangling-1')")
+        )
+        session.commit()
+        session.close()
+
+        _force_fk_enforcement(engine)
+        migrate_design_spec_key(engine)
+
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, spec_key FROM autopilot_designs")).fetchall()
+            assert [r[0] for r in rows] == ["des-dangling-1"], (
+                "the design row must survive even though the DROP that follows "
+                "the INSERT hits a dangling FK"
+            )
+            assert rows[0][1] == "design.md"  # spec_key backfilled
+
+            leftover = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_designs_old'")
+            ).scalar()
+            assert leftover is None, "the rebuild must actually complete, not just avoid data loss"
+
+            workflows_sql = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE type='table' AND name='workflows'")
+            ).scalar()
+            assert '"autopilot_designs_old"' not in workflows_sql
+            assert '"autopilot_designs"' in workflows_sql
+
+            # The repointed FK must actually be live and correct, not just
+            # textually rewritten: a fresh insert against it must succeed.
+            conn.execute(
+                text("INSERT INTO workflows (id, design_id) VALUES ('wf-dangling-2', 'des-dangling-1')")
+            )
+            conn.commit()
+
+        engine.dispose()

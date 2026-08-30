@@ -953,6 +953,27 @@ def _resume_interrupted_autopilot_designs_rebuild(engine) -> bool:
         conn.execute(
             text(f"INSERT OR IGNORE INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
         )
+        # Commit the copy before attempting the drop: if the drop fails (e.g.
+        # a stale FK still points at this table -- see
+        # repair_dangling_autopilot_designs_fk), the rows must not vanish
+        # with it. Without this, a connection that raises mid-DROP rolls
+        # back the whole uncommitted transaction, silently discarding the
+        # INSERT too -- observed live: migrate_design_spec_key's own DROP
+        # hit exactly this FK violation, and every design in every project
+        # disappeared from autopilot_designs until manually recovered from
+        # the (still-present, un-dropped) old table.
+        conn.commit()
+
+    # Closed and reopened, not nested: _repoint_dangling_autopilot_designs_fk
+    # opens its own connections (including an AUTOCOMMIT one for the
+    # writable_schema edit), and running those concurrently with this
+    # function's own still-open connection left the rewrite invisible to
+    # the DROP below in testing -- SQLite's per-connection schema cache
+    # isn't guaranteed to see another connection's writable_schema write
+    # without a full reconnect.
+    _repoint_dangling_autopilot_designs_fk(engine)
+
+    with engine.connect() as conn:
         conn.execute(text("DROP TABLE autopilot_designs_old"))
         conn.commit()
         logger.info("Resumed and completed an interrupted autopilot_designs rebuild")
@@ -1018,6 +1039,18 @@ def migrate_speckit_design_columns(engine):
         AutopilotDesign.__table__.create(engine)
         with engine.connect() as conn:
             conn.execute(text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old"))
+            # Commit the copy before the drop -- see
+            # _resume_interrupted_autopilot_designs_rebuild's comment on the
+            # same pattern for why a drop failure must not roll back the
+            # insert too.
+            conn.commit()
+
+        # Closed and reopened, not nested -- see
+        # _resume_interrupted_autopilot_designs_rebuild's comment on the
+        # same pattern for why.
+        _repoint_dangling_autopilot_designs_fk(engine)
+
+        with engine.connect() as conn:
             conn.execute(text("DROP TABLE autopilot_designs_old"))
             conn.commit()
             logger.info("Rebuilt autopilot_designs with nullable filename")
@@ -1111,6 +1144,18 @@ def migrate_speckit_design_source_dir_unique(engine):
         AutopilotDesign.__table__.create(engine)
         with engine.connect() as conn:
             conn.execute(text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old"))
+            # Commit the copy before the drop -- see
+            # _resume_interrupted_autopilot_designs_rebuild's comment on the
+            # same pattern for why a drop failure must not roll back the
+            # insert too.
+            conn.commit()
+
+        # Closed and reopened, not nested -- see
+        # _resume_interrupted_autopilot_designs_rebuild's comment on the
+        # same pattern for why.
+        _repoint_dangling_autopilot_designs_fk(engine)
+
+        with engine.connect() as conn:
             conn.execute(text("DROP TABLE autopilot_designs_old"))
             conn.commit()
             logger.info("Rebuilt autopilot_designs with UniqueConstraint(project_id, source_dir)")
@@ -1259,6 +1304,23 @@ def migrate_design_spec_key(engine):
             conn.execute(
                 text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
             )
+            # Commit the copy before the drop -- see
+            # _resume_interrupted_autopilot_designs_rebuild's comment on the
+            # same pattern for why a drop failure must not roll back the
+            # insert too. This is exactly what happened live: this DROP hit
+            # a stale FK (workflows/features still pointed at
+            # "autopilot_designs_old" from before repair_dangling_
+            # autopilot_designs_fk's last run), the uncommitted INSERT got
+            # rolled back with it, and every design in every project
+            # disappeared from autopilot_designs until manually recovered.
+            conn.commit()
+
+        # Closed and reopened, not nested -- see
+        # _resume_interrupted_autopilot_designs_rebuild's comment on the
+        # same pattern for why.
+        _repoint_dangling_autopilot_designs_fk(engine)
+
+        with engine.connect() as conn:
             conn.execute(text("DROP TABLE autopilot_designs_old"))
             conn.commit()
             logger.info("Rebuilt autopilot_designs with spec_key and uq_design_project_spec_key")
@@ -1266,18 +1328,24 @@ def migrate_design_spec_key(engine):
         logger.warning(f"design spec_key migration failed: {e}")
 
 
-def repair_dangling_autopilot_designs_fk(engine):
-    """Point workflows/features' design_id back at autopilot_designs.
-
-    The rebuild-and-swap migrations above (rename -> recreate -> copy ->
-    drop) ran before the legacy_alter_table guard existed, so SQLite
-    rewrote both referencing tables to REFERENCES "autopilot_designs_old"
-    (id) -- a table the same migration then dropped. Under PRAGMA
-    foreign_keys=ON every INSERT into workflows or features then fails with
-    "no such table: main.autopilot_designs_old", so no workflow can be
-    created and therefore no design in ANY project can start (observed
-    live: Phase 0 launched, created its worktree, and died on the workflow
-    INSERT).
+def _repoint_dangling_autopilot_designs_fk(engine) -> None:
+    """Rewrite workflows/features' design_id FK off the literal name
+    "autopilot_designs_old" and onto "autopilot_designs", unconditionally
+    (no defer-if-old-table-still-exists guard -- see
+    repair_dangling_autopilot_designs_fk for that gated, standalone
+    version). Every rebuild-and-swap migration for autopilot_designs calls
+    this right after its own INSERT has committed the real rows into the
+    freshly-recreated table and right before its own DROP TABLE
+    autopilot_designs_old: PRAGMA legacy_alter_table=ON keeps the RENAME
+    from repointing these FKs automatically (so they survive the swap
+    pointing at the stable name "autopilot_designs" once it exists again),
+    but if a still-dangling reference from an EARLIER, not-yet-repaired
+    incident already said "autopilot_designs_old" going in, the rename
+    leaves it exactly as dangling as it started -- and the DROP that
+    follows then fails with a live FOREIGN KEY violation under
+    PRAGMA foreign_keys=ON, since workflows/features rows still reference
+    the table being dropped. Calling this first guarantees the DROP always
+    has a table with no live referrers.
 
     Rewrites the two stored CREATE TABLE statements in place instead of
     rebuilding the tables. Rebuilding `workflows` would rename it in turn
@@ -1286,15 +1354,83 @@ def repair_dangling_autopilot_designs_fk(engine):
     one level up.
     """
     dangling = '"autopilot_designs_old"'
+    # Excludes the autopilot_designs_old table's OWN row throughout: its
+    # stored CREATE TABLE text necessarily contains its own quoted name
+    # ('CREATE TABLE "autopilot_designs_old" (...)'), which also matches
+    # this LIKE pattern. Rewriting that row too desyncs sqlite_master's
+    # `name` column (still "autopilot_designs_old") from the name embedded
+    # in its own `sql` text (now claiming to be "autopilot_designs"),
+    # which is exactly what PRAGMA quick_check reports as "malformed
+    # database schema" -- callers of this function run it BEFORE the DROP,
+    # while autopilot_designs_old still exists, so this exclusion is load-
+    # bearing, not defensive-only.
+    with engine.connect() as conn:
+        broken = [
+            r[0]
+            for r in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name != 'autopilot_designs_old' AND sql LIKE :pat"),
+                {"pat": f"%{dangling}%"},
+            ).fetchall()
+        ]
+        if not broken:
+            return
+
+    # AUTOCOMMIT: writable_schema edits must not sit inside a transaction,
+    # and RESET reloads the schema for every other connection.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text("PRAGMA foreign_keys=OFF"))
+        conn.execute(text("PRAGMA writable_schema=ON"))
+        conn.execute(
+            text(
+                "UPDATE sqlite_master SET sql = replace(sql, "
+                "'\"autopilot_designs_old\"', '\"autopilot_designs\"') "
+                "WHERE type='table' AND name != 'autopilot_designs_old' AND sql LIKE '%\"autopilot_designs_old\"%'"
+            )
+        )
+        conn.execute(text("PRAGMA writable_schema=RESET"))
+
+    with engine.connect() as conn:
+        integrity = conn.execute(text("PRAGMA quick_check")).fetchone()[0]
+        still_broken = [
+            r[0]
+            for r in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name != 'autopilot_designs_old' AND sql LIKE '%autopilot_designs_old%'")
+            ).fetchall()
+        ]
+        if integrity != "ok" or still_broken:
+            logger.error(
+                f"Dangling autopilot_designs FK repair did not verify "
+                f"(quick_check={integrity!r}, still referencing={still_broken}) "
+                f"-- restore from a backup"
+            )
+            return
+    logger.info(
+        f"Repointed dangling autopilot_designs_old foreign key on: {', '.join(broken)}"
+    )
+
+
+def repair_dangling_autopilot_designs_fk(engine):
+    """Point workflows/features' design_id back at autopilot_designs.
+
+    The rebuild-and-swap migrations for autopilot_designs ran before the
+    legacy_alter_table guard existed, so SQLite rewrote both referencing
+    tables to REFERENCES "autopilot_designs_old" (id) -- a table the same
+    migration then dropped. Under PRAGMA foreign_keys=ON every INSERT into
+    workflows or features then fails with "no such table:
+    main.autopilot_designs_old", so no workflow can be created and
+    therefore no design in ANY project can start (observed live: Phase 0
+    launched, created its worktree, and died on the workflow INSERT).
+
+    This is the standalone, end-of-migration-list safety net -- each
+    individual rebuild migration now also calls
+    _repoint_dangling_autopilot_designs_fk itself, right before its own
+    DROP, so in the common case this finds nothing left to do.
+    """
     try:
         with engine.connect() as conn:
-            broken = [
-                r[0]
-                for r in conn.execute(
-                    text("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE :pat"),
-                    {"pat": f"%{dangling}%"},
-                ).fetchall()
-            ]
+            broken = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND sql LIKE '%\"autopilot_designs_old\"%' LIMIT 1")
+            ).fetchone()
             if not broken:
                 return
             # A leftover autopilot_designs_old means a rebuild is still
@@ -1307,39 +1443,7 @@ def repair_dangling_autopilot_designs_fk(engine):
                     "repair until the interrupted rebuild is resumed"
                 )
                 return
-
-        # AUTOCOMMIT: writable_schema edits must not sit inside a transaction,
-        # and RESET reloads the schema for every other connection.
-        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(text("PRAGMA foreign_keys=OFF"))
-            conn.execute(text("PRAGMA writable_schema=ON"))
-            conn.execute(
-                text(
-                    "UPDATE sqlite_master SET sql = replace(sql, "
-                    "'\"autopilot_designs_old\"', '\"autopilot_designs\"') "
-                    "WHERE type='table' AND sql LIKE '%\"autopilot_designs_old\"%'"
-                )
-            )
-            conn.execute(text("PRAGMA writable_schema=RESET"))
-
-        with engine.connect() as conn:
-            integrity = conn.execute(text("PRAGMA quick_check")).fetchone()[0]
-            still_broken = [
-                r[0]
-                for r in conn.execute(
-                    text("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE '%autopilot_designs_old%'")
-                ).fetchall()
-            ]
-            if integrity != "ok" or still_broken:
-                logger.error(
-                    f"Dangling autopilot_designs FK repair did not verify "
-                    f"(quick_check={integrity!r}, still referencing={still_broken}) "
-                    f"-- restore from a backup"
-                )
-                return
-        logger.info(
-            f"Repaired dangling autopilot_designs_old foreign key on: {', '.join(broken)}"
-        )
+        _repoint_dangling_autopilot_designs_fk(engine)
     except Exception as e:
         logger.warning(f"Dangling autopilot_designs FK repair failed: {e}")
 
