@@ -499,6 +499,15 @@ async def start_pipeline(
     """
     from src.autopilot.orchestrator.state import _get_or_create_project_id
     from src.autopilot.service import get_registry
+    from src.core.repo_resolution import git_repo_error
+
+    # Before anything is created or reserved: a project directory that is not
+    # a git repository cannot get past the worktree every phase needs, and
+    # that failure surfaces deep inside Phase 0 where it reads as an
+    # unrelated error. Refusing here says what is actually wrong.
+    repo_problem = git_repo_error(project_path)
+    if repo_problem:
+        raise HTTPException(400, repo_problem)
 
     project_id = _get_or_create_project_id(project_path)
 

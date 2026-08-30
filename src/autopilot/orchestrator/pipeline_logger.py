@@ -9,7 +9,9 @@ by grepping every tests/*.py mock.patch target before moving), so the
 move is a pure relocation -- no test updates needed.
 """
 import asyncio
+import sys
 import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -33,14 +35,29 @@ class OrchestratorLogger:
     def set_project_id(self, project_id: Optional[str]) -> None:
         self.project_id = project_id
 
-    def log(self, message: str, level: str = "INFO"):
+    def log(self, message: str, level: str = "INFO", exc_info: bool = False):
+        """exc_info mirrors logging.Logger's: append the active exception's
+        traceback.
+
+        Not cosmetic parity -- several modules take a `logger` parameter that
+        shadows their own module-level logging.Logger, so a handler written
+        for the module logger runs against this class instead and raised
+        TypeError *in place of* logging. Inside an `except` block that
+        replaces the real exception with the TypeError and propagates it:
+        _create_integration_worktree's handler turned "Cannot open git
+        repository" into "OrchestratorLogger.error() got an unexpected
+        keyword argument 'exc_info'", which is all the pipeline ever recorded
+        about why the design failed. Same class of bug as debug() below.
+        """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{level}] {message}"
+        if exc_info and sys.exc_info()[0] is not None:
+            line += "\n" + traceback.format_exc().rstrip()
         with self._lock:
             with open(self.log_file, "a") as f:
                 f.write(line + "\n")
 
-    def debug(self, message: str):
+    def debug(self, message: str, exc_info: bool = False):
         # Three call sites already used logger.debug() on this class, which
         # has never had one -- each raised AttributeError instead of logging.
         # The worst was run_single_workflow's, sitting in the handler for a
@@ -48,16 +65,16 @@ class OrchestratorLogger:
         # the enclosing `except Exception`, which reported "Failed to launch
         # workflow" and returned FAILED, turning a cosmetic metrics problem
         # into a dead workflow. Found by mypy once it was unblocked (c38f143).
-        self.log(message, "DEBUG")
+        self.log(message, "DEBUG", exc_info)
 
-    def info(self, message: str):
-        self.log(message, "INFO")
+    def info(self, message: str, exc_info: bool = False):
+        self.log(message, "INFO", exc_info)
 
-    def warning(self, message: str):
-        self.log(message, "WARNING")
+    def warning(self, message: str, exc_info: bool = False):
+        self.log(message, "WARNING", exc_info)
 
-    def error(self, message: str):
-        self.log(message, "ERROR")
+    def error(self, message: str, exc_info: bool = False):
+        self.log(message, "ERROR", exc_info)
 
     def event(self, event_type: str, data: dict):
         # Was an append to a per-run events.jsonl file, located by a global

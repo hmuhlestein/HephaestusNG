@@ -31,6 +31,34 @@ class RepoNotFoundError(Exception):
         super().__init__(f"repo_id={repo_id!r} not found for project {project_id!r}")
 
 
+def git_repo_error(path) -> Optional[str]:
+    """Why `path` cannot back a project, or None if it can.
+
+    Returns the message instead of raising so the API routes (which turn it
+    into a 400) and any non-HTTP caller share one wording. Worth checking at
+    the point a directory is chosen because nothing downstream reports it
+    usefully: the first thing a pipeline does for a design is create a git
+    worktree, so a project directory that is not a repository fails deep
+    inside Phase 0 -- observed live as a design that failed in 50ms having
+    recorded no reason at all.
+    """
+    p = Path(path).expanduser()
+    if not p.is_dir():
+        return f"Not a directory: {p}"
+    # .exists(), not .is_dir(): a linked worktree or submodule checkout has
+    # .git as a FILE. Same test _apply_active_project and _validate_repo_path
+    # already use.
+    if not (p / ".git").exists():
+        return (
+            f"{p} is not a git repository. Autopilot creates a git worktree "
+            "before it can run any phase, so no design can start here. Run "
+            "`git init` (plus one commit, so the worktree has a HEAD to "
+            "branch from) in that directory, or choose one that is already a "
+            "repository."
+        )
+    return None
+
+
 def resolve_repo_path(db: Session, project_id: str, repo_id: Optional[str]) -> Path:
     """repo_id set -> that ProjectRepo's path (raises RepoNotFoundError if it
     doesn't belong to project_id). repo_id None -> the project's primary
