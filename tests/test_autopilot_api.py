@@ -1970,6 +1970,35 @@ class TestProjectDesigns:
         assert resp.status_code == 200
         assert len(resp.json()) == 3
 
+    def test_list_designs_includes_a_directory_sourced_design(self, project_client):
+        """A Spec-Kit directory-sourced design has filename=NULL (source_dir
+        is set instead, per NFR-02) -- DesignItem.filename used to be a
+        required `str`, so building one for such a row raised a pydantic
+        ValidationError, 500ing this endpoint for the WHOLE project (every
+        design, not just the directory-sourced one). Observed live."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, get_db
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-dir-sourced",
+                    project_id=pid,
+                    filename=None,
+                    name="001-conversation-history",
+                    source_dir="/tmp/specs/001-conversation-history",
+                    status="pending",
+                )
+            )
+            db.commit()
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs")
+        assert resp.status_code == 200
+        by_id = {d["id"]: d for d in resp.json()}
+        assert by_id["des-dir-sourced"]["filename"] is None
+
     def test_designs_sorted_by_ordinal(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)

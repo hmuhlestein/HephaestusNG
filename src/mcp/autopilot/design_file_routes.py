@@ -43,7 +43,14 @@ router = APIRouter()
 
 class DesignItem(BaseModel):
     id: str
-    filename: str
+    # Optional: NULL for a Spec-Kit directory-sourced design (source_dir is
+    # set instead, per NFR-02) -- a required `str` here made every
+    # DesignItem(...) construction below raise a pydantic ValidationError
+    # for such a design, 500ing this whole endpoint (and reload_project_
+    # designs, which calls straight into it) for ANY project that has even
+    # one directory-sourced design, hiding every design (file- and
+    # directory-sourced alike) for that project.
+    filename: Optional[str] = None
     name: str
     ordinal: int
     size_bytes: int
