@@ -85,11 +85,21 @@ async def create_task(
         task_id = str(uuid.uuid4())
 
         if request.workflow_id:
+            # Captured before _resolve_dedup_phase_id mutates request.phase_id
+            # in place -- _guard_phase_ownership needs to know whether this
+            # came from the caller or was auto-filled from the agent's own
+            # current phase (see that function's own docstring for why).
+            # Mirrors _resolve_dedup_phase_id's own two "treat as empty"
+            # conditions: no phase_id/phase_order at all, or an explicit
+            # None/none/null/"" sentinel string in phase_id.
+            phase_was_auto_resolved = (
+                not request.phase_id and not request.phase_order
+            ) or request.phase_id in ("None", "none", "null", "")
             dedup_phase_id = _resolve_dedup_phase_id(agent_id, request)
             duplicate_response = _check_duplicate_active_task_for_phase(request, dedup_phase_id)
             if duplicate_response:
                 return duplicate_response
-            _guard_phase_ownership(agent_id, request, dedup_phase_id)
+            _guard_phase_ownership(agent_id, request, dedup_phase_id, phase_was_auto_resolved)
 
         _persist_new_task(agent_id, request, task_id)
 

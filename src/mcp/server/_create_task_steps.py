@@ -170,12 +170,35 @@ def _check_duplicate_active_task_for_phase(request: CreateTaskRequest, dedup_pha
     return None
 
 
-def _guard_phase_ownership(agent_id: str, request: CreateTaskRequest, dedup_phase_id: Optional[str]) -> None:
+def _guard_phase_ownership(
+    agent_id: str,
+    request: CreateTaskRequest,
+    dedup_phase_id: Optional[str],
+    phase_was_auto_resolved: bool = False,
+) -> None:
     """Reject a phase agent seeding the FIRST task for a phase other than its
     own -- agents have no reliable way to know a workflow's real phase
     order/names, and guessing wrong here has created tasks with content for
     the wrong phase. Agents with no currently-assigned task (SDK/root/system
-    agents bootstrapping a workflow) are exempt."""
+    agents bootstrapping a workflow) are exempt.
+
+    phase_was_auto_resolved (true when the caller omitted phase_id/
+    phase_order and _resolve_agent_current_phase filled it in with the
+    agent's own current phase -- see _resolve_dedup_phase_id) defeats the
+    order-mismatch check above by construction: dedup_phase_id IS the
+    agent's own phase in that case, so own_phase.order != target_phase.order
+    can never be true. That's the M-6 fix's intended behavior for a
+    genuine same-phase subtask, but it also means an agent that meant to
+    hand work to a LATER phase and simply didn't know its phase_id gets
+    silently filed under its own phase instead of rejected -- observed
+    live: a development-phase agent created a task titled "Adversarial
+    review of ChatPanel.tsx..." (development's own hard floor requires a
+    commit; the task was pure verification and produced none, so a later
+    retry on it failed with "No commit was made during this development
+    task"). Only in that auto-resolved case, catch it by name: if the
+    description names another real phase of this same workflow, refuse
+    outright rather than silently mis-filing it.
+    """
     if not dedup_phase_id:
         return
 
@@ -215,6 +238,40 @@ def _guard_phase_ownership(agent_id: str, request: CreateTaskRequest, dedup_phas
                         "task done — do not try to create it yourself."
                     ),
                 )
+            if own_phase and phase_was_auto_resolved:
+                other_phases = (
+                    _s.query(PhaseModel)
+                    .filter(
+                        PhaseModel.workflow_id == request.workflow_id,
+                        PhaseModel.id != own_phase.id,
+                    )
+                    .all()
+                )
+                description_lower = (request.task_description or "").lower()
+                for other in other_phases:
+                    named = other.name.replace("_", " ").lower()
+                    if named and named in description_lower:
+                        logger.error(
+                            f"[CREATE_TASK] REJECTED: agent {agent_id[:8]} (own phase "
+                            f"'{own_phase.name}') omitted phase_id for a task naming "
+                            f"phase '{other.name}' in its description"
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"Refusing to create this task: no phase_id was given, "
+                                f"so it would be filed under your own phase "
+                                f"'{own_phase.name}' -- but its description names "
+                                f"'{other.name}', a different phase of this workflow. "
+                                f"'{own_phase.name}' has its own requirements (e.g. a "
+                                "hard floor may require a commit) that this content "
+                                "won't satisfy. If this is feedback or a finding for a "
+                                "later phase to see, use create_ticket instead -- "
+                                "later phases read open tickets automatically. If this "
+                                "genuinely is your own phase's work, reword it so it "
+                                "doesn't read as another phase's task."
+                            ),
+                        )
     finally:
         if _s.is_active:
             _s.close()

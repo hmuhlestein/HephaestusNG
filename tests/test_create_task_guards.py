@@ -155,6 +155,63 @@ class TestOwnPhaseGuard:
             assert "Refusing to create a task for phase" not in str(e.detail)
 
 
+class TestAutoResolvedPhaseNamedInDescription:
+    """The gap the own-phase guard above didn't cover: an agent that OMITS
+    phase_id/phase_order (rather than guessing a wrong one) gets it silently
+    auto-resolved to its own current phase -- own_phase.order != target_
+    phase.order can never be true in that case, since both sides come from
+    the same lookup. The exact incident this guards against: a development-
+    phase agent created a task titled "Adversarial review of ChatPanel.tsx"
+    with no phase_id -- it got filed under development (whose hard floor
+    requires a commit), the agent correctly treated it as pure verification
+    and made none, and a later retry failed with "No commit was made
+    during this development task"."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_omitted_phase_id_naming_another_real_phase(self, task_env):
+        from fastapi import HTTPException
+
+        from src.mcp.server.agent_task_routes import create_task
+
+        # References "architecture design" -- the fixture's other real
+        # phase (phase_b, name "architecture_design") -- the same way the
+        # live incident's task named "adversarial review" (a different
+        # real phase of that workflow) in its own description.
+        request = _make_request(
+            task_description="Architecture design review: verify the component boundaries",
+            workflow_id=task_env["workflow_id"],
+            phase_id=None,
+            phase_order=None,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await create_task(request, agent_id=task_env["agent_id"])
+        assert exc_info.value.status_code == 400
+        assert "architecture_design" in exc_info.value.detail
+        assert "scope_review" in exc_info.value.detail
+        assert "create_ticket" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_allows_omitted_phase_id_for_ordinary_own_phase_work(self, task_env):
+        """Sanity check the fix isn't overbroad: a genuine same-phase
+        subtask with no phase_id, whose description doesn't name a
+        different phase, must still pass (the M-6 fix's actual intent)."""
+        from fastapi import HTTPException
+
+        from src.mcp.server.agent_task_routes import create_task
+
+        request = _make_request(
+            task_description="Implement the pagination helper for the scope list",
+            workflow_id=task_env["workflow_id"],
+            phase_id=None,
+            phase_order=None,
+        )
+        try:
+            await create_task(request, agent_id=task_env["agent_id"])
+        except HTTPException as e:
+            assert "Refusing to create this task" not in str(e.detail)
+            assert "Refusing to create a task for phase" not in str(e.detail)
+
+
 class TestContentAwareDedup:
     @pytest.mark.asyncio
     async def test_similar_description_is_deduped(self, task_env):
