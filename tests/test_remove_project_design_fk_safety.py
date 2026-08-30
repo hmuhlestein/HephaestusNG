@@ -107,9 +107,9 @@ def test_remove_project_design_deletes_feature_before_its_workflow(tmp_path, mon
     app.include_router(router)
     client = TestClient(app, headers={"X-Agent-ID": "system"})
 
-    resp = client.delete("/api/autopilot/projects/proj-1/designs/01-auth.md")
+    resp = client.delete("/api/autopilot/projects/proj-1/designs/des-1")
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"removed": "01-auth.md"}
+    assert resp.json() == {"removed": "des-1"}
 
     session = db_manager.get_session()
     try:
