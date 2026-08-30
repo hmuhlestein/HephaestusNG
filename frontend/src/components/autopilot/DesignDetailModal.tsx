@@ -53,12 +53,8 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, design
       // than one project can be active at once).
       const project = projects.find((p) => p.id === projectId);
       if (!project) throw new Error('Project not found');
-      // /autopilot/queue/rerun addresses a design by filename, which a
-      // directory-sourced design does not have -- the button below is
-      // disabled for one, so this only guards a programmatic call.
-      if (!filename) throw new Error('This design has no source file to rerun');
       return api.post('/autopilot/queue/rerun', {
-        filename,
+        design_id: designId,
         project_path: project.base_dir,
       });
     },
@@ -359,11 +355,11 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, design
                   </Button>
                   <Button
                     onClick={() => {
-                      if (confirm(`Rerun "${filename}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
+                      if (confirm(`Rerun "${filename ?? specKey}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
                         rerunMutation.mutate();
                       }
                     }}
-                    disabled={rerunMutation.isPending || !filename}
+                    disabled={rerunMutation.isPending}
                     variant="outline"
                     className="text-violet-600 dark:text-violet-400 border-violet-200 dark:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30"
                     title="Restart this design's pipeline from scratch (deletes its worktree, discarding uncommitted work) and pause every other running pipeline"
