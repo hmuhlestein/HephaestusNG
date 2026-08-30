@@ -311,12 +311,12 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
 
   // Rerun: restarts the design's pipeline from scratch (Phase 0 onward).
   const rerunDesignMutation = useMutation({
-    mutationFn: async (filename: string) => {
+    mutationFn: async (designId: string) => {
       const projects = await apiService.getProjects();
       const project = projects.find((p: any) => p.id === projectId);
       if (!project) throw new Error('Project not found');
       return api.post('/autopilot/queue/rerun', {
-        filename,
+        design_id: designId,
         project_path: project.base_dir,
       });
     },
@@ -472,12 +472,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                       // terminates every active agent/workflow system-wide,
                       // not just this design's -- confirm before firing since
                       // this icon is one click away, unlike the modal's button.
-                      // /autopilot/queue/rerun addresses a design by
-                      // filename, which a directory-backed design has none of.
-                      if (!item.filename) {
-                        toast.error('This design has no source file to rerun');
-                      } else if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
-                        rerunDesignMutation.mutate(item.filename);
+                      if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
+                        rerunDesignMutation.mutate(item.id);
                       }
                     } else {
                       workflowActionMutation.mutate({ designId: item.id, action });
@@ -487,7 +483,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                     pause: workflowActionMutation.isPending && workflowActionMutation.variables?.designId === item.id && workflowActionMutation.variables?.action === 'pause',
                     stop: workflowActionMutation.isPending && workflowActionMutation.variables?.designId === item.id && workflowActionMutation.variables?.action === 'stop',
                     resume: workflowActionMutation.isPending && workflowActionMutation.variables?.designId === item.id && workflowActionMutation.variables?.action === 'resume',
-                    rerun: rerunDesignMutation.isPending && rerunDesignMutation.variables === item.filename,
+                    rerun: rerunDesignMutation.isPending && rerunDesignMutation.variables === item.id,
                   }}
                   onRemove={(designId) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {

@@ -213,6 +213,36 @@ class TestDesignQueue:
         assert resp.status_code == 400
 
 
+def _seed_design(project_dir, filename="my_design.md", design_id="des-rerun", **kw):
+    """Rerun is addressed by design_id, so a rerun test needs a real row.
+    Mirrors what the queue scan would have created for a file in the queue."""
+    from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager
+
+    db = DatabaseManager(None)
+    with db.session_scope() as session:
+        if not session.query(AutopilotProject).filter_by(base_dir=str(project_dir)).first():
+            session.add(
+                AutopilotProject(
+                    id=kw.pop("project_id", "proj-rerun"),
+                    name="rerun",
+                    base_dir=str(project_dir),
+                )
+            )
+        session.add(
+            AutopilotDesign(
+                id=design_id,
+                project_id=kw.pop("design_project_id", "proj-rerun"),
+                filename=filename,
+                name=(filename or design_id).replace(".md", ""),
+                ordinal=1,
+                file_path=str(project_dir / ".hephaestus" / "specs" / filename) if filename else None,
+                status="pending",
+                **kw,
+            )
+        )
+    return design_id
+
+
 class TestQueueRerun:
     """Rerun must drive the in-process AutopilotService singleton (the same
     one the play/pause button uses), not spawn/kill a separate
@@ -252,7 +282,7 @@ class TestQueueRerun:
 
         resp = client.post(
             "/api/autopilot/queue/rerun",
-            json={"filename": "my_design.md", "project_path": str(project_dir)},
+            json={"design_id": _seed_design(project_dir), "project_path": str(project_dir)},
         )
 
         assert resp.status_code == 200, resp.text
@@ -286,7 +316,7 @@ class TestQueueRerun:
 
         resp = client.post(
             "/api/autopilot/queue/rerun",
-            json={"filename": "my_design.md", "project_path": str(project_dir)},
+            json={"design_id": _seed_design(project_dir), "project_path": str(project_dir)},
         )
 
         assert resp.status_code == 200, resp.text
@@ -325,7 +355,7 @@ class TestQueueRerun:
 
         resp = client.post(
             "/api/autopilot/queue/rerun",
-            json={"filename": "my_design.md", "project_path": str(project_dir)},
+            json={"design_id": _seed_design(project_dir), "project_path": str(project_dir)},
         )
 
         assert resp.status_code == 409, resp.text
@@ -358,7 +388,7 @@ class TestQueueRerun:
 
         resp = client.post(
             "/api/autopilot/queue/rerun",
-            json={"filename": "my_design.md", "project_path": str(project_dir)},
+            json={"design_id": _seed_design(project_dir), "project_path": str(project_dir)},
         )
 
         assert resp.status_code == 400, resp.text
@@ -394,7 +424,7 @@ class TestQueueRerun:
 
         resp = client.post(
             "/api/autopilot/queue/rerun",
-            json={"filename": "my_design.md", "project_path": str(project_dir)},
+            json={"design_id": _seed_design(project_dir), "project_path": str(project_dir)},
         )
 
         assert resp.status_code == 409, resp.text
@@ -453,7 +483,7 @@ class TestQueueRerun:
         with patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree") as mock_cleanup:
             resp = client.post(
                 "/api/autopilot/queue/rerun",
-                json={"filename": "01-auth.md", "project_path": str(project_dir)},
+                json={"design_id": _seed_design(project_dir, "01-auth.md"), "project_path": str(project_dir)},
             )
 
         assert resp.status_code == 200, resp.text
@@ -552,7 +582,7 @@ class TestQueueRerun:
 
         resp = client.post(
             "/api/autopilot/queue/rerun",
-            json={"filename": "01-auth.md", "project_path": str(project_dir)},
+            json={"design_id": "des-target", "project_path": str(project_dir)},
         )
         assert resp.status_code == 200, resp.text
 
@@ -565,13 +595,17 @@ class TestQueueRerun:
             assert other_task.assigned_agent_id == "agent-other"
             assert other_wf.status == "active"
 
+            # The rerun design's own work is wiped, not merely paused: rerun
+            # means "start fresh", and Step 2's pause says so in its own
+            # comment ("these rows are deleted moments later"). It survived
+            # here only because Step 2b matched workflows by a launch_params
+            # substring, which this one has none of -- Step 2 found it by
+            # design_id and Step 2b did not. Both use the FK now.
             target_agent = db.query(Agent).filter_by(id="agent-target").first()
-            target_task = db.query(Task).filter_by(id="task-target").first()
-            target_wf = db.query(Workflow).filter_by(id="wf-target-feature").first()
             assert target_agent.status == "terminated"
-            assert target_task.status == "pending", "task must be reset, not left dangling"
-            assert target_task.assigned_agent_id is None
-            assert target_wf.status == "paused"
+            assert target_agent.current_task_id is None
+            assert db.query(Task).filter_by(id="task-target").first() is None
+            assert db.query(Workflow).filter_by(id="wf-target-feature").first() is None
 
 
 # ── Caching ──────────────────────────────────────────────────────

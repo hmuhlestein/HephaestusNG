@@ -275,10 +275,14 @@ async def requeue_design(request: dict):
 
 @router.post("/queue/rerun")
 async def rerun_design(request: dict):
-    """Rerun a design: stop everything, move to front, start pipeline."""
-    filename = request.get("filename")
-    if not filename:
-        raise HTTPException(400, "filename is required")
+    """Rerun a design: stop everything, move to front, start pipeline.
+
+    Keyed by design_id like every other design endpoint -- a directory-backed
+    design has no filename to be addressed by.
+    """
+    design_id = request.get("design_id")
+    if not design_id:
+        raise HTTPException(400, "design_id is required")
 
     project_path = request.get("project_path")
     if not project_path:
@@ -286,7 +290,7 @@ async def rerun_design(request: dict):
 
     return await repair_service.rerun(
         project_path,
-        filename,
+        design_id,
         load_queue_order=_load_queue_order,
         save_queue_order=_save_queue_order,
         invalidate=_invalidate,

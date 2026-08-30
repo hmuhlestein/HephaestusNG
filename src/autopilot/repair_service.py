@@ -41,12 +41,14 @@ class RepairService:
     async def rerun(
         self,
         project_path: str,
-        filename: str,
+        design_id: str,
         load_queue_order: Callable[[Optional[str]], List[str]],
         save_queue_order: Callable[[List[str], Optional[str]], None],
         invalidate: Callable[..., None],
     ) -> Dict[str, Any]:
         """Rerun a design: stop everything, move to front, start pipeline."""
+        from sqlalchemy import or_
+
         from src.core.database import (
             Agent,
             AutopilotDesign,
@@ -70,12 +72,33 @@ class RepairService:
 
         rerun_start_project_id = _get_or_create_project_id(str(project))
 
-        # Validate design exists in queue
+        # Resolve the design by id, not by filename: a directory-backed design
+        # (Spec Kit) has no filename at all, so keying this whole flow on one
+        # made rerun unavailable for it -- the lookup either missed the row or
+        # found it and then 404'd on a queue path that never existed.
         queue_dir = project / DESIGN_CONTEXT_SUBDIR
         queue_dir.mkdir(parents=True, exist_ok=True)
-        design_path = queue_dir / filename
-        if not design_path.exists():
-            raise HTTPException(404, f"Design not found in queue: {filename}")
+        with get_db() as db:
+            design_row = db.query(AutopilotDesign).filter_by(id=design_id).first()
+            if not design_row:
+                raise HTTPException(404, f"Design not found: {design_id}")
+            filename = design_row.filename
+            spec_key = design_row.spec_key
+            design_row_name = design_row.name
+            design_file_path = design_row.file_path
+            design_source_dir = design_row.source_dir
+
+        # The design's source: a file for a file-backed design, the specs
+        # directory for a directory-backed one. Either is rerunnable; neither
+        # existing is not.
+        if design_source_dir:
+            design_path = Path(design_source_dir)
+        elif design_file_path:
+            design_path = Path(design_file_path)
+        else:
+            design_path = queue_dir / filename if filename else None
+        if design_path is None or not design_path.exists():
+            raise HTTPException(404, f"Design source not found for {spec_key}")
 
         # Step 1: Stop the pipeline if running. Uses the in-process AutopilotService
         # (the same one the play/pause button drives) instead of spawning/killing a
@@ -157,7 +180,7 @@ class RepairService:
             with get_db() as db:
                 proj_for_scope = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
                 design_for_scope = (
-                    db.query(AutopilotDesign).filter_by(project_id=proj_for_scope.id, filename=filename).first()
+                    db.query(AutopilotDesign).filter_by(project_id=proj_for_scope.id, id=design_id).first()
                     if proj_for_scope else None
                 )
                 design_wf_ids = (
@@ -224,11 +247,18 @@ class RepairService:
 
             worktrees_to_clean: List[Tuple[str, dict]] = []
             with get_db() as db:
+                # design_id is the real link; the launch_params LIKE stays as
+                # a fallback for workflows predating that column (it never
+                # matched a Spec Kit design anyway -- launch_params records the
+                # real spec.md path, not the design's own name).
+                _match = [Workflow.design_id == design_id]
+                if filename:
+                    _match.append(Workflow.launch_params.like(f"%{filename}%"))
                 matching_wfs = (
                     db.query(Workflow)
                     .filter(
                         Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
-                        Workflow.launch_params.like(f"%{filename}%"),
+                        or_(*_match),
                     )
                     .all()
                 )
@@ -244,7 +274,7 @@ class RepairService:
 
                 # Get design to find features
                 proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
-                design = db.query(AutopilotDesign).filter_by(project_id=proj.id, filename=filename).first() if proj else None
+                design = db.query(AutopilotDesign).filter_by(project_id=proj.id, id=design_id).first() if proj else None
 
                 if wf_ids:
                     # Get task IDs for dependent record cleanup
@@ -350,7 +380,7 @@ class RepairService:
                     _delete_project_context(db, f"autopilot_retry_{design.id}")
 
                 db.commit()
-                logger.info(f"[RERUN] Cleaned up {len(wf_ids)} workflows and features for {filename}")
+                logger.info(f"[RERUN] Cleaned up {len(wf_ids)} workflows and features for {spec_key}")
 
             # Best-effort worktree cleanup, now that the DB transaction above
             # has committed -- not fatal if any single one can't be resolved.
@@ -392,9 +422,9 @@ class RepairService:
 
                     removed = cleanup_workflow_sessions(session_infos)
                     if removed:
-                        logger.info(f"[RERUN] Removed {removed} orphaned CLI session file(s) for {filename}")
+                        logger.info(f"[RERUN] Removed {removed} orphaned CLI session file(s) for {spec_key}")
                 except Exception as e:
-                    logger.warning(f"[RERUN] Failed to clean up CLI sessions for {filename}: {e}")
+                    logger.warning(f"[RERUN] Failed to clean up CLI sessions for {spec_key}: {e}")
         except Exception as e:
             logger.error(f"Error cleaning up design state for rerun: {e}")
 
@@ -419,12 +449,21 @@ class RepairService:
         except Exception as e:
             logger.error(f"Error starting branch cleanup: {e}")
 
-        # Step 4: Move design to front of queue
-        order = load_queue_order(rerun_start_project_id)
-        if filename in order:
-            order.remove(filename)
-        order.insert(0, filename)
-        save_queue_order(order, rerun_start_project_id)
+        # Step 4: Move design to front of queue. ordinal is what
+        # pick_next_design actually orders by; the .queue_order.json mirror is
+        # keyed by filename and can only carry a design that has one.
+        with get_db() as db:
+            _row = db.query(AutopilotDesign).filter_by(id=design_id).first()
+            if _row:
+                _count = db.query(AutopilotDesign).filter_by(project_id=_row.project_id).count()
+                _row.ordinal = -(_count + 1)  # sorts before every existing row
+                db.commit()
+        if filename:
+            order = load_queue_order(rerun_start_project_id)
+            if filename in order:
+                order.remove(filename)
+            order.insert(0, filename)
+            save_queue_order(order, rerun_start_project_id)
         invalidate("queue", f"queue:{rerun_start_project_id}")
 
         # Step 5: Clear pipeline state so orchestrator starts fresh
@@ -467,7 +506,7 @@ class RepairService:
             # sleep here would stall every other request the whole backend is
             # serving for up to 15s, not just this one.
             new_workflow_id = None
-            design_name_clean = filename.replace(".md", "").replace("_", " ").lower()
+            design_name_clean = (filename or design_row_name or "").replace(".md", "").replace("_", " ").lower()
             for _ in range(30):  # 30 * 0.5s = 15s max
                 await asyncio.sleep(0.5)
                 try:
@@ -513,9 +552,11 @@ class RepairService:
 
         return {
             "rerun": True,
+            "design_id": design_id,
+            "spec_key": spec_key,
             "filename": filename,
             "workflow_id": new_workflow_id,
-            "message": f"Pipeline restarted for {filename}",
+            "message": f"Pipeline restarted for {spec_key}",
         }
 
     async def repair(self, project_path: str, filename: str) -> Dict[str, Any]:
