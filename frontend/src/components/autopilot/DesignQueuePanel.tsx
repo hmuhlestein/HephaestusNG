@@ -55,7 +55,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   const { loading: projectsLoading } = useProject();
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
-  const [detailFile, setDetailFile] = useState<string | null>(null);
+  const [detailDesign, setDetailDesign] = useState<{ id: string; filename: string | null } | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedFeature, setSelectedFeature] = useState<any | null>(null);
 
@@ -98,8 +98,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       await Promise.all(
         designs.map(async (d: any) => {
           try {
-            const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
-            statuses[d.filename] = {
+            const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.id);
+            statuses[d.id] = {
               status: status.status || 'pending',
               workflowId: status.workflows?.[0]?.id,
               error: status.error || null,
@@ -116,8 +116,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
               features: status.features || [],
             };
           } catch (err) {
-            console.error(`Failed to fetch status for design ${d.filename}:`, err);
-            statuses[d.filename] = { status: 'pending', costTotal: 0, costUnavailable: true, features: [] };
+            console.error(`Failed to fetch status for design ${d.name}:`, err);
+            statuses[d.id] = { status: 'pending', costTotal: 0, costUnavailable: true, features: [] };
           }
         })
       );
@@ -251,8 +251,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   // workflow-execution endpoint to every one of the design's workflows in
   // the applicable status (a design can have more than one workflow run).
   const workflowActionMutation = useMutation({
-    mutationFn: async ({ filename, action }: { filename: string; action: 'pause' | 'stop' | 'resume' }) => {
-      const status = await apiService.getAutopilotProjectDesignStatus(projectId!, filename);
+    mutationFn: async ({ designId, action }: { designId: string; action: 'pause' | 'stop' | 'resume' }) => {
+      const status = await apiService.getAutopilotProjectDesignStatus(projectId!, designId);
       const workflows = status.workflows || [];
 
       const results = [];
@@ -340,8 +340,11 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
   });
 
-  const handleDetail = (filename: string) => {
-    setDetailFile(filename);
+  // The design row itself, not its filename: status is fetched by id now
+  // (a directory-sourced design has no filename at all), while rerun and the
+  // header still show the file it came from.
+  const handleDetail = (design: { id: string; filename: string | null }) => {
+    setDetailDesign(design);
   };
 
   const sensors = useSensors(
@@ -441,16 +444,16 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   item={item}
                   index={index}
                   isActive={item.name === currentDesign}
-                  status={designStatuses[item.filename]?.status}
-                  workflowId={designStatuses[item.filename]?.workflowId}
-                  error={designStatuses[item.filename]?.error}
-                  costTotal={designStatuses[item.filename]?.costTotal ?? 0}
-                  costUnavailable={designStatuses[item.filename]?.costUnavailable ?? false}
-                  pausedBy={designStatuses[item.filename]?.pausedBy}
-                  workflowType={designStatuses[item.filename]?.workflowType}
-                  features={designStatuses[item.filename]?.features ?? []}
+                  status={designStatuses[item.id]?.status}
+                  workflowId={designStatuses[item.id]?.workflowId}
+                  error={designStatuses[item.id]?.error}
+                  costTotal={designStatuses[item.id]?.costTotal ?? 0}
+                  costUnavailable={designStatuses[item.id]?.costUnavailable ?? false}
+                  pausedBy={designStatuses[item.id]?.pausedBy}
+                  workflowType={designStatuses[item.id]?.workflowType}
+                  features={designStatuses[item.id]?.features ?? []}
                   onRefetchFeatures={refetchDesignStatuses}
-                  statusReason={designStatuses[item.filename]?.statusReason}
+                  statusReason={designStatuses[item.id]?.statusReason}
                   pendingInputRequest={pendingInputRequest}
                   projectId={projectId}
                   onDetail={handleDetail}
@@ -467,13 +470,13 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                         rerunDesignMutation.mutate(item.filename);
                       }
                     } else {
-                      workflowActionMutation.mutate({ filename: item.filename, action });
+                      workflowActionMutation.mutate({ designId: item.id, action });
                     }
                   }}
                   actionPending={{
-                    pause: workflowActionMutation.isPending && workflowActionMutation.variables?.filename === item.filename && workflowActionMutation.variables?.action === 'pause',
-                    stop: workflowActionMutation.isPending && workflowActionMutation.variables?.filename === item.filename && workflowActionMutation.variables?.action === 'stop',
-                    resume: workflowActionMutation.isPending && workflowActionMutation.variables?.filename === item.filename && workflowActionMutation.variables?.action === 'resume',
+                    pause: workflowActionMutation.isPending && workflowActionMutation.variables?.designId === item.id && workflowActionMutation.variables?.action === 'pause',
+                    stop: workflowActionMutation.isPending && workflowActionMutation.variables?.designId === item.id && workflowActionMutation.variables?.action === 'stop',
+                    resume: workflowActionMutation.isPending && workflowActionMutation.variables?.designId === item.id && workflowActionMutation.variables?.action === 'resume',
                     rerun: rerunDesignMutation.isPending && rerunDesignMutation.variables === item.filename,
                   }}
                   onRemove={(designId) => {
@@ -509,16 +512,17 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       )}
 
       {/* Design Detail Modal */}
-      {detailFile && projectId && (
+      {detailDesign && projectId && (
         <DesignDetailModal
           projectId={projectId}
-          filename={detailFile}
-          onClose={() => setDetailFile(null)}
+          designId={detailDesign.id}
+          filename={detailDesign.filename}
+          onClose={() => setDetailDesign(null)}
           onRerun={() => {
             queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
             queryClient.invalidateQueries({ queryKey: ['projects'] });
             queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
-            setDetailFile(null);
+            setDetailDesign(null);
           }}
         />
       )}
@@ -625,7 +629,7 @@ interface SortableDesignItemProps {
   isActive?: boolean;
   onRemove: (designId: string) => void;
   onArchive: (designId: string) => void;
-  onDetail: (filename: string) => void;
+  onDetail: (design: { id: string; filename: string | null }) => void;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
   onReviewFeature?: (featureId: string, feature: any) => void;
@@ -762,7 +766,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           <div className="flex-1 min-w-0">
             <h4
               className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate hover:text-violet-600 hover:underline w-fit"
-              onClick={(e) => { e.stopPropagation(); onDetail(item.filename); }}
+              onClick={(e) => { e.stopPropagation(); onDetail(item); }}
             >
               {item.name}
             </h4>
@@ -843,7 +847,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onDetail(item.filename);
+                onDetail(item);
               }}
               className="p-2 rounded-lg hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400"
               title="View design details"
