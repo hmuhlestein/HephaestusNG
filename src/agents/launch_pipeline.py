@@ -409,6 +409,19 @@ class LaunchPipeline:
 
         Detects which pattern fired to preserve distinct error messages
         (generic shell rejection vs. CLI-specific confirmation dialog).
+
+        Callers MUST skip this entirely once _wait_for_cli_ready has
+        already confirmed the CLI is ready (returned True). The base
+        patterns ("command not found", "No such file or directory") are
+        generic substrings matched against the last 15 captured pane
+        lines -- once the CLI is up and doing real work, its own normal
+        output (a missing optional file it gracefully handles, a shell
+        command it runs internally) can easily contain one of these
+        phrases with nothing to do with its own launch. Observed live: a
+        pi agent logged "ready after 3.1s", then 0.2s later this check
+        matched unrelated text from the agent's own in-progress work and
+        killed the session, marking a perfectly running agent "failed to
+        start".
         """
         import re
 
@@ -440,7 +453,7 @@ class LaunchPipeline:
         floor: float = 3.0,
         timeout: float = 25.0,
         poll_interval: float = 0.5,
-    ) -> None:
+    ) -> bool:
         """Wait for the CLI tool itself (not just the shell -- see
         _wait_for_shell_ready for that earlier stage) to finish starting up
         and render its ready-for-input UI, instead of always blocking for a
@@ -458,6 +471,11 @@ class LaunchPipeline:
         Uses cli_agent.get_health_check_pattern() -- already defined per
         CLI type for exactly this "is it ready" signal, previously unused
         anywhere in the codebase.
+
+        Returns True once the ready pattern is matched, False on timeout --
+        the caller uses this to decide whether _detect_launch_failure should
+        even run (see that method's own docstring for why a confirmed-ready
+        CLI must skip it).
         """
         import re
 
@@ -485,10 +503,11 @@ class LaunchPipeline:
                 text = ""
             if text and re.search(pattern, text):
                 logger.info(f"{cli_type} agent {agent_id} ready after {time.monotonic() - start:.1f}s")
-                return
+                return True
             await asyncio.sleep(poll_interval)
 
         logger.warning(f"{cli_type} agent {agent_id} did not match its ready pattern within {timeout:.0f}s -- proceeding anyway (same ceiling as the previous flat wait)")
+        return False
 
     def _check_duplicate_active_agent(self, task: Task) -> Optional[Agent]:
         """Guard: don't create a second agent for a task that already has one.
@@ -2215,7 +2234,7 @@ class LaunchPipeline:
             session.commit()
 
             try:
-                await self._wait_for_cli_ready(pane, cli_agent, restart_cli_type, agent_id)
+                cli_ready = await self._wait_for_cli_ready(pane, cli_agent, restart_cli_type, agent_id)
                 term_race_result = await self._check_termination_race(
                     agent_id,
                     restart_task_id,
@@ -2224,7 +2243,8 @@ class LaunchPipeline:
                 )
                 if term_race_result is not None:
                     return term_race_result
-                self._detect_launch_failure(pane, cli_agent, restart_cli_type, new_session_name)
+                if not cli_ready:
+                    self._detect_launch_failure(pane, cli_agent, restart_cli_type, new_session_name)
                 if self.tmux_server.has_session(new_session_name):
                     await self._deliver_initial_prompt(
                         pane,

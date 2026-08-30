@@ -33,11 +33,12 @@ async def test_returns_as_soon_as_ready_pattern_matches(launch_pipeline):
     cli_agent.get_health_check_pattern = Mock(return_value=r"(Assistant:|Human:|›)")
     pane = _mock_pane(["some startup noise", "› "])
 
-    await launch_pipeline._wait_for_cli_ready(
+    result = await launch_pipeline._wait_for_cli_ready(
         pane, cli_agent, "claude", "agent-1", floor=0.01, timeout=2.0, poll_interval=0.01
     )
 
     pane.cmd.assert_called_with("capture-pane", "-p", "-S", "-10")
+    assert result is True
 
 
 @pytest.mark.asyncio
@@ -63,11 +64,12 @@ async def test_falls_back_after_timeout_when_pattern_never_appears(launch_pipeli
     pane = _mock_pane(["still loading..."])
 
     # Should return (not hang) once the timeout elapses, even with no match.
-    await launch_pipeline._wait_for_cli_ready(
+    result = await launch_pipeline._wait_for_cli_ready(
         pane, cli_agent, "claude", "agent-1", floor=0.01, timeout=0.1, poll_interval=0.02
     )
 
     assert pane.cmd.call_count >= 1
+    assert result is False
 
 
 @pytest.mark.asyncio

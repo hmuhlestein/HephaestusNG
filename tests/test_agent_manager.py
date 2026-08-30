@@ -2856,6 +2856,105 @@ class TestLaunchPipelineOwnAttributesAfterManagerSplit:
             assert not missing, f"{cls} ({path}) references self.X with no definition: {missing}"
 
 
+class TestDetectLaunchFailureSkippedOnceCliIsReady:
+    """Regression: _deliver_initial_prompt_flow ran _detect_launch_failure
+    unconditionally after _wait_for_cli_ready, even when that wait had
+    just confirmed the CLI was ready. _detect_launch_failure's patterns
+    ("command not found", "No such file or directory") are generic
+    substrings matched against the last 15 captured pane lines -- once
+    the CLI is up and doing real work, its own normal output can easily
+    contain one of these phrases with nothing to do with its own launch.
+
+    Observed live: a pi agent logged "ready after 3.1s", then 0.2s later
+    this check matched unrelated text from the agent's own in-progress
+    work and killed the session, marking a working agent "failed to
+    start" (task 4ac37103, workflow 72ed4df8, both its primary CLI and
+    its fallback CLI killed this exact way back to back)."""
+
+    def _prep_and_launch(self):
+        from src.agents._create_agent_for_task_steps import (
+            _LaunchPrepResult,
+            _LaunchStepResult,
+        )
+
+        prep = _LaunchPrepResult(
+            branch_path="/tmp/branch",
+            env_vars={},
+            model=None,
+            cli_agent=MagicMock(),
+            tmux_session=MagicMock(),
+            session_name="agent_test",
+            session_id=None,
+            initial_message="do the task",
+            instructions_pointer="pointer",
+            instructions_rel_path="rel/path.md",
+            agent_type="phase",
+        )
+        launch = _LaunchStepResult(
+            launch_result=LaunchResult(command="pi ...", prompt_delivery=LaunchResult.DEFERRED),
+            pane=MagicMock(),
+            agent_id_to_return="agent-1",
+            cli_launch_started_at=None,
+        )
+        return prep, launch
+
+    @pytest.mark.asyncio
+    async def test_ready_cli_skips_launch_failure_detection(self, mock_agent_manager):
+        from src.agents._create_agent_for_task_steps import _deliver_initial_prompt_flow
+
+        prep, launch = self._prep_and_launch()
+        task = MagicMock(id="task-1")
+
+        pipeline = mock_agent_manager._launch
+        with (
+            patch.object(pipeline, "_wait_for_cli_ready", AsyncMock(return_value=True)),
+            patch.object(pipeline, "_check_termination_race", AsyncMock(return_value=None)),
+            patch.object(pipeline.tmux_server, "has_session", return_value=True),
+            patch.object(pipeline, "_detect_launch_failure") as mock_detect,
+            patch.object(pipeline, "_deliver_initial_prompt", AsyncMock(return_value=None)),
+        ):
+            await _deliver_initial_prompt_flow(
+                pipeline,
+                prep=prep,
+                launch=launch,
+                task=task,
+                agent_id="agent-1",
+                system_prompt="",
+                cli_type="pi",
+            )
+
+        mock_detect.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_not_ready_cli_still_runs_launch_failure_detection(self, mock_agent_manager):
+        """Sanity check the fix isn't overbroad: a genuinely-not-ready CLI
+        must still get the rejection-classification check."""
+        from src.agents._create_agent_for_task_steps import _deliver_initial_prompt_flow
+
+        prep, launch = self._prep_and_launch()
+        task = MagicMock(id="task-1")
+
+        pipeline = mock_agent_manager._launch
+        with (
+            patch.object(pipeline, "_wait_for_cli_ready", AsyncMock(return_value=False)),
+            patch.object(pipeline, "_check_termination_race", AsyncMock(return_value=None)),
+            patch.object(pipeline.tmux_server, "has_session", return_value=True),
+            patch.object(pipeline, "_detect_launch_failure") as mock_detect,
+            patch.object(pipeline, "_deliver_initial_prompt", AsyncMock(return_value=None)),
+        ):
+            await _deliver_initial_prompt_flow(
+                pipeline,
+                prep=prep,
+                launch=launch,
+                task=task,
+                agent_id="agent-1",
+                system_prompt="",
+                cli_type="pi",
+            )
+
+        mock_detect.assert_called_once()
+
+
 class TestTerminatorRunsOffTheEventLoopThread:
     """Regression test: Terminator.terminate_agent must not block the event
     loop. Its real work is a long synchronous chain -- several tmux/git

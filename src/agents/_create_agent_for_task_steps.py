@@ -463,7 +463,7 @@ async def _deliver_initial_prompt_flow(
         initial_message = prep.initial_message
 
     logger.info(f"Initial message length: {len(initial_message)} characters")
-    await pipeline._wait_for_cli_ready(pane, prep.cli_agent, cli_type, agent_id)
+    cli_ready = await pipeline._wait_for_cli_ready(pane, prep.cli_agent, cli_type, agent_id)
 
     # Termination race check
     term_race_result = await pipeline._check_termination_race(
@@ -477,7 +477,11 @@ async def _deliver_initial_prompt_flow(
         logger.error(f"Tmux session {session_name} died during initialization wait!")
         raise Exception("Tmux session died during initialization wait")
 
-    pipeline._detect_launch_failure(pane, prep.cli_agent, cli_type, session_name)
+    # Skip once the CLI already confirmed ready -- see
+    # _detect_launch_failure's own docstring for why running it anyway
+    # risks killing an agent that's already up and doing real work.
+    if not cli_ready:
+        pipeline._detect_launch_failure(pane, prep.cli_agent, cli_type, session_name)
 
     # Deliver initial prompt
     await pipeline._deliver_initial_prompt(
