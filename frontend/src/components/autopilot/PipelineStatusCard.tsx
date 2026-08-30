@@ -37,12 +37,16 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
   
   const running = loading ? stableRunning : (status?.running ?? false);
   const currentDesign = status?.current_design;
-  const designsProcessed = status?.designs_processed ?? 0;
   const queueDepth = status?.queue_depth ?? 0;
-  const totalDesigns = designsProcessed + queueDepth;
-  // Add minimum progress of 2% when running so bar shows activity
-  const baseProgress = totalDesigns > 0 ? (designsProcessed / totalDesigns) * 100 : 0;
-  const progressPercent = running && baseProgress < 2 ? 2 : baseProgress;
+  // queueDepth is a live count of designs still needing work right now;
+  // designs_processed is a lifetime counter that persists across
+  // restarts and unrelated past runs (loaded from PersistentPipelineState).
+  // Summing the two used to conflate history with the live queue -- a
+  // project that already finished one design in the past, with exactly
+  // one still queued, showed "2 of 2" instead of the true "1 remaining".
+  // There's no per-run "processed in this batch" counter to build a real
+  // done/total fraction from, so this only tracks what's left to do.
+  const designsRemaining = queueDepth;
 
   return (
     <motion.div
@@ -183,33 +187,21 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
           </div>
         </div>
 
-        {/* Progress bar (if running) */}
-        {running && (
+        {/* Queue activity indicator (if running with work left) -- no
+            real done/total fraction is available (see designsRemaining
+            above), so this shows an indeterminate "in progress" bar
+            rather than a fabricated percentage. */}
+        {running && designsRemaining > 0 && (
           <div className="mt-4">
             <div className="flex items-center justify-between text-xs text-white/60 mb-1.5">
-              <span>{Math.min(designsProcessed + 1, totalDesigns)} of {totalDesigns} designs processing</span>
-              <span>{progressPercent.toFixed(1)}%</span>
+              <span>{designsRemaining} design{designsRemaining === 1 ? '' : 's'} remaining in queue</span>
             </div>
-            <motion.div 
+            <motion.div
               className="h-2 bg-white/20 rounded-full overflow-hidden relative"
               animate={{ opacity: [0.8, 1, 0.8] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
             >
-              <motion.div
-                className="h-full bg-white/80 rounded-full"
-                initial={{ width: '0%' }}
-                animate={{ width: `${progressPercent}%` }}
-                transition={{ duration: 0.5, ease: 'easeOut' }}
-              />
-              {/* Pulse effect at the end of progress bar */}
-              {progressPercent > 0 && progressPercent < 100 && (
-                <motion.div
-                  className="absolute top-0 h-2 w-4 bg-white rounded-full"
-                  style={{ left: `calc(${progressPercent}% - 8px)` }}
-                  animate={{ opacity: [0.4, 1, 0.4] }}
-                  transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
-                />
-              )}
+              <div className="h-full w-full bg-white/80 rounded-full" />
             </motion.div>
           </div>
         )}
