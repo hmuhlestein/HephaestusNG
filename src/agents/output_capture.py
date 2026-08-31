@@ -342,22 +342,51 @@ class AgentOutputCapture:
         # the raw transcript.log (always created unconditionally at
         # session creation) marks the right directory even before a
         # .clean.log has ever been written there.
+        def _check_base(base: Path) -> Optional[Path]:
+            candidate_dir = base / CONTEXT_DIR_NAME / "tmux"
+            if _has_transcript(candidate_dir):
+                return candidate_dir
+            # Also check one level into .worktrees (worktree-local .hephaestus)
+            if base.name == ".hephaestus":
+                return None  # skip worktree scan for .hephaestus itself
+            for wt_dir in base.glob(".worktrees/*"):
+                candidate_dir = wt_dir / CONTEXT_DIR_NAME / "tmux"
+                if _has_transcript(candidate_dir):
+                    return candidate_dir
+            return None
+
         search_bases = []
         if project_base:
             search_bases.append(Path(project_base))
         search_bases.append(Path.home() / ".hephaestus")
 
         for base in search_bases:
-            candidate_dir = base / CONTEXT_DIR_NAME / "tmux"
-            if _has_transcript(candidate_dir):
-                return candidate_dir
-            # Also check one level into .worktrees (worktree-local .hephaestus)
-            if base.name == ".hephaestus":
-                continue  # skip worktree scan for .hephaestus itself
-            for wt_dir in base.glob(".worktrees/*"):
-                candidate_dir = wt_dir / CONTEXT_DIR_NAME / "tmux"
-                if _has_transcript(candidate_dir):
-                    return candidate_dir
+            found = _check_base(base)
+            if found:
+                return found
+            if base.name == ".hephaestus" or not base.is_dir():
+                continue
+            # AutopilotProject.base_dir can be a monorepo umbrella
+            # directory (e.g. "parent/") whose actual work happens in
+            # independently git-managed subdirectories (e.g.
+            # "parent/front-end/", each with its own .git, .hephaestus/,
+            # and .worktrees/) rather than in base_dir itself -- an agent's
+            # worktree in that case lives under the SUBDIRECTORY's
+            # .worktrees/, not base_dir's. Without this, such a project's
+            # terminated agents always miss their raw transcript (even
+            # though _archive_tmux_transcripts correctly archived it to
+            # the subdirectory's own .hephaestus/tmux/) and silently fall
+            # back to the unfiltered, non-deduplicated .clean.log read in
+            # _get_terminated_agent_output -- confirmed live: an otherwise
+            # correctly-collapsed raw transcript, on this fallback path
+            # instead, showed 1500+ consecutive blank lines untouched by
+            # any of the Spacing-pass logic below.
+            for sub_dir in base.iterdir():
+                if not sub_dir.is_dir() or sub_dir.name.startswith('.'):
+                    continue
+                found = _check_base(sub_dir)
+                if found:
+                    return found
 
         # Last resort: a completed feature's permanent archive
         # (.hephaestus/features/<timestamp>_<name>/tmux/), populated by
@@ -365,10 +394,15 @@ class AgentOutputCapture:
         # root's and the worktree's .hephaestus/tmux/ before the worktree
         # is removed -- the fullest copy of this agent's transcript that
         # still exists once its worktree is gone.
-        if project_base:
-            for feature_tmux_dir in Path(project_base).glob(f"{CONTEXT_DIR_NAME}/features/*/tmux"):
-                if _has_transcript(feature_tmux_dir):
-                    return feature_tmux_dir
+        if project_base and Path(project_base).is_dir():
+            feature_glob_roots = [Path(project_base)]
+            for sub_dir in Path(project_base).iterdir():
+                if sub_dir.is_dir() and not sub_dir.name.startswith('.'):
+                    feature_glob_roots.append(sub_dir)
+            for glob_root in feature_glob_roots:
+                for feature_tmux_dir in glob_root.glob(f"{CONTEXT_DIR_NAME}/features/*/tmux"):
+                    if _has_transcript(feature_tmux_dir):
+                        return feature_tmux_dir
 
         return None
 
