@@ -265,6 +265,50 @@ async def _run_launch_preparations(
     return wt_resolution, system_prompt, thinking_level, phase_name, phase_order
 
 
+def _ensure_git_expert_review_approved(pipeline, task: Task, branch_path: str) -> None:
+    """For a full-autopilot project (review_mode off), pre-write the same
+    .hephaestus/review_approved marker a human's approval would write --
+    into both branch_path (the worktree) and the actual repo checkout
+    `git rev-parse --git-common-dir` resolves to from it (where git_expert's
+    own prompt `cd`s before merging/pushing main) -- so agent-safe-bin/git
+    doesn't block a project that has no human review step to wait for.
+
+    _create_integration_worktree does this same write at worktree-creation
+    time, but that only covers a feature's FIRST dispatch; a git_expert
+    task retried later (the common case, since this same hard floor forces
+    a retry) never goes back through that function, re-reading straight
+    from Workflow.working_directory instead. Idempotent -- safe to call on
+    every git_expert dispatch. Observed live: tasks 03e8b25a and 5d2d8828
+    both needed this written by hand after their worktrees already existed.
+    """
+    try:
+        from src.core.database import AutopilotProject, resolve_project_for_workflow
+
+        project_id, _ = resolve_project_for_workflow(task.workflow_id)
+        if not project_id:
+            return
+        with pipeline.db_manager.session_scope() as session:
+            project = session.query(AutopilotProject).filter_by(id=project_id).first()
+            if not project or project.review_mode:
+                return
+
+        import re
+
+        import git as _git
+
+        from src.mcp.autopilot.feature_review_routes import _write_review_approved_marker
+
+        # Mirrors git_expert.yaml's own `git rev-parse --git-common-dir |
+        # sed 's|/\.git.*||'` exactly, so this resolves to the identical
+        # directory the agent's own merge/push command runs from.
+        common_dir = _git.Repo(branch_path).git.rev_parse("--git-common-dir").strip()
+        main_repo = re.sub(r"/\.git.*$", "", common_dir)
+        _write_review_approved_marker(main_repo)
+        _write_review_approved_marker(branch_path)
+    except Exception as e:
+        logger.warning(f"[GIT-EXPERT] Could not pre-approve non-review-mode worktree {branch_path}: {e}")
+
+
 async def _prepare_tmux_and_prompt(
     pipeline,
     *,
@@ -279,6 +323,9 @@ async def _prepare_tmux_and_prompt(
     phase_name: Optional[str],
 ) -> _LaunchPrepResult:
     branch_path = wt_resolution.branch_path
+
+    if phase_name == "git_expert":
+        _ensure_git_expert_review_approved(pipeline, task, branch_path)
 
     env_vars, model, cli_agent = pipeline._resolve_env_and_model(
         cli_type, task, agent_id, label="agent",
