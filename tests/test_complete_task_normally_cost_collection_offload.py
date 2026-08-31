@@ -7,7 +7,7 @@ logging continuously: TaskCompletionService.collect_cost_on_completion
 was called directly inside this async function, with no thread-pool
 offload. It reads the CLI's own transcript file and cascades through the
 same synchronous task -> workflow -> feature -> design -> project cost
-rollup as _invoke_and_record's own cost recording (langchain_llm_client.py,
+rollup as _invoke_and_record's own cost recording (llm_client.py,
 fixed in the same investigation) -- runs on EVERY task completion (done or
 failed), not just every LLM call, making it the more frequent of the two
 event-loop-blocking call sites. With 3 agents completing tasks

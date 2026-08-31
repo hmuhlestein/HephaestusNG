@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from src.core.llm_config import get_config
-from src.interfaces.langchain_llm_client import ComponentType, LangChainLLMClient
+from src.interfaces.llm_client import ComponentType, LangChainLLMClient
 from src.interfaces.llm_interface import LLMProviderInterface
 
 logger = logging.getLogger(__name__)

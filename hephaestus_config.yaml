@@ -13,8 +13,8 @@ git:
 llm:
   embedding_model: BAAI/bge-small-en-v1.5
   embedding_provider: fastembed
-  default_provider: openrouter
-  default_model: xiaomi/mimo-v2.5
+  default_provider: claude_cli
+  default_model: sonnet
   default_temperature: 0.7
   default_max_tokens: 4000
 
@@ -35,40 +35,38 @@ llm:
       base_url: https://openrouter.ai/api/v1
     groq:
       api_key_env: GROQ_API_KEY
+    claude_cli:
+      # No API key required -- routes through the locally authenticated
+      # Claude Code CLI (`claude -p --model ...`), billed against the
+      # existing Claude subscription instead of a metered API key.
+      api_key_env: CLAUDE_CLI_UNUSED
+  # provider: claude_cli below routes through the local Claude Code CLI --
+  # temperature/max_tokens are ignored for it; reasoning_effort maps to the
+  # CLI's --effort flag (low/medium/high/xhigh/max), default "high" here.
+  # OpenRouter remains available as an alternative: set provider: openrouter
+  # and model: e.g. xiaomi/mimo-v2.5 (see providers.openrouter above) on any
+  # component below to route it through a metered API key instead.
   model_assignments:
-    # Utility/orchestration calls — mechanical structured work, not deep reasoning.
-    # reasoning_effort caps mimo's reasoning stream (the real slowness); max_tokens
-    # bounds the answer. Was: all on mimo, full reasoning, 4-8k tokens, ~7 min/call.
     task_enrichment:
-      provider: openrouter
-      model: xiaomi/mimo-v2.5
-      temperature: 0.3
-      max_tokens: 1500
-      reasoning_effort: low
+      provider: claude_cli
+      model: sonnet
+      reasoning_effort: high
     agent_monitoring:
-      provider: openrouter
-      model: xiaomi/mimo-v2.5
-      temperature: 0.2
-      max_tokens: 1000
-      reasoning_effort: low
+      provider: claude_cli
+      model: sonnet
+      reasoning_effort: high
     guardian_analysis:
-      provider: openrouter
-      model: xiaomi/mimo-v2.5
-      temperature: 0.3
-      max_tokens: 1200
-      reasoning_effort: "off"   # mimo over-streams structured calls (5-min then parse-fail); disable reasoning. 90s timeout in guardian.py is the hard backstop.
+      provider: claude_cli
+      model: sonnet
+      reasoning_effort: high
     conductor_analysis:
-      provider: openrouter
-      model: xiaomi/mimo-v2.5
-      temperature: 0.3
-      max_tokens: 1500
-      reasoning_effort: low
+      provider: claude_cli
+      model: sonnet
+      reasoning_effort: high
     agent_prompts:
-      provider: openrouter
-      model: xiaomi/mimo-v2.5
-      temperature: 0.6
-      max_tokens: 2000
-      reasoning_effort: low
+      provider: claude_cli
+      model: sonnet
+      reasoning_effort: high
 agents:
   default_cli_tool: claude
   cli_model: sonnet

@@ -34,7 +34,7 @@ from src.core.database import (
     WorkflowDefinition,
 )
 from src.core.llm_config import ModelAssignment, MultiProviderLLMConfig, ProviderConfig
-from src.interfaces.langchain_llm_client import LangChainLLMClient
+from src.interfaces.llm_client import LangChainLLMClient
 
 
 @pytest.fixture
@@ -927,7 +927,7 @@ def llm_client():
     )
     with (
         patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}),
-        patch("src.interfaces.langchain_llm_client.ChatOpenAI"),
+        patch("src.interfaces.llm_client.ChatOpenAI"),
     ):
         return LangChainLLMClient(config)
 

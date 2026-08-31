@@ -21,7 +21,7 @@ import pytest
 pytest.importorskip("langchain_core")
 
 from src.core.llm_config import ModelAssignment, MultiProviderLLMConfig, ProviderConfig
-from src.interfaces.langchain_llm_client import (
+from src.interfaces.llm_client import (
     CLI_FALLBACK_TIMEOUT,
     CLIFallbackChatModel,
     LangChainLLMClient,
@@ -72,7 +72,7 @@ class TestCreateModelFallsBackOnlyForOpenRouter:
     def test_present_openrouter_key_builds_real_model_not_fallback(self, mock_config):
         with (
             patch.dict(os.environ, {"OPENROUTER_API_KEY": "real-key"}),
-            patch("src.interfaces.langchain_llm_client.ChatOpenAI") as mock_chat,
+            patch("src.interfaces.llm_client.ChatOpenAI") as mock_chat,
         ):
             client = LangChainLLMClient.__new__(LangChainLLMClient)
             client.config = mock_config

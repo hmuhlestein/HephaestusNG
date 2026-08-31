@@ -25,7 +25,7 @@ from src.core.llm_config import (
     MultiProviderLLMConfig,
     ProviderConfig,
 )
-from src.interfaces.langchain_llm_client import LangChainLLMClient
+from src.interfaces.llm_client import LangChainLLMClient
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def mock_config():
 def client(mock_config):
     with (
         patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}),
-        patch("src.interfaces.langchain_llm_client.ChatOpenAI"),
+        patch("src.interfaces.llm_client.ChatOpenAI"),
     ):
         return LangChainLLMClient(mock_config)
 
@@ -69,7 +69,7 @@ class TestConductorTimeouts:
         self, client, monkeypatch
     ):
         monkeypatch.setattr(
-            "src.interfaces.langchain_llm_client.CONDUCTOR_LLM_TIMEOUT", 0.05
+            "src.interfaces.llm_client.CONDUCTOR_LLM_TIMEOUT", 0.05
         )
         hanging_model = Mock()
         hanging_model.ainvoke = _hang

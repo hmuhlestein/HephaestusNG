@@ -1,6 +1,6 @@
 """Load and interpolate prompt templates from YAML configuration.
 
-Extracts hardcoded prompts from prompt_builder.py, langchain_llm_client.py,
+Extracts hardcoded prompts from prompt_builder.py, llm_client.py,
 and llm_interface.py into config/prompts/system_prompts.yaml.
 """
 

@@ -301,7 +301,7 @@ async def _complete_task_normally(
     # single task completion, reads the CLI's own transcript file, and
     # cascades through the same synchronous task -> workflow -> feature
     # -> design -> project cost rollup as _invoke_and_record's own cost
-    # recording (langchain_llm_client.py) -- same class of "blocks the
+    # recording (llm_client.py) -- same class of "blocks the
     # single-threaded event loop" issue that call site was fixed for,
     # confirmed live 2026-08-19 (intermittent /health timeouts under
     # concurrent agent load). Offloaded here too rather than only where

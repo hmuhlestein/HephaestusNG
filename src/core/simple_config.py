@@ -228,7 +228,7 @@ class LLMConfig(_ConfigSection):
             )
         if self.llm_provider == "openrouter" and not self.openrouter_api_key:
             # NOT a hard failure, unlike the openai/anthropic branches above:
-            # langchain_llm_client.py's _create_model already degrades a
+            # llm_client.py's _create_model already degrades a
             # missing OPENROUTER_API_KEY to CLIFallbackChatModel (drives the
             # configured CLI tool -- claude, by default -- directly instead
             # of calling OpenRouter), specifically so the system can run
