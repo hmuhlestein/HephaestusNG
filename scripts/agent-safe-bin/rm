@@ -11,8 +11,9 @@
 # (see base_system_prompt/feature_architect_system_prompt in
 # config/prompts/system_prompts.yaml) at the shell level instead of trusting
 # the model to follow it: deletions are only allowed under .hephaestus/
-# (git-excluded orchestration scratch data, never a project deliverable).
-# Anything else is refused, fail-closed, with no exceptions.
+# (git-excluded orchestration scratch data, never a project deliverable),
+# with one narrow exception (.git/index.lock, see below). Anything else is
+# refused, fail-closed.
 #
 # This is deliberately a hard technical guardrail, not a second copy of the
 # prompt instruction -- an LLM can misread or ignore a written rule; a PATH
@@ -51,6 +52,15 @@ for arg in "$@"; do
     case "$resolved" in
         */.hephaestus/*|*/.hephaestus)
             continue  # allowed: inside a .hephaestus/ scratch directory
+            ;;
+        */.git/index.lock)
+            # A stale lock left behind by a crashed git process --
+            # config/workflows/*/git_expert.yaml's own prompt instructs
+            # `rm -f .git/index.lock` as the documented recovery for
+            # "fatal: Unable to create '.git/index.lock'". Scoped to this
+            # exact filename, not all of .git/, so everything else there
+            # stays covered by the fail-closed default below.
+            continue
             ;;
         *)
             echo "BLOCKED: rm on '$arg' (resolved: $resolved) is outside .hephaestus/." >&2
