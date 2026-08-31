@@ -1,7 +1,8 @@
-"""Regression: feature_review must never resume a prior review's session.
+"""Regression: feature_review and git_expert must never resume a prior
+attempt's session.
 
-Found live (design des-c7b9534a7dfd): _resolve_session_id derives a
-deterministic --resume session id from (project_id, design_slug,
+feature_review, found live (design des-c7b9534a7dfd): _resolve_session_id
+derives a deterministic --resume session id from (project_id, design_slug,
 phase_name, model) alone. Every feature_review task for the same design
 hashed to the same id, so a goto-triggered SECOND review resumed the
 FIRST review agent's already-finished Claude Code conversation instead of
@@ -12,6 +13,14 @@ into a needless extra re-decomposition cycle. feature_review's own
 instructions require independent, current-state verification each entry
 ("you are a fresh reviewer ... don't rely on memory"), which a resumed
 session directly defeats.
+
+git_expert, found live (task 03e8b25a): a hard floor
+(verify_git_expert_merged_and_pushed) rejected "done" and the SAME task_id
+got retried twice via resume_feature. Both retries resumed the same CLI
+session and simply re-asserted the first attempt's conclusion ("review
+mode blocks a local merge") without ever re-running `git merge` to check
+whether the actual blocker (a missing .hephaestus/review_approved marker)
+had since been fixed.
 
 Restart (the task's own crashed/orphaned agent continuing the SAME
 in-progress task) is a different, legitimate case that must keep
@@ -96,3 +105,39 @@ class TestFeatureReviewSessionExclusion:
             excluded_types=(),
         )
         assert session_id != ""
+
+
+class TestGitExpertSessionExclusion:
+    def test_git_expert_new_dispatch_gets_no_session_id(self, db_manager, _task):
+        """The bug: without excluded_phases, a retry after a hard-floor
+        rejection would resume the SAME session and just repeat the prior
+        (possibly stale) conclusion instead of re-testing current state."""
+        pipeline = _launch_pipeline(db_manager)
+        session_id = pipeline._resolve_session_id(
+            _task, "phase", "git_expert", "sonnet",
+            excluded_types=(),
+            excluded_phases=("feature_review", "git_expert"),
+        )
+        assert session_id == ""
+
+    def test_restart_path_still_resumes_git_expert(self, db_manager, _task):
+        """Restart (excluded_phases omitted) is the legitimate
+        continuing-the-same-in-progress-task case and must be unaffected."""
+        pipeline = _launch_pipeline(db_manager)
+        session_id = pipeline._resolve_session_id(
+            _task, "phase", "git_expert", "sonnet",
+            excluded_types=(),
+        )
+        assert session_id != ""
+
+
+def test_create_agent_dispatch_excludes_both_feature_review_and_git_expert():
+    """Guards the real call site's constant directly -- a passing test
+    above using a hand-written tuple wouldn't catch someone editing
+    _create_agent_for_task_steps.py's actual excluded_phases back down."""
+    import inspect
+
+    from src.agents import _create_agent_for_task_steps as steps
+
+    src = inspect.getsource(steps)
+    assert 'excluded_phases=("feature_review", "git_expert")' in src

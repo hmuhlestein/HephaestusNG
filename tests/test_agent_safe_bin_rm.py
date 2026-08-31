@@ -83,3 +83,27 @@ class TestAgentSafeBinRm:
 
     def test_script_is_executable(self):
         assert Path(RM_SCRIPT).stat().st_mode & 0o111
+
+    def test_allows_deleting_git_index_lock(self, tmp_path):
+        """config/workflows/*/git_expert.yaml's prompt instructs
+        `rm -f .git/index.lock` as the documented recovery for a crashed
+        git process's stale lock -- must not be blocked."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        lock = git_dir / "index.lock"
+        lock.write_text("stale")
+        result = _run_rm(["-f", ".git/index.lock"], cwd=tmp_path)
+        assert result.returncode == 0
+        assert not lock.exists()
+
+    def test_blocks_other_files_inside_git_dir(self, tmp_path):
+        """The exception is scoped to index.lock specifically, not all of
+        .git/ -- anything else there must still be refused."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        config = git_dir / "config"
+        config.write_text("[core]")
+        result = _run_rm(["-f", ".git/config"], cwd=tmp_path)
+        assert result.returncode != 0
+        assert "BLOCKED" in result.stderr
+        assert config.exists()

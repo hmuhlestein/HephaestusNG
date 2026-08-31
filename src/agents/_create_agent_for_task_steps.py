@@ -305,7 +305,18 @@ async def _prepare_tmux_and_prompt(
     session_id = pipeline._resolve_session_id(
         task, agent_type, phase_name, model,
         excluded_types=("validator", "result_validator", "diagnostic", "arbitration"),
-        excluded_phases=("feature_review",),
+        # feature_review: see _resolve_session_id's own docstring -- a goto
+        # re-entry must not echo the earlier reviewer's stale verdict.
+        # git_expert: same failure mode via a different trigger -- a hard
+        # floor (verify_git_expert_merged_and_pushed) rejects "done" and the
+        # task gets retried on the SAME task_id. Resuming the same CLI
+        # session let the agent just repeat its prior conclusion ("review
+        # mode blocks this locally") without re-testing the actual git
+        # command against current on-disk state. Observed live: task
+        # 03e8b25a retried twice after the underlying block was fixed, and
+        # both retries skipped re-running `git merge` entirely, reusing the
+        # resumed session's already-decided answer instead.
+        excluded_phases=("feature_review", "git_expert"),
     )
 
     initial_message = pipeline._format_initial_message(
