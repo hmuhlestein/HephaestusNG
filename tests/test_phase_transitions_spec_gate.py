@@ -428,3 +428,157 @@ class TestFireSpecGateIfReadyGoto:
             dev_exec = session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
             assert dev_exec.status == "in_progress"
         assert n == 0
+
+
+class TestUngatedPhaseAdvancesFromCompletion:
+    """Regression: an ungated phase had no synchronous advancement at all.
+
+    fire_spec_gate_if_ready returned immediately for any phase not in
+    get_gated_phases(), so a phase like development -- which has no gate
+    artifact to score -- could only ever be advanced by the background
+    sweep. That sweep filters workflows to projects with is_active=True
+    (to stop stale, constantly-retrying workflows from starving the
+    projects in use), so a live pipeline whose project did not hold one of
+    the max_concurrent_projects slots simply stopped.
+
+    Observed live, workflow 72ed4df8: development completed at 00:25 with
+    its work committed, ParentChat was not one of the two active projects,
+    and the pipeline sat there for 8h52m. It advanced 8 seconds after the
+    project was activated, on the very next sweep tick. Gated phases kept
+    moving that whole time -- each one's completion dispatches the next
+    through this path -- which is why the stall always landed on
+    development.
+    """
+
+    @pytest.fixture
+    def gate_db(self, tmp_path, monkeypatch):
+        from src.core.database import DatabaseManager
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        return db
+
+    def _seed(self, db, working_directory):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="t", phases_folder_path="/tmp",
+                    working_directory=str(working_directory), status="active",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-dev", workflow_id="wf-1", order=5,
+                    name="development", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-adv", workflow_id="wf-1", order=6,
+                    name="adversarial_review", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                    status="in_progress",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-dev", raw_description="r", done_definition="d",
+                    status="done", phase_id="phase-dev", workflow_id="wf-1",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_an_ungated_phase_advances_when_its_last_task_completes(
+        self, gate_db, tmp_path
+    ):
+        self._seed(gate_db, tmp_path)
+
+        with gate_db.session_scope() as session:
+            from src.core.database import Task
+
+            task = session.query(Task).filter_by(id="task-dev").first()
+
+            with patch(
+                "src.phases.phase_manager.PhaseManager.mark_phase_complete",
+                return_value={
+                    "action": "goto",
+                    "target_phase": "adversarial_review",
+                    "target_phase_id": "phase-adv",
+                    "reason": "back to review",
+                },
+            ) as mark_complete, patch(
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases",
+                lambda: ("adversarial_review",),
+            ), patch(
+                "src.autopilot.orchestrator.phase_transitions._create_phase_task"
+            ) as mock_create_task:
+                mock_create_task.return_value = True
+                await fire_spec_gate_if_ready(session, task)
+
+        mark_complete.assert_called_once()
+        mock_create_task.assert_called_once()
+        assert mock_create_task.call_args[0][2] == "adversarial_review"
+
+    @pytest.mark.asyncio
+    async def test_an_ungated_phase_does_not_pay_for_gate_artifacts(
+        self, gate_db, tmp_path
+    ):
+        """build_phase_output can run pytest for minutes. It returns {} for a
+        phase with no gate, so the result cannot change -- don't pay for it."""
+        self._seed(gate_db, tmp_path)
+
+        with gate_db.session_scope() as session:
+            from src.core.database import Task
+
+            task = session.query(Task).filter_by(id="task-dev").first()
+
+            with patch(
+                "src.phases.phase_manager.PhaseManager.mark_phase_complete",
+                return_value={"action": "continue"},
+            ) as mark_complete, patch(
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases",
+                lambda: ("adversarial_review",),
+            ), patch(
+                "src.autopilot.spec.build_phase_output"
+            ) as build_output, patch(
+                "src.autopilot.orchestrator.phase_transitions._create_phase_task"
+            ):
+                await fire_spec_gate_if_ready(session, task)
+
+        build_output.assert_not_called()
+        assert mark_complete.call_args.kwargs["phase_output"] == {}
+
+    @pytest.mark.asyncio
+    async def test_a_phase_with_work_still_outstanding_is_left_alone(
+        self, gate_db, tmp_path
+    ):
+        """Unchanged by the ungated path: the phase only fires once every one
+        of its tasks is finished."""
+        self._seed(gate_db, tmp_path)
+
+        with gate_db.session_scope() as session:
+            from src.core.database import Task
+
+            session.add(
+                Task(
+                    id="task-dev-2", raw_description="r", done_definition="d",
+                    status="in_progress", phase_id="phase-dev", workflow_id="wf-1",
+                )
+            )
+            session.flush()
+            task = session.query(Task).filter_by(id="task-dev").first()
+
+            with patch(
+                "src.phases.phase_manager.PhaseManager.mark_phase_complete"
+            ) as mark_complete:
+                await fire_spec_gate_if_ready(session, task)
+
+        mark_complete.assert_not_called()

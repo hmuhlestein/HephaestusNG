@@ -3681,8 +3681,23 @@ async def fire_spec_gate_if_ready(session, task) -> None:
     from src.core.log_context import set_log_context
 
     phase = session.query(Phase).filter_by(id=task.phase_id).first()
-    if not phase or phase.name not in get_gated_phases():
+    if not phase:
         return
+    # An ungated phase gets the same completion-driven advancement, just
+    # without a gate artifact to score: build_phase_output is skipped below
+    # and mark_phase_complete evaluates on the workflow's own evaluation
+    # points instead.
+    #
+    # It used to return here, which left an ungated phase with NO
+    # synchronous advancement at all -- its only path forward was the
+    # background sweep, and that sweep filters to workflows whose project is
+    # is_active. Observed live (workflow 72ed4df8): development completed at
+    # 00:25 with its agent's work committed, ParentChat was not one of the
+    # two active projects, and the pipeline sat there for 8h52m. It advanced
+    # 8 seconds after the project was activated, on the next sweep tick. A
+    # phase's own completion should not depend on which projects happen to
+    # hold an activation slot.
+    gated = phase.name in get_gated_phases()
 
     # An arbitration task completing is NOT a normal phase-completion
     # event. The generic gate below evaluates the phase's own artifacts
@@ -3750,18 +3765,24 @@ async def fire_spec_gate_if_ready(session, task) -> None:
     from pathlib import Path
 
     try:
-        # build_phase_output may run pytest (Enhancement 1: independent
-        # test verification). Run it in a thread pool executor so the
-        # async event loop is not blocked by a potentially multi-minute
-        # subprocess call.
         loop = asyncio.get_event_loop()
-        phase_output = await loop.run_in_executor(
-            None,
-            functools.partial(
-                build_phase_output, phase.name, Path(wf.working_directory),
-                workflow_id=task.workflow_id,
-            ),
-        )
+        if gated:
+            # build_phase_output may run pytest (Enhancement 1: independent
+            # test verification). Run it in a thread pool executor so the
+            # async event loop is not blocked by a potentially multi-minute
+            # subprocess call.
+            phase_output = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    build_phase_output, phase.name, Path(wf.working_directory),
+                    workflow_id=task.workflow_id,
+                ),
+            )
+        else:
+            # Nothing to score: build_phase_output returns {} for a phase with
+            # no gate anyway (see get_gated_phases' docstring), and running it
+            # would pay pytest's cost for a result that cannot change.
+            phase_output = {}
         logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
         pm = PhaseManager(get_default_db_manager(), workflow_id=task.workflow_id)
         # mark_phase_complete can itself run an LLM evaluate() call and,
