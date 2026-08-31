@@ -115,3 +115,64 @@ class TestResolveTmuxTranscriptDir:
         cap = AgentOutputCapture(db_manager, tmux_server=None)
 
         assert cap._resolve_tmux_transcript_dir(agent) is None
+
+    def test_falls_back_to_nested_subdirectory_repo(self, db_manager, tmp_path):
+        """Regression (reported live: git_expert 03b6ac3e showed 1500+
+        uncollapsed blank lines): AutopilotProject.base_dir can be a
+        monorepo umbrella directory (e.g. a "parent" project containing
+        independently git-managed "front-end"/"back-end" subdirectories,
+        each with its own .git, .hephaestus/, and .worktrees/) rather than
+        the actual repo root itself. An agent's worktree in that layout
+        lives under the SUBDIRECTORY's .worktrees/, and
+        _archive_tmux_transcripts (worktree_removal.py) correctly archives
+        to that subdirectory's own .hephaestus/tmux/ -- but the old
+        base_dir-only search never looked there, silently returning None
+        and forcing a fallback to the unfiltered, non-deduplicated
+        .clean.log read in _get_terminated_agent_output instead of the
+        correctly Spacing-pass-collapsed raw transcript."""
+        deleted_wt = tmp_path / "worktree_that_was_removed"
+        project_base = tmp_path / "parent"
+        sub_repo_tmux = project_base / "front-end" / ".hephaestus" / "tmux"
+        sub_repo_tmux.mkdir(parents=True)
+        (sub_repo_tmux / "agent_test.transcript.log").write_text("archived under the sub-repo\n")
+        _seed_task_workflow_project(db_manager, project_base)
+
+        agent = _make_agent(working_directory=str(deleted_wt))
+        cap = AgentOutputCapture(db_manager, tmux_server=None)
+
+        assert cap._resolve_tmux_transcript_dir(agent) == sub_repo_tmux
+
+    def test_falls_back_to_nested_subdirectory_worktree(self, db_manager, tmp_path):
+        """Same monorepo layout, but the agent's own worktree (still
+        present, not yet cleaned up) is what needs to be found -- under
+        the sub-repo's .worktrees/, not base_dir's."""
+        project_base = tmp_path / "parent"
+        sub_repo_wt_tmux = (
+            project_base / "front-end" / ".worktrees" / "wt_feature" / ".hephaestus" / "tmux"
+        )
+        sub_repo_wt_tmux.mkdir(parents=True)
+        (sub_repo_wt_tmux / "agent_test.transcript.log").write_text("live in the sub-repo worktree\n")
+        _seed_task_workflow_project(db_manager, project_base)
+
+        deleted_wt = tmp_path / "worktree_that_was_removed"
+        agent = _make_agent(working_directory=str(deleted_wt))
+        cap = AgentOutputCapture(db_manager, tmux_server=None)
+
+        assert cap._resolve_tmux_transcript_dir(agent) == sub_repo_wt_tmux
+
+    def test_falls_back_to_feature_archive_under_nested_subdirectory(self, db_manager, tmp_path):
+        """Same monorepo layout, for the last-resort feature-archive path."""
+        project_base = tmp_path / "parent"
+        feature_tmux = (
+            project_base / "front-end" / ".hephaestus" / "features"
+            / "20260101_000000_my_feature" / "tmux"
+        )
+        feature_tmux.mkdir(parents=True)
+        (feature_tmux / "agent_test.clean.log").write_text("archived under the sub-repo's feature folder\n")
+        _seed_task_workflow_project(db_manager, project_base)
+
+        deleted_wt = tmp_path / "worktree_that_was_removed"
+        agent = _make_agent(working_directory=str(deleted_wt))
+        cap = AgentOutputCapture(db_manager, tmux_server=None)
+
+        assert cap._resolve_tmux_transcript_dir(agent) == feature_tmux
