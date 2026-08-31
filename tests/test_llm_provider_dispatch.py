@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.llm_config import ModelAssignment, ProviderConfig
-from src.interfaces.langchain_llm_client import (
+from src.interfaces.llm_client import (
     _EMBEDDING_BUILDERS,
     _MODEL_BUILDERS,
     LangChainLLMClient,
@@ -59,6 +59,7 @@ class TestRegistryCompleteness:
             "openrouter",
             "azure_openai",
             "google_ai",
+            "claude_cli",
         }
 
     def test_chat_only_providers_share_the_fastembed_embedding_builder(self):
@@ -87,7 +88,7 @@ class TestCreateModelDispatch:
         out of _create_model -- initialization continues without that model."""
         client = _client_with("openai", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatOpenAI",
+            "src.interfaces.llm_client.ChatOpenAI",
             side_effect=RuntimeError("boom"),
         ):
             assert client._create_model(_assignment("openai")) is None
@@ -97,7 +98,7 @@ class TestPerProviderConstruction:
     def test_openai_passes_configured_temperature(self):
         client = _client_with("openai", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatOpenAI"
+            "src.interfaces.llm_client.ChatOpenAI"
         ) as chat_cls:
             client._create_model(_assignment("openai", model="gpt-4o", temperature=0.4))
         assert chat_cls.call_args.kwargs["temperature"] == 0.4
@@ -106,7 +107,7 @@ class TestPerProviderConstruction:
         """GPT-5 rejects any temperature other than 1.0."""
         client = _client_with("openai", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatOpenAI"
+            "src.interfaces.llm_client.ChatOpenAI"
         ) as chat_cls:
             client._create_model(
                 _assignment("openai", model="gpt-5-nano", temperature=0.4)
@@ -116,7 +117,7 @@ class TestPerProviderConstruction:
     def test_groq_uses_the_groq_class(self):
         client = _client_with("groq", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatGroq"
+            "src.interfaces.llm_client.ChatGroq"
         ) as groq_cls:
             client._create_model(_assignment("groq"))
         assert groq_cls.call_args.kwargs["groq_api_key"] == "k"
@@ -126,7 +127,7 @@ class TestPerProviderConstruction:
             "openrouter", _provider(base_url="https://openrouter.ai/api/v1")
         )
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatOpenAI"
+            "src.interfaces.llm_client.ChatOpenAI"
         ) as chat_cls:
             client._create_model(
                 _assignment("openrouter", openrouter_provider="cerebras")
@@ -139,7 +140,7 @@ class TestPerProviderConstruction:
     def test_openrouter_reasoning_off_disables_rather_than_setting_effort(self):
         client = _client_with("openrouter", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatOpenAI"
+            "src.interfaces.llm_client.ChatOpenAI"
         ) as chat_cls:
             client._create_model(_assignment("openrouter", reasoning_effort="off"))
         extra = chat_cls.call_args.kwargs["model_kwargs"]["extra_body"]
@@ -148,7 +149,7 @@ class TestPerProviderConstruction:
     def test_openrouter_reasoning_effort_is_lowercased(self):
         client = _client_with("openrouter", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatOpenAI"
+            "src.interfaces.llm_client.ChatOpenAI"
         ) as chat_cls:
             client._create_model(_assignment("openrouter", reasoning_effort="HIGH"))
         extra = chat_cls.call_args.kwargs["model_kwargs"]["extra_body"]
@@ -166,7 +167,7 @@ class TestPerProviderConstruction:
             "azure_openai", _provider(base_url="https://x.openai.azure.com")
         )
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.AzureChatOpenAI"
+            "src.interfaces.llm_client.AzureChatOpenAI"
         ) as azure_cls:
             client._create_model(_assignment("azure_openai", model="my-deployment"))
         kwargs = azure_cls.call_args.kwargs
@@ -189,7 +190,7 @@ class TestPerProviderConstruction:
         )
         client = _client_with("azure_openai", provider_config)
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.AzureChatOpenAI"
+            "src.interfaces.llm_client.AzureChatOpenAI"
         ) as azure_cls:
             client._create_model(_assignment("azure_openai", model="dep-1"))
         assert azure_cls.call_args.kwargs["api_version"] == "2025-01-01"
@@ -197,10 +198,29 @@ class TestPerProviderConstruction:
     def test_google_ai_uses_the_gemini_class(self):
         client = _client_with("google_ai", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI"
+            "src.interfaces.llm_client.ChatGoogleGenerativeAI"
         ) as gemini_cls:
             client._create_model(_assignment("google_ai", model="gemini-2.5-flash"))
         assert gemini_cls.call_args.kwargs["model"] == "gemini-2.5-flash"
+
+    def test_claude_cli_needs_no_api_key_and_defaults_to_high_effort(self):
+        # No key in the environment at all -- unlike every other provider,
+        # claude_cli must still build (it shells out to the locally
+        # authenticated CLI, not an API key).
+        client = _client_with("claude_cli", _provider(api_key_env="ABSENT_KEY"))
+        with patch.dict(os.environ, {}, clear=True):
+            model = client._create_model(_assignment("claude_cli", model="sonnet"))
+        assert model.cli_tool == "claude"
+        assert model.cli_model == "sonnet"
+        assert model.effort == "high"
+
+    def test_claude_cli_lowercases_configured_effort(self):
+        client = _client_with("claude_cli", _provider(api_key_env="ABSENT_KEY"))
+        with patch.dict(os.environ, {}, clear=True):
+            model = client._create_model(
+                _assignment("claude_cli", model="sonnet", reasoning_effort="XHIGH")
+            )
+        assert model.effort == "xhigh"
 
 
 class TestEmbeddingDispatch:
@@ -215,7 +235,7 @@ class TestEmbeddingDispatch:
     def test_openai_embeddings_selected(self):
         config = self._config("openai", {"openai": _provider()})
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
-            "src.interfaces.langchain_llm_client.OpenAIEmbeddings"
+            "src.interfaces.llm_client.OpenAIEmbeddings"
         ) as embeddings_cls:
             client = LangChainLLMClient(config)
         embeddings_cls.assert_called_once_with(

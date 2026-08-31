@@ -20,7 +20,7 @@ from src.core.llm_config import (
     ProviderConfig,
     SimpleConfig,
 )
-from src.interfaces.langchain_llm_client import ComponentType, LangChainLLMClient
+from src.interfaces.llm_client import ComponentType, LangChainLLMClient
 from src.interfaces.multi_provider_llm import MultiProviderLLM
 
 
@@ -194,10 +194,10 @@ class TestLangChainLLMClient:
     def test_initialize_models(self, mock_config):
         """Test model initialization."""
         with (
-            patch("src.interfaces.langchain_llm_client.ChatOpenAI"),
-            patch("src.interfaces.langchain_llm_client.ChatGroq"),
+            patch("src.interfaces.llm_client.ChatOpenAI"),
+            patch("src.interfaces.llm_client.ChatGroq"),
             patch(
-                "src.interfaces.langchain_llm_client.OpenAIEmbeddings"
+                "src.interfaces.llm_client.OpenAIEmbeddings"
             ) as MockEmbeddings,
         ):
             client = LangChainLLMClient(mock_config)
@@ -221,8 +221,8 @@ class TestLangChainLLMClient:
             },
         ):
             with (
-                patch("src.interfaces.langchain_llm_client.ChatOpenAI"),
-                patch("src.interfaces.langchain_llm_client.ChatGroq"),
+                patch("src.interfaces.llm_client.ChatOpenAI"),
+                patch("src.interfaces.llm_client.ChatGroq"),
             ):
                 client = LangChainLLMClient(mock_config)
 
@@ -254,7 +254,7 @@ class TestLangChainLLMClient:
             mock_embeddings.aembed_query.return_value = [0.1] * 1536
 
             with patch(
-                "src.interfaces.langchain_llm_client.OpenAIEmbeddings",
+                "src.interfaces.llm_client.OpenAIEmbeddings",
                 return_value=mock_embeddings,
             ):
                 client = LangChainLLMClient(mock_config)
@@ -389,7 +389,7 @@ class TestMultiProviderLLM:
         (not a mock) -- a mock with spec= wouldn't have caught the original
         signature mismatch, but calling the actual implementation would
         have raised it immediately."""
-        from src.interfaces.langchain_llm_client import LangChainLLMClient
+        from src.interfaces.llm_client import LangChainLLMClient
 
         config_file = tmp_path / "test.yaml"
         config_file.write_text("llm: {}")
@@ -483,7 +483,7 @@ llm:
         assert llm_config.embedding_provider == "azure_openai"
 
     @patch.dict(os.environ, {"AZURE_OPENAI_API_KEY": "test-azure-key"})
-    @patch("src.interfaces.langchain_llm_client.AzureChatOpenAI")
+    @patch("src.interfaces.llm_client.AzureChatOpenAI")
     def test_azure_model_initialization(self, mock_azure_chat, tmp_path):
         """Test Azure OpenAI model initialization with correct parameters."""
         config_file = tmp_path / "azure_config.yaml"
@@ -517,7 +517,7 @@ llm:
         assert call_kwargs["max_tokens"] == 2000
 
     @patch.dict(os.environ, {"AZURE_OPENAI_API_KEY": "test-azure-key"})
-    @patch("src.interfaces.langchain_llm_client.AzureOpenAIEmbeddings")
+    @patch("src.interfaces.llm_client.AzureOpenAIEmbeddings")
     def test_azure_embeddings_initialization(self, mock_azure_embeddings, tmp_path):
         """Test Azure OpenAI embeddings initialization."""
         config_file = tmp_path / "azure_config.yaml"
@@ -580,7 +580,7 @@ llm:
         assert llm_config.embedding_model == "models/embedding-001"
 
     @patch.dict(os.environ, {"GOOGLE_API_KEY": "test-google-key"})
-    @patch("src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI")
+    @patch("src.interfaces.llm_client.ChatGoogleGenerativeAI")
     def test_google_model_initialization(self, mock_google_chat, tmp_path):
         """Test Google AI model initialization with correct parameters."""
         config_file = tmp_path / "google_config.yaml"
@@ -610,7 +610,7 @@ llm:
         assert call_kwargs["max_tokens"] == 2000
 
     @patch.dict(os.environ, {"GOOGLE_API_KEY": "test-google-key"})
-    @patch("src.interfaces.langchain_llm_client.GoogleGenerativeAIEmbeddings")
+    @patch("src.interfaces.llm_client.GoogleGenerativeAIEmbeddings")
     def test_google_embeddings_initialization(self, mock_google_embeddings, tmp_path):
         """Test Google AI embeddings initialization."""
         config_file = tmp_path / "google_config.yaml"
@@ -645,9 +645,9 @@ class TestMultiProviderIntegration:
             "OPENAI_API_KEY": "openai-key",
         },
     )
-    @patch("src.interfaces.langchain_llm_client.AzureChatOpenAI")
-    @patch("src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI")
-    @patch("src.interfaces.langchain_llm_client.OpenAIEmbeddings")
+    @patch("src.interfaces.llm_client.AzureChatOpenAI")
+    @patch("src.interfaces.llm_client.ChatGoogleGenerativeAI")
+    @patch("src.interfaces.llm_client.OpenAIEmbeddings")
     def test_mixed_provider_routing(
         self, mock_openai_emb, mock_google, mock_azure, tmp_path
     ):

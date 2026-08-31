@@ -1,7 +1,7 @@
 """Regression: LLMConfig.validate() used to hard-fail startup (raising
 ValueError, which run_server.py turns into sys.exit(1)) whenever
 OPENROUTER_API_KEY was unset and llm_provider == "openrouter" -- even
-though langchain_llm_client.py's _create_model already has a graceful
+though llm_client.py's _create_model already has a graceful
 fallback for exactly this case: it degrades to CLIFallbackChatModel
 (drives the configured CLI tool directly) instead of calling OpenRouter.
 That runtime fallback exists specifically so the system can run fully

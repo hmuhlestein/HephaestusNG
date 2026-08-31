@@ -427,7 +427,7 @@ repair_agent_instructions: |-
   9. WRITE repair_report.md summarizing actions taken
   10. Mark your task done when ALL tasks are resolved
 
-# LLM-analysis prompts built by src/interfaces/langchain_llm_client.py
+# LLM-analysis prompts built by src/interfaces/llm_client.py
 # (LangChainLLMClient) -- sent to the LLM for design-complexity
 # classification, task enrichment, and ticket-clarification arbitration
 # (fallback path only; the primary template is src/prompts/ticket_clarification_prompt.md).

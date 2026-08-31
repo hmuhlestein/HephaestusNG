@@ -156,6 +156,18 @@ def _build_google_ai_model(assignment: "ModelAssignment", provider_config, api_k
     )
 
 
+def _build_claude_cli_model(assignment: "ModelAssignment", provider_config, api_key: str):
+    # No API key involved -- routes through the locally authenticated
+    # Claude Code CLI (billed against the existing Claude subscription).
+    # temperature/max_tokens don't apply: CLIFallbackChatModel just sends
+    # the flattened prompt via `claude -p --model <model> --effort <level>`.
+    # reasoning_effort maps directly to the CLI's --effort flag (low/medium/
+    # high/xhigh/max); defaults to "high" when unset.
+    effort = (assignment.reasoning_effort or "high").lower()
+    logger.info(f"Creating claude_cli model: {assignment.model} (effort: {effort})")
+    return CLIFallbackChatModel("claude", assignment.model, effort=effort)
+
+
 # Timeout for a single CLIFallbackChatModel.ainvoke() call -- the fallback
 # pays full CLI process startup on every call (no persistent session), so
 # this needs more headroom than a direct API call; matches the existing
@@ -177,15 +189,18 @@ class _CLIFallbackResponse:
 
 
 class CLIFallbackChatModel:
-    """Stand-in chat model used when a provider's API key is missing --
-    shells out to the locally authenticated CLI tool for a single non-
-    interactive request/response instead of the caller falling straight to
-    its own dumb static default (every LLMProviderInterface method already
-    has one, e.g. "medium" complexity or a canned task-enrichment dict --
-    this makes that path an actual LLM answer when there's no API key
-    configured, not a crash: on subprocess failure/timeout this raises,
-    which every existing caller already catches and handles the same way
-    it handles a real API error).
+    """Shells out to the locally authenticated CLI tool for a single non-
+    interactive request/response. Used two ways: (1) as the "claude_cli"
+    provider (see _build_claude_cli_model below), a deliberate choice to
+    route a component through the existing Claude subscription instead of
+    a metered API key; (2) as an automatic fallback when a configured
+    provider's API key is missing, instead of the caller falling straight
+    to its own dumb static default (every LLMProviderInterface method
+    already has one, e.g. "medium" complexity or a canned task-enrichment
+    dict -- this makes that path an actual LLM answer when there's no API
+    key configured, not a crash: on subprocess failure/timeout this
+    raises, which every existing caller already catches and handles the
+    same way it handles a real API error).
 
     Only implements .ainvoke(messages), the entire surface LangChainLLMClient
     touches on a model instance -- not a langchain BaseChatModel subclass,
@@ -193,9 +208,10 @@ class CLIFallbackChatModel:
     interface.
     """
 
-    def __init__(self, cli_tool: str, cli_model: str):
+    def __init__(self, cli_tool: str, cli_model: str, effort: Optional[str] = "high"):
         self.cli_tool = cli_tool
         self.cli_model = cli_model
+        self.effort = effort
 
     @staticmethod
     def _flatten_messages(messages: list) -> str:
@@ -235,8 +251,10 @@ class CLIFallbackChatModel:
             )
 
         prompt = self._flatten_messages(messages)
+        effort_args = ["--effort", self.effort] if self.effort else []
         proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", "--model", self.cli_model, "--dangerously-skip-permissions",
+            "claude", "-p", "--model", self.cli_model, *effort_args,
+            "--dangerously-skip-permissions",
             "--mcp-config", self._empty_mcp_config_path(), "--strict-mcp-config",
             # cwd=tempdir, not this process's own cwd: the backend runs from
             # HephaestusNG's own repo root, and Claude Code auto-loads
@@ -280,6 +298,7 @@ _MODEL_BUILDERS = {
     "openrouter": _build_openrouter_model,
     "azure_openai": _build_azure_openai_model,
     "google_ai": _build_google_ai_model,
+    "claude_cli": _build_claude_cli_model,
 }
 
 
@@ -426,8 +445,10 @@ class LangChainLLMClient:
             logger.error(f"Provider {provider} not configured")
             return None
 
-        api_key = os.getenv(provider_config.api_key_env)
-        if not api_key:
+        # claude_cli needs no API key -- it shells out to the locally
+        # authenticated Claude Code CLI (existing Claude subscription).
+        api_key = None if provider == "claude_cli" else os.getenv(provider_config.api_key_env)
+        if not api_key and provider != "claude_cli":
             if provider == "openrouter":
                 from src.core.llm_config import get_config
 

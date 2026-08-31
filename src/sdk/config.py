@@ -218,7 +218,7 @@ class HephaestusConfig:
         logger = logging.getLogger(__name__)
 
         def _missing_key(provider: str, env_var: str) -> None:
-            # CLIFallbackChatModel (langchain_llm_client.py) shells out to
+            # CLIFallbackChatModel (llm_client.py) shells out to
             # default_cli_tool for a real LLM answer instead of every
             # caller falling back to its own static default -- but it only
             # implements Claude's non-interactive `-p` mode today, so it

@@ -277,7 +277,7 @@ class TestAutopilotAPI:
 # Mocking LLM responses
 @pytest.fixture
 def mock_llm():
-    with patch("src.interfaces.langchain_llm_client.LangChainLLMClient") as mock:
+    with patch("src.interfaces.llm_client.LangChainLLMClient") as mock:
         instance = MagicMock()
         instance.generate.return_value = "Mocked LLM response"
         mock.return_value = instance
