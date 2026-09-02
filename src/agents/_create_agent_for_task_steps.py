@@ -423,7 +423,30 @@ async def _send_launch_command_and_record_agent(
     pane.send_keys(f"echo -- {shlex.quote(f'PHASE: {phase_order}. {phase_name}')}", enter=True)
     pane.send_keys(f"echo -- {shlex.quote(f'TASK: {task_desc}')}", enter=True)
     pane.send_keys('echo "="', enter=True)
-    await asyncio.sleep(0.3)
+
+    # A flat sleep here only ever guessed how long the shell needed to
+    # finish processing the five echoes above before it's safe to send the
+    # real launch line -- env-var exports get an explicit readback-and-
+    # retry for the identical race (_export_env_vars_and_verify's own
+    # docstring: "_wait_for_shell_ready reduces the startup race... but
+    # doesn't eliminate it"), but a phase with no env_vars to export skips
+    # that entirely and this sleep was the ONLY thing standing between "the
+    # shell might still be mid-render" and shipping launch_result.command
+    # -- the single highest-value line to get right, since a shell that
+    # swallows/corrupts its first few bytes here (the same corruption class
+    # already observed live for an export line, see _wait_for_shell_ready's
+    # docstring) can silently launch `claude` without its
+    # AGENT_SAFE_BIN_DIR PATH prefix, or fail in a way neither
+    # _wait_for_cli_ready's ready-pattern poll nor _detect_launch_failure's
+    # generic substring check reliably catches. Reused, not reinvented:
+    # _wait_for_shell_ready's two-consecutive-stable-captures poll is
+    # exactly "is the pane done processing what I already sent and idle
+    # again" regardless of whether that pane is brand new or, as here, has
+    # already handled five commands -- offloaded to a thread since it's a
+    # blocking time.sleep loop, same as _prepare_launch_environment's own
+    # call to it.
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, pipeline._wait_for_shell_ready, pane)
 
     # Send the launch command
     pane.send_keys(launch_result.command, enter=True)
