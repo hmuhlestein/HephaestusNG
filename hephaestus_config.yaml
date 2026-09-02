@@ -70,8 +70,15 @@ llm:
 agents:
   default_cli_tool: claude
   cli_model: sonnet
-  default_fallback_cli_tool: pi
-  default_fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+  # pi removed as the secondary/fallback CLI tool. Both keys read via
+  # Config.get(...), which returns None for an absent/commented key --
+  # every call site (launch_pipeline.py, mechanical_recovery.py,
+  # phase_transitions.py, schema_migrations.py) already guards on
+  # `if cfg.agents.default_fallback_cli_tool:`, so leaving these unset
+  # cleanly disables the CLI-tool-level fallback/escalation path rather
+  # than erroring. Set both to re-enable with a different tool.
+  # default_fallback_cli_tool:
+  # default_fallback_cli_model:
   cli_model_fallback_wait_seconds: 120
   # cli_model_fallback/secondary_cli_model_fallback feed CLIAgentInterface.
   # fallback_model's in-session "agent is frozen, switch models" recovery --
@@ -86,14 +93,18 @@ agents:
   # which resolves bare aliases like "sonnet" via amazon-bedrock, unconfigured
   # here) fails immediately with no usable credentials. Confirmed live: task
   # a4863f19 lost ~10 minutes to exactly this mismatch before this fix.
-  secondary_cli_model_fallback: Qwen3.8-27B-UD-Q4_K_XL.gguf
+  # secondary_cli_model_fallback was pi's own in-session escalation target
+  # (Qwen served locally through pi) -- vestigial now that
+  # default_fallback_cli_tool above is unset. Re-add alongside it if a
+  # secondary tier comes back.
+  # secondary_cli_model_fallback: Qwen3.8-27B-UD-Q4_K_XL.gguf
   # The local Qwen model has only a single inference slot -- a second agent
   # dispatched onto it just sits frozen waiting its turn instead of doing
   # anything. Cap it at 1 so the queue's concurrency gate (resolve_fallback_
   # model, same role-based lookup as fallback_model above) won't pile a
   # second dispatch onto it.
   cli_model_concurrency_limits:
-    "pi/Qwen3.8-27B-UD-Q4_K_XL.gguf": 1
+    # "pi/Qwen3.8-27B-UD-Q4_K_XL.gguf": 1
   tmux_session_prefix: agent
   health_check_interval: 60
   max_health_failures: 3
