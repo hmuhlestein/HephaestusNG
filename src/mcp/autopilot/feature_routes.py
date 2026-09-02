@@ -302,6 +302,14 @@ async def resume_feature(feature_id: str):
             # and reads as an ongoing problem even after the user has
             # manually resolved it and resumed.
             wf.status_reason = None
+            # The phase whose retry cap failure took the workflow down is
+            # itself invisible to every dispatch case once its own
+            # PhaseExecution is "failed" (see reset_failed_phase_executions'
+            # own docstring) -- reset it or the phase can run to completion
+            # again and again without this workflow/feature ever being able
+            # to derive "completed".
+            from src.autopilot.orchestrator.engine_client import reset_failed_phase_executions
+            reset_failed_phase_executions(workflow_id, session=db)
 
         # Recover blocked/failed tasks, plus any task still marked
         # assigned/in_progress whose agent was terminated (errored/orphaned

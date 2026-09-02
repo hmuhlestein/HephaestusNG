@@ -15,6 +15,7 @@ from src.autopilot.orchestrator.state import (
 from src.core.database import (
     Agent,
     Phase,
+    PhaseExecution,
     Task,
     Workflow,
     get_db,
@@ -401,6 +402,72 @@ def resume_workflow(
             exc_info=True,
         )
         return False
+
+
+def reset_failed_phase_executions(workflow_id: str, *, session=None) -> int:
+    """Reset every "failed" PhaseExecution row for a workflow back to
+    "pending", clearing completed_at/started_at/task_creation_claimed_at.
+
+    A phase's own PhaseExecution is marked "failed" (distinct from its
+    tasks' status) only when its retry cap is exhausted -- see
+    _phase_case_steps.py's "all failed tasks past retry cap" handling, which
+    also fails the WORKFLOW at the same time. Every un-fail site (resume_
+    feature, _resume_stuck_workflow_tasks) reset the workflow's and tasks'
+    status back to active/pending, but never this row -- and nothing else
+    in the whole sweep dispatch (_case_start_first_phase/_case_in_progress_
+    no_tasks/_case_in_progress_complete/_case_completed_with_successor) ever
+    even LOOKS at a "failed"-status phase; each one filters phase_statuses to
+    exactly "pending"/"in_progress"/"completed". A "failed" execution left in
+    place is invisible to phase advancement, permanently: the phase can still
+    get new tasks dispatched directly through the goto/retry machinery (which
+    doesn't check PhaseExecution.status at all), and those can keep
+    completing successfully for the rest of the pipeline -- but the row
+    itself never becomes "completed", so derive_workflow_status/derive_
+    feature_status's phase-completeness check (every PhaseExecution must be
+    "completed" or "skipped") can never derive "completed" again, no matter
+    how much real work finishes afterward.
+
+    Observed live: workflow 72ed4df8's development phase failed its retry
+    cap once early on; resuming un-failed the workflow and its tasks, and
+    development went on to run and complete several more times over the
+    following day, all the way through deploy -- while its own
+    PhaseExecution sat "failed" with the original attempt's timestamps the
+    entire time, permanently blocking the feature from ever showing
+    "completed" despite the pipeline genuinely finishing.
+
+    session: reuse an existing session/transaction (caller commits) instead
+    of opening and committing a new one -- same convention as
+    terminate_agent/resume_workflow above.
+    """
+
+    def _do_reset(s):
+        rows = (
+            s.query(PhaseExecution)
+            .join(Phase, PhaseExecution.phase_id == Phase.id)
+            .filter(Phase.workflow_id == workflow_id, PhaseExecution.status == "failed")
+            .all()
+        )
+        for row in rows:
+            row.status = "pending"
+            row.completed_at = None
+            row.started_at = None
+            row.task_creation_claimed_at = None
+        return len(rows)
+
+    if session is not None:
+        return _do_reset(session)
+
+    try:
+        with get_db() as s:
+            n = _do_reset(s)
+            s.commit()
+            return n
+    except Exception as e:
+        logger.error(
+            f"[reset_failed_phase_executions] Failed for {workflow_id[:8] if workflow_id else '?'}: {e}",
+            exc_info=True,
+        )
+        return 0
 
 
 def pause_workflow_direct(workflow_id: str, reason: str = "system") -> bool:
