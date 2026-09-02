@@ -382,6 +382,41 @@ class TestFireSpecGateIfReadyGoto:
             assert n >= 1
 
     @pytest.mark.asyncio
+    async def test_goto_reset_clears_a_stale_failed_execution_with_no_live_task(self, gate_db, tmp_path):
+        """Root-cause regression: a "failed" PhaseExecution from an earlier
+        attempt is a permanent tombstone for derive_workflow_status unless
+        something resets it -- mark_phase_complete's idempotency guard only
+        checks for "completed", so a fresh task under a "failed" phase can
+        genuinely succeed on retry, but nothing else ever flips the
+        execution off "failed". Observed live: workflow 72ed4df8's
+        development phase (order 4 in this fixture) failed once, then
+        succeeded on four later goto-retries over two days, with its
+        PhaseExecution stuck "failed" the whole time -- silently blocking
+        the feature (and the next one queued behind it) from completing.
+        """
+        from src.autopilot.orchestrator.phase_transitions import reset_stale_executions_on_goto
+        from src.core.database import PhaseExecution
+
+        self._seed(gate_db, tmp_path)
+        with gate_db.session_scope() as session:
+            adv_exec = session.query(PhaseExecution).filter_by(phase_id="phase-adv").first()
+            adv_exec.status = "completed"
+            session.add(PhaseExecution(
+                id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                status="failed",
+            ))
+
+        with gate_db.session_scope() as session:
+            n = reset_stale_executions_on_goto(
+                session, "wf-1", 4, exclude_phase_id="phase-adv",
+            )
+
+        with gate_db.session_scope() as session:
+            dev_exec = session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
+            assert dev_exec.status == "pending"
+            assert n >= 1
+
+    @pytest.mark.asyncio
     async def test_goto_reset_does_not_clobber_a_phase_with_a_live_task(self, gate_db, tmp_path):
         """Root-cause regression: a REDUNDANT goto evaluation of the same
         already-handled completion (mark_phase_complete entered twice for
