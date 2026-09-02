@@ -2624,6 +2624,91 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.status == "in_progress"
 
+    def test_repair_backfills_started_at_from_the_latest_task_when_unset(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: this repair's started_at write was migrated to
+        transition_phase_execution (Step 3 of docs/designs/
+        PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md), which defaults
+        started_at to utc_now() for every X -> in_progress transition --
+        wrong here specifically. This site's own real behavior is
+        "backfill from the latest task's created_at if started_at isn't
+        already set", passed explicitly via extra_fields to override that
+        default. No existing test checked started_at at all before this."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.phase_transitions import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            _clear_stale_task_creation_claim,
+        )
+        from src.core.database import PhaseExecution
+
+        latest_created_at = datetime.utcnow() - timedelta(minutes=3)
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-old", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="done",
+                created_at=datetime.utcnow() - timedelta(minutes=20),
+            ))
+            session.add(Task(
+                id="task-latest", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="done",
+                created_at=latest_created_at,
+            ))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "completed"
+            execution.started_at = None
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            result = _clear_stale_task_creation_claim(session, "phase-1")
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at == latest_created_at
+
+    def test_repair_leaves_an_already_set_started_at_untouched(
+        self, db_manager, sample_workflow
+    ):
+        """The other half of the same real behavior: unlike
+        _create_phase_task/_start_next_phase (always stamp "now"), this
+        site must NOT overwrite an already-set started_at with the latest
+        task's created_at -- it only backfills when unset."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.phase_transitions import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            _clear_stale_task_creation_claim,
+        )
+        from src.core.database import PhaseExecution
+
+        original_started_at = datetime.utcnow() - timedelta(hours=1)
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-latest", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="done",
+                created_at=datetime.utcnow() - timedelta(minutes=3),
+            ))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "completed"
+            execution.started_at = original_started_at
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            result = _clear_stale_task_creation_claim(session, "phase-1")
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at == original_started_at
+
 
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check

@@ -153,8 +153,21 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
                 .first()
             )
             if latest_task:
-                execution.status = "in_progress"
-                execution.started_at = execution.started_at or latest_task.created_at
+                # transition_phase_execution's atomic UPDATE replaces the
+                # direct mutation here (Step 3 of docs/designs/
+                # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md). started_at is
+                # passed explicitly via extra_fields, NOT left to
+                # _FIELD_RESETS's started_at="now" default -- this site's
+                # real behavior is "leave it if already set, otherwise
+                # backfill from the latest task's created_at", a third,
+                # distinct semantic that reopen_phase_execution's shared
+                # helper doesn't even model (this function never called it
+                # to begin with).
+                transition_phase_execution(
+                    db, phase_id, "in_progress",
+                    reason="_clear_stale_task_creation_claim",
+                    extra_fields={"started_at": execution.started_at or latest_task.created_at},
+                )
     if cleared:
         db.commit()
     return bool(cleared)
@@ -1661,7 +1674,23 @@ def transition_phase_execution(
     concurrent callers could otherwise both read the same from_status,
     both see their transition as valid, and both write.
     """
-    execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+    # populate_existing() matters, not just style: this project's sessions
+    # run with expire_on_commit=False, and several existing atomic claim/
+    # release UPDATEs elsewhere in this file use synchronize_session=False
+    # -- so if this PhaseExecution was already loaded into the session's
+    # identity map before one of those ran (e.g. via _get_phase_statuses,
+    # which most callers read first), a plain query would return that same
+    # stale in-memory object instead of a fresh one, and from_status below
+    # would reflect the pre-update value. The atomic UPDATE below still
+    # protects against an incorrect WRITE either way (its own WHERE
+    # status=:from_status clause queries the real row, not this object) --
+    # a stale from_status can only make _VALID_TRANSITIONS wrongly REJECT
+    # a transition the row's real current status would actually allow, a
+    # silently missed legitimate transition rather than a corrupted one.
+    # See _release_phase_task_creation_claim's own docstring for the exact
+    # live incident (test_maybe_retry_failed_tasks_is_claim_protected) this
+    # same populate_existing() pattern was added to fix there.
+    execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
     if execution is None:
         raise ValueError(f"No PhaseExecution for phase {phase_id}")
     from_status = execution.status
@@ -1807,15 +1836,29 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     # execution stuck "failed" must still reopen once its guarded task
     # exists, or it stays invisible to every _advance_phases dispatch case.
     if execution.status in ("pending", "completed", "skipped", "failed"):
-        execution.status = "in_progress"
         earliest_task = (
             db.query(Task)
             .filter_by(phase_id=phase_id)
             .order_by(Task.created_at.asc())
             .first()
         )
-        execution.started_at = earliest_task.created_at if earliest_task else utc_now()
-    execution.task_creation_claimed_at = None
+        # transition_phase_execution's atomic UPDATE replaces the direct
+        # mutation here (Step 3 of docs/designs/
+        # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md). started_at is passed
+        # explicitly via extra_fields, NOT left to _FIELD_RESETS's
+        # started_at="now" default -- see this function's own docstring
+        # above for why "now" is specifically wrong here (a documented
+        # live duplicate-task incident). task_creation_claimed_at=None
+        # comes from _FIELD_RESETS, same as every other X -> in_progress
+        # entry.
+        started_at = earliest_task.created_at if earliest_task else utc_now()
+        transition_phase_execution(
+            db, phase_id, "in_progress",
+            reason="_release_phase_task_creation_claim",
+            extra_fields={"started_at": started_at},
+        )
+    else:
+        execution.task_creation_claimed_at = None
     db.commit()
 
 
