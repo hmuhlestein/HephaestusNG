@@ -48,8 +48,8 @@ from src.autopilot.orchestrator.features import (
 )
 from src.autopilot.orchestrator.human_escalation import prompt_human
 from src.autopilot.orchestrator.phase_transitions import POLL_INTERVAL, _negotiate_validation_fix, _resume_stuck_workflow_tasks, _try_advance_phases
-from src.autopilot.orchestrator.pipeline_logger import OrchestratorLogger
-from src.autopilot.orchestrator.pipeline_logger import (
+from src.autopilot.orchestrator.pipeline_runtime import OrchestratorLogger
+from src.autopilot.orchestrator.pipeline_runtime import (
     _resync_pipeline_registry as _resync_pipeline_registry,
 )
 from src.autopilot.orchestrator.policy import (

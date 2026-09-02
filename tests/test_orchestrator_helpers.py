@@ -5667,6 +5667,156 @@ class TestResyncPipelineRegistry:
         finally:
             orchestrator._stop_events.clear()
 
+    @pytest.mark.asyncio
+    async def test_restarts_an_is_active_project_with_no_marker_and_pending_work(self):
+        """The marker-based loop above only sees projects whose persisted
+        "was running" state survived. is_active=True is a separate,
+        longer-lived signal a marker can get out of sync with (several
+        legitimate stop() call sites clear the marker without touching
+        is_active) -- a project stuck in that gap must still get its
+        pipeline restarted, not sit idle indefinitely with real work
+        queued behind it."""
+        from unittest.mock import AsyncMock
+
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        mock_service = Mock()
+        mock_service.start = AsyncMock(return_value={"started": True})
+        mock_registry = Mock()
+        mock_registry.get.return_value = None
+        mock_registry.get_or_create.return_value = mock_service
+
+        fake_project = Mock(spec=AutopilotProject)
+        fake_project.id = "proj-idle"
+        fake_project.base_dir = "/tmp/proj-idle"
+
+        mock_db = MagicMock()
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+
+        def _query(model):
+            q = MagicMock()
+            if model is AutopilotProject:
+                q.filter_by.return_value.all.return_value = [fake_project]
+            elif model is AutopilotDesign:
+                q.filter.return_value.first.return_value = Mock()  # has pending work
+            return q
+
+        mock_db.query.side_effect = _query
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=[],
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry), patch(
+            "src.core.database.get_db", return_value=mock_db
+        ):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 1
+        mock_registry.get_or_create.assert_called_once_with("proj-idle")
+        mock_service.start.assert_called_once_with(project_path="/tmp/proj-idle")
+
+    @pytest.mark.asyncio
+    async def test_leaves_an_is_active_project_alone_with_no_pending_work(self):
+        """is_active with an empty design queue is legitimate idle, not a
+        self-heal target -- restarting it would just spin up a pipeline
+        with nothing to do."""
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        mock_registry = Mock()
+        mock_registry.get.return_value = None
+        mock_registry.get_or_create = Mock(side_effect=AssertionError("must not be called"))
+
+        fake_project = Mock(spec=AutopilotProject)
+        fake_project.id = "proj-idle"
+        fake_project.base_dir = "/tmp/proj-idle"
+
+        mock_db = MagicMock()
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+
+        def _query(model):
+            q = MagicMock()
+            if model is AutopilotProject:
+                q.filter_by.return_value.all.return_value = [fake_project]
+            elif model is AutopilotDesign:
+                q.filter.return_value.first.return_value = None  # no pending work
+            return q
+
+        mock_db.query.side_effect = _query
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=[],
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry), patch(
+            "src.core.database.get_db", return_value=mock_db
+        ):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 0
+        mock_registry.get_or_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_an_idle_active_project_with_a_stop_already_in_flight(self):
+        """Same _should_stop() guard as the marker-based loop -- a project
+        mid pause_for_restart()/stop() must not be raced by this second
+        net either."""
+        from src.autopilot import orchestrator
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        orchestrator._stop_events.clear()
+        try:
+            stop_event = asyncio.Event()
+            stop_event.set()
+            orchestrator._stop_events["proj-idle"] = stop_event
+
+            mock_registry = Mock()
+            mock_registry.get.return_value = None
+            mock_registry.get_or_create = Mock(side_effect=AssertionError("must not be called"))
+
+            fake_project = Mock(spec=AutopilotProject)
+            fake_project.id = "proj-idle"
+            fake_project.base_dir = "/tmp/proj-idle"
+
+            mock_db = MagicMock()
+            mock_db.__enter__ = MagicMock(return_value=mock_db)
+            mock_db.__exit__ = MagicMock(return_value=False)
+
+            def _query(model):
+                q = MagicMock()
+                if model is AutopilotProject:
+                    q.filter_by.return_value.all.return_value = [fake_project]
+                elif model is AutopilotDesign:
+                    q.filter.return_value.first.return_value = Mock()
+                return q
+
+            mock_db.query.side_effect = _query
+
+            with patch(
+                "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+                return_value=[],
+            ), patch("src.autopilot.service.get_registry", return_value=mock_registry), patch(
+                "src.core.database.get_db", return_value=mock_db
+            ):
+                loop = asyncio.get_running_loop()
+                resumed = await loop.run_in_executor(
+                    None, _resync_pipeline_registry, MagicMock(), loop
+                )
+
+            assert resumed == 0
+            mock_registry.get_or_create.assert_not_called()
+        finally:
+            orchestrator._stop_events.clear()
+
 
 class TestRecoverAbandonedWorkflowsMissingWorktree:
     """_recover_abandoned_workflows_missing_worktree: automated recovery for
