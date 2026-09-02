@@ -429,6 +429,60 @@ class TestFireSpecGateIfReadyGoto:
             assert dev_exec.status == "in_progress"
         assert n == 0
 
+    @pytest.mark.asyncio
+    async def test_goto_terminates_a_live_agent_in_a_strictly_later_phase(self, gate_db, tmp_path):
+        """A goto rewinding past a still-running later phase must kill that
+        phase's agent (it is validating/reviewing code about to be
+        rewritten, and shares the feature worktree with the incoming
+        target-phase agent) -- unlike the target phase's own live task,
+        which is left alone by the test above.
+
+        Observed live: a qa_validation agent (order 9) ran concurrently
+        with a development agent (order 5) for ~an hour on workflow
+        72ed4df8 after a goto-to-development.
+        """
+        from src.autopilot.orchestrator.phase_transitions import reset_stale_executions_on_goto
+        from src.core.database import Agent, Phase, PhaseExecution, Task
+
+        self._seed(gate_db, tmp_path)
+        with gate_db.session_scope() as session:
+            # Source phase (adversarial_review, order 6) just fired the goto.
+            session.query(PhaseExecution).filter_by(phase_id="phase-adv").first().status = "completed"
+            # A strictly-later phase than the target: qa_validation, order 9.
+            session.add(Phase(
+                id="phase-qa", workflow_id="wf-1", order=9,
+                name="qa_validation", description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-qa", phase_id="phase-qa", workflow_execution_id="wf-1",
+                status="in_progress",
+            ))
+            session.add(Agent(
+                id="agent-qa", system_prompt="t", status="working",
+                cli_type="pi", current_task_id="task-qa-live",
+            ))
+            session.add(Task(
+                id="task-qa-live", raw_description="r", done_definition="d",
+                status="in_progress", phase_id="phase-qa", workflow_id="wf-1",
+                assigned_agent_id="agent-qa",
+            ))
+
+        # Goto from adversarial_review (order 6) back to development (order 4).
+        with gate_db.session_scope() as session:
+            reset_stale_executions_on_goto(
+                session, "wf-1", 4, exclude_phase_id="phase-adv",
+            )
+
+        with gate_db.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="agent-qa").first()
+            assert agent.status == "terminated"
+            assert agent.current_task_id is None
+            qa_task = session.query(Task).filter_by(id="task-qa-live").first()
+            assert qa_task.status == "pending"
+            assert qa_task.assigned_agent_id is None
+            qa_exec = session.query(PhaseExecution).filter_by(phase_id="phase-qa").first()
+            assert qa_exec.status == "pending"
+
 
 class TestUngatedPhaseAdvancesFromCompletion:
     """Regression: an ungated phase had no synchronous advancement at all.
