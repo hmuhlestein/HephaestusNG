@@ -32,6 +32,7 @@ from src.core.database import (
 from src.mcp.autopilot._shared import _extract_pr_url
 from src.mcp.autopilot.feature_record_routes import (
     _find_archived_feature_report,
+    _resolve_feature_record_report,
     _resolve_live_feature_report,
 )
 
@@ -251,6 +252,7 @@ async def get_design_status(
         _design_id = None
         _design_raw_error = None
         _design_workflow_type = "feature"
+        _design_designs_folder = None
         with get_db() as _db:
             _design = _design_row(_db, project_id, design_id, filename)
             if _design:
@@ -263,6 +265,7 @@ async def get_design_status(
                 _design_id = _design.id
                 _design_raw_error = _design.error
                 _design_workflow_type = _design.workflow_type
+                _design_designs_folder = _design.designs_folder
             else:
                 design_status = None
 
@@ -511,6 +514,20 @@ async def get_design_status(
                             # already archived a durable copy to the features
                             # gallery first.
                             has_report = _find_archived_feature_report(base_dir, feat_wf_id) is not None
+                        if not has_report:
+                            # Neither the live worktree nor the archived
+                            # features gallery has it: doc_review may instead
+                            # have filed the report under the design's OWN
+                            # storage folder (features/<feature_key>/), which
+                            # a multi-repo feature (working_directory rooted in
+                            # a child repo, never copied into the gallery
+                            # PhaseManager writes under the workspace root)
+                            # never reaches through either check above. Same
+                            # resolver /feature-records/{id}/docs and the
+                            # Completed tab's _scan_features already use.
+                            has_report = _resolve_feature_record_report(
+                                _design_designs_folder, _design_id, feat.feature_key
+                            ) is not None
 
             features.append(
                 {
