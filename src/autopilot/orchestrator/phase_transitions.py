@@ -3406,7 +3406,22 @@ def _create_phase_task(
             # live: task 860508ac (adversarial_review, workflow ca539a75).
             execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
             if execution:
-                if execution.status in ("pending", "completed", "skipped"):
+                # "failed" included alongside pending/completed/skipped: a
+                # goto/retry dispatches a real task onto this phase
+                # regardless of the execution's own status, but leaving a
+                # "failed" execution unreopened means it never becomes
+                # "in_progress" while that task is genuinely running --
+                # invisible to every _advance_phases case that checks the
+                # workflow-wide in_progress list (e.g.
+                # _case_completed_with_successor's `not in_progress` guard,
+                # meant to block dispatching a LATER phase while an earlier
+                # one is still active). Observed live: workflow 72ed4df8's
+                # development phase (order 5) sat "failed" while its
+                # goto-retried task ran for real, and _advance_phases
+                # dispatched product_validation (order 10) as if nothing
+                # were in progress -- twice, minutes apart -- burning two
+                # full redundant agent runs.
+                if execution.status in ("pending", "completed", "skipped", "failed"):
                     reopen_phase_execution(execution, status="in_progress", started_at="now")
                 else:
                     # Always release the claim once the task it was guarding
