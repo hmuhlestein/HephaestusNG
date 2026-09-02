@@ -958,6 +958,19 @@ class LaunchPipeline:
         since the exact prompt string varies by shell/theme. Gives up after
         `timeout` regardless, so a pane that never stabilizes doesn't block
         agent creation forever.
+
+        Also called unconditionally a second time, later in the same
+        launch, immediately before sending launch_result.command itself
+        (both in create_agent_for_task's flow, via
+        _create_agent_for_task_steps.py, and in restart_agent) --
+        "stable" works equally well as "the shell has finished processing
+        everything already sent and is idle again" as it does for
+        "freshly started," so the same poll covers both. Most valuable
+        exactly when env_vars was empty, since a non-empty env_vars
+        already gets an equivalent readback-and-retry guard via
+        _export_env_vars_and_verify -- but cheap enough (near-instant once
+        the pane is genuinely idle) to run either way rather than branch
+        on it.
         """
         deadline = time.monotonic() + timeout
         last = None
@@ -2201,6 +2214,17 @@ class LaunchPipeline:
                 env_vars=env_vars,
                 label=f"restarted agent {agent_id[:8]}",
             )
+            # This exact path is the one _wait_for_shell_ready's own
+            # docstring cites as "Observed live" corrupting the launch
+            # line -- _build_and_send_launch_command only calls
+            # _wait_for_shell_ready-equivalent protection (via
+            # _export_env_vars_and_verify's readback) when env_vars is
+            # non-empty; a restart with none skipped straight from pane
+            # creation to sending launch_result.command with no wait at
+            # all, not even a flat sleep. Confirm the shell has settled
+            # before shipping it, same fix as create_agent_for_task's
+            # identical gap (_create_agent_for_task_steps.py).
+            await loop.run_in_executor(None, self._wait_for_shell_ready, pane)
             pane.send_keys(launch_result.command, enter=True)
 
             restart_cli_type = agent.cli_type
