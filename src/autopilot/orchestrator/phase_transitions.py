@@ -1581,6 +1581,89 @@ def check_and_log_stuck_active_workflows(db, logger: "OrchestratorLogger") -> No
         )
 
 
+_VALID_TRANSITIONS: Dict[str, set] = {
+    PhaseExecutionStatus.PENDING: {PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.SKIPPED},
+    PhaseExecutionStatus.IN_PROGRESS: {PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.FAILED, PhaseExecutionStatus.PENDING},  # pending: goto rewind
+    PhaseExecutionStatus.COMPLETED: {PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.PENDING},  # goto re-entry redo
+    PhaseExecutionStatus.FAILED: {PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.PENDING},  # retry or un-fail
+    PhaseExecutionStatus.SKIPPED: {PhaseExecutionStatus.IN_PROGRESS},  # goto sends work back through it
+}
+
+# Per-transition field resets, reconciled ONCE here instead of ad hoc at
+# each of the ten existing call sites -- e.g. reset_stale_executions_on_goto
+# today clears completed_at/started_at/task_creation_claimed_at when
+# resetting to "pending"; _create_phase_task's reopen sets started_at="now"
+# when moving to "in_progress" but leaves completed_at alone. Any (from, to)
+# pair not listed here defaults to leaving started_at/completed_at/claim
+# untouched -- reviewed against real call-site behavior during Step 3's
+# migration of each site, not guessed in advance.
+_FIELD_RESETS: Dict[Tuple[str, str], dict] = {
+    (PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.PENDING): {"completed_at": None, "started_at": None, "task_creation_claimed_at": None},
+    (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.PENDING): {"completed_at": None, "started_at": None, "task_creation_claimed_at": None},
+    (PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.PENDING): {"completed_at": None, "started_at": None, "task_creation_claimed_at": None},
+    (PhaseExecutionStatus.PENDING, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
+    (PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None},
+    (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None},
+    (PhaseExecutionStatus.SKIPPED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now"},
+    (PhaseExecutionStatus.PENDING, PhaseExecutionStatus.SKIPPED): {"completed_at": "now"},
+}
+
+
+def transition_phase_execution(db, phase_id: str, to_status: str, *, reason: str) -> Optional[PhaseExecution]:
+    """Atomically move phase_id's PhaseExecution to to_status. Returns the
+    (freshly re-read) row on success, None if the row wasn't in a state
+    this transition is valid from (someone else already moved it, or the
+    caller's assumption about current state was wrong) -- callers treat
+    None the same way _claim_phase_task_creation's False is treated today:
+    skip, don't retry blindly, let the next sweep tick re-evaluate.
+
+    Step 2 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md --
+    additive and not yet wired into any existing call site. See that
+    document for why this must be a single atomic UPDATE (mirroring
+    _claim_phase_task_creation) rather than SELECT-then-mutate: two
+    concurrent callers could otherwise both read the same from_status,
+    both see their transition as valid, and both write.
+    """
+    execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+    if execution is None:
+        raise ValueError(f"No PhaseExecution for phase {phase_id}")
+    from_status = execution.status
+    allowed = _VALID_TRANSITIONS.get(from_status, set())
+    if to_status not in allowed:
+        logger.error(
+            f"[PHASE-TRANSITION] Invalid {from_status!r} -> {to_status!r} "
+            f"for phase {phase_id} ({reason}) -- allowed: {sorted(allowed)}"
+        )
+        # Initial rollout: log and return None (treat as "not ours to make")
+        # rather than raise, so a pre-existing bad state found on day one
+        # doesn't turn into a hard outage the moment this ships. Escalate
+        # to raising once Step 1's drift check has run clean for a while.
+        return None
+
+    values = {"status": to_status}
+    for field, val in _FIELD_RESETS.get((from_status, to_status), {}).items():
+        values[field] = utc_now() if val == "now" else val
+
+    # The atomic step: succeeds only if the row is STILL from_status right
+    # now -- closes the exact race a SELECT-then-mutate would reopen.
+    changed = (
+        db.query(PhaseExecution)
+        .filter(PhaseExecution.phase_id == phase_id, PhaseExecution.status == from_status)
+        .update(values, synchronize_session=False)
+    )
+    db.commit()
+    if changed == 0:
+        logger.info(f"[PHASE-TRANSITION] Lost the race on phase {phase_id}: no longer {from_status!r} ({reason})")
+        return None
+    # This session has expire_on_commit=False (see database.py), so the
+    # `execution` object loaded above is still cached in the identity map
+    # with its pre-update attribute values -- a plain re-query would return
+    # that same stale in-memory object rather than the row this call just
+    # wrote. db.refresh() forces it to reload from the database.
+    db.refresh(execution)
+    return execution
+
+
 def _get_phase_statuses(db, workflow_id: str) -> list:
     """Get all phases with their execution statuses."""
     phases = db.query(Phase).filter_by(workflow_id=workflow_id).order_by(Phase.order).all()
