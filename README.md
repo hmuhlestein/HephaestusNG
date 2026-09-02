@@ -138,7 +138,7 @@ heph autopilot start --project-path ~/my-project
 heph memory search "query"             # search what agents have learned across runs
 ```
 
-The backend runs as a plain long-lived process with no hot-reload — a source change (yours or an agent's own self-edit) only takes effect after `heph restart`, which restarts every currently-running agent and workflow system-wide, not just the one you're debugging.
+The backend runs as a plain long-lived process with no hot-reload — a source change (yours or an agent's own self-edit) only takes effect after `heph restart`, which restarts the backend/monitor/watchdog/frontend for every project sharing this install, not just the one you're debugging. It does not touch agent tmux sessions, though — those run under their own detached tmux server and simply pick back up against the restarted backend rather than being killed.
 
 Run `heph --help` (or `heph <command> --help`) for the full command surface.
 
