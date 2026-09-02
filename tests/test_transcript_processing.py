@@ -484,6 +484,34 @@ class TestReadTranscriptLogReal:
             visible = _re.sub(r"\x1b\[[?]?[0-9;]*[a-zA-Z]", "", line).strip()
             assert visible, f"ANSI-only line survived: {line!r}"
 
+    def test_background_color_reset_survives_a_huge_blank_gap(self, tmp_path):
+        """Regression (reported live: git_expert c5e7a2a3's output rendered
+        with a white/gray background from partway through to the end of
+        its transcript): Claude Code sets a background color for a status
+        banner, then jumps the cursor far down a tall pane
+        (TMUX_PANE_HEIGHT) before resetting it -- landing the reset on an
+        otherwise-empty row. That row's clean text is blank like any
+        other, and used to have its raw bytes (including the reset)
+        discarded entirely by the blank-line handling, letting the
+        background bleed into every real line that followed."""
+        content = (
+            "before\n"
+            "\x1b[100mBanner \x1b[39mtext\n"
+            "\x1b[500B\x1b[49m\x1b[K\n"
+            "after content\n"
+        )
+        result = self._run(tmp_path, content)
+        assert "before" in result
+        assert "after content" in result
+        idx_after = result.index("after content")
+        prefix = result[:idx_after]
+        last_set = prefix.rfind("\x1b[100m")
+        last_reset = max(prefix.rfind("\x1b[49m"), prefix.rfind("\x1b[0m"))
+        assert last_set != -1, "test setup sanity: banner's bg-set should be present"
+        assert last_reset > last_set, (
+            f"background color never reset before real content resumed: {prefix!r}"
+        )
+
     def test_separators_become_single_blank_lines(self, tmp_path):
         """Separators mark pi's block boundaries -- each run must become
         exactly ONE blank line (visual spacing), never multiple. A blank
