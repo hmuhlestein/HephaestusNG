@@ -3601,6 +3601,13 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
             from src.core.database import Feature
             for feat in db.query(Feature).filter_by(workflow_id=wf.id).filter(Feature.status.in_(["paused", "failed"])).all():
                 feat.status = "active"
+            # Same gap as resume_feature's identical branch (feature_routes.py)
+            # -- see reset_failed_phase_executions' own docstring for why a
+            # "failed" PhaseExecution left behind permanently blocks this
+            # workflow from ever deriving "completed" again, even once the
+            # phase is successfully retried.
+            from src.autopilot.orchestrator.engine_client import reset_failed_phase_executions
+            reset_failed_phase_executions(workflow_id, session=db)
 
         candidates = (
             db.query(Task)
