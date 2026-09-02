@@ -178,28 +178,38 @@ def reset_stale_executions_on_goto(
     cycle-scoped query (Task.created_at >= started_at) exclude the
     phase's own freshly-created task, silently stalling it forever.
 
-    Excludes any candidate phase that currently has a live task
-    (assigned/in_progress) — same "live task" definition
-    _release_pending_phases_with_orphaned_task already uses elsewhere in
-    this file. Without this, a REDUNDANT goto evaluation of the SAME
-    already-handled completion (a distinct race: mark_phase_complete can
-    get entered twice for one task completion, e.g. once from
-    fire_spec_gate_if_ready's synchronous path and once from the
-    periodic sweep) blindly wipes a downstream phase's started_at/status
-    even though it isn't stale at all -- a real task is actively
-    dispatched and running under it right now. Observed live: a
-    development-phase task legitimately in_progress had its
-    PhaseExecution reset to started_at=None mid-flight by a second,
-    redundant "goto development" from adversarial_review; started_at was
-    later re-derived from an unrelated duplicate task created after the
-    real one, permanently excluding the real (later-completing) task
-    from the cycle-scoped completion check and stalling the phase
-    forever.
+    Live-task handling splits by how the phase relates to the goto target:
+
+    - order == target_phase_order with a live task: left entirely alone
+      (not reset). This is the goto's OWN target -- a live task there is
+      the correct current work, not something stale. Protects against a
+      REDUNDANT goto evaluation of the SAME already-handled completion (a
+      distinct race: mark_phase_complete can get entered twice for one
+      task completion, e.g. once from fire_spec_gate_if_ready's synchronous
+      path and once from the periodic sweep) blindly wiping the
+      target-phase task's started_at/status mid-flight. Observed live: a
+      development-phase task legitimately in_progress had its
+      PhaseExecution reset to started_at=None by a second, redundant
+      "goto development" from adversarial_review; started_at was later
+      re-derived from an unrelated duplicate task, permanently excluding
+      the real task from the cycle-scoped completion check and stalling
+      the phase forever.
+
+    - order > target_phase_order with a live task: the pipeline is
+      rewinding PAST this phase, so its agent is validating/reviewing code
+      that is about to be rewritten under it -- and worse, sharing the
+      feature worktree with the target-phase agent about to be dispatched.
+      That agent is terminated (DB invariant via engine_client.terminate_agent
+      -- resets its task to pending, orphan_reaper does the tmux teardown)
+      and the execution is reset like any other stale one. Observed live:
+      a qa_validation agent (order 9) ran concurrently with a development
+      agent (order 5) for ~an hour on workflow 72ed4df8 after a
+      goto-to-development, both mutating the same worktree.
 
     Returns the number of rows reset.
     """
-    stale = (
-        db.query(PhaseExecution)
+    stale_rows = (
+        db.query(PhaseExecution, Phase.order)
         .join(Phase, PhaseExecution.phase_id == Phase.id)
         .filter(
             Phase.workflow_id == workflow_id,
@@ -209,17 +219,46 @@ def reset_stale_executions_on_goto(
         )
         .all()
     )
+    stale = [pe for pe, _ in stale_rows]
+    order_by_exec_id = {id(pe): order for pe, order in stale_rows}
     if stale:
-        live_phase_ids = {
-            row[0]
-            for row in db.query(Task.phase_id)
+        LIVE_STATUSES = ["assigned", "in_progress", "queued", "blocked", "needs_work", "under_review"]
+        live_by_phase: Dict[str, list] = {}
+        for phase_id, task_id, agent_id in (
+            db.query(Task.phase_id, Task.id, Task.assigned_agent_id)
             .filter(
                 Task.phase_id.in_([s.phase_id for s in stale]),
-                Task.status.in_(["assigned", "in_progress", "queued", "blocked"]),
+                Task.status.in_(LIVE_STATUSES),
             )
             .all()
-        }
-        stale = [s for s in stale if s.phase_id not in live_phase_ids]
+        ):
+            live_by_phase.setdefault(phase_id, []).append((task_id, agent_id))
+
+        kept = []
+        for s in stale:
+            live_tasks = live_by_phase.get(s.phase_id)
+            if not live_tasks:
+                kept.append(s)
+                continue
+            if order_by_exec_id[id(s)] <= target_phase_order:
+                # The goto's own target phase already has the correct live
+                # work -- leave it (and its execution) untouched.
+                continue
+            # A strictly-later phase is being rewound past: kill its agent
+            # so it stops racing the incoming target-phase agent on the
+            # shared worktree, then let this execution reset below.
+            from src.autopilot.orchestrator.engine_client import terminate_agent
+
+            for _task_id, agent_id in live_tasks:
+                if agent_id:
+                    terminate_agent(
+                        agent_id,
+                        reason=f"superseded: pipeline goto rewound to order {target_phase_order}, past this phase",
+                        session=db,
+                    )
+            db.flush()
+            kept.append(s)
+        stale = kept
     for s in stale:
         s.status = "pending"
         s.completed_at = None
