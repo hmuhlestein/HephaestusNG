@@ -213,3 +213,146 @@ def test_check_feature_readiness_reports_missing_plan_and_markers(tmp_path):
     report = check_feature_readiness(feature)
     assert report.missing_files == ["plan.md", "tasks.md"]
     assert report.needs_clarification == ["what auth method?"]
+
+
+def test_check_feature_readiness_swallows_unreadable_spec_without_raising(tmp_path):
+    """REQ-15/NFR-07: readiness is best-effort and must never raise, even
+    when spec.md is unreadable (deleted mid-check, not valid UTF-8, etc.)
+    -- an earlier, now-unified duplicate implementation
+    (src/core/speckit_detection.py) raised OSError here instead; this
+    module's swallow-and-log behavior is the one actually wired into the
+    /speckit/check route, which does not catch OSError from this call."""
+    d = _make_feature_dir(tmp_path, "001-x", {"spec.md": "placeholder"})
+    (d / "spec.md").write_bytes(b"\xff\xfe not valid utf-8")
+    feature = SpecKitFeature(
+        dir_path=d, number="001", slug="x", repo_id=None, repo_label=None, spec_path=d / "spec.md",
+    )
+    report = check_feature_readiness(feature)  # must not raise
+    assert report.needs_clarification == []
+    assert report.missing_files == ["plan.md", "tasks.md"]
+
+
+def test_discover_speckit_features_falls_back_to_workspace_root_with_genuinely_zero_repos(tmp_path, monkeypatch):
+    """A registered project with literally zero ProjectRepo rows
+    (pre-migration edge case) must still find a feature sitting directly
+    at the project's own base_dir."""
+    from src.core.database import AutopilotProject, DatabaseManager
+
+    _make_feature_dir(tmp_path, "001-checkout-flow", {"spec.md": "# spec"})
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-none", name="p", base_dir=str(tmp_path)))
+        session.flush()
+
+        features = discover_speckit_features(session, "proj-none", str(tmp_path))
+
+    assert len(features) == 1
+    assert features[0].repo_id is None
+    assert features[0].dir_name == "001-checkout-flow"
+
+
+def test_discover_speckit_features_isolates_a_repo_whose_path_does_not_exist(tmp_path, monkeypatch):
+    """One repo's registered path being gone (moved/deleted on disk, DB
+    row stale) must not prevent discovery of every other repo's features."""
+    from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
+
+    frontend_dir = tmp_path / "frontend"
+    _make_feature_dir(frontend_dir, "001-payments", {"spec.md": "# spec"})
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-mr", name="p", base_dir=str(tmp_path)))
+        session.add(ProjectRepo(id="repo-backend", project_id="proj-mr", label="backend", path=str(tmp_path / "does-not-exist"), is_primary=True))
+        session.add(ProjectRepo(id="repo-frontend", project_id="proj-mr", label="frontend", path=str(frontend_dir)))
+        session.flush()
+
+        features = discover_speckit_features(session, "proj-mr", str(tmp_path))
+
+    assert len(features) == 1
+    assert features[0].repo_id == "repo-frontend"
+
+
+def test_discover_speckit_features_iterdir_oserror_isolated_to_one_repo(tmp_path, monkeypatch):
+    """A filesystem error scanning ONE repo's specs/ dir (permission
+    denied, transient mount issue) must not abort discovery for sibling
+    repos -- error isolation is per-location, not all-or-nothing."""
+    from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
+
+    backend_dir = tmp_path / "backend"
+    frontend_dir = tmp_path / "frontend"
+    _make_feature_dir(backend_dir, "001-x", {"spec.md": "# spec"})
+    _make_feature_dir(frontend_dir, "001-y", {"spec.md": "# spec"})
+
+    real_iterdir = Path.iterdir
+    backend_specs = backend_dir / "specs"
+
+    def _raising_iterdir(self):
+        if self == backend_specs:
+            raise OSError("permission denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _raising_iterdir)
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-mr", name="p", base_dir=str(tmp_path)))
+        session.add(ProjectRepo(id="repo-backend", project_id="proj-mr", label="backend", path=str(backend_dir), is_primary=True))
+        session.add(ProjectRepo(id="repo-frontend", project_id="proj-mr", label="frontend", path=str(frontend_dir)))
+        session.flush()
+
+        features = discover_speckit_features(session, "proj-mr", str(tmp_path))
+
+    assert len(features) == 1
+    assert features[0].repo_id == "repo-frontend"
+
+
+def test_discover_speckit_features_mid_iteration_failure_discards_partial_repo_results(tmp_path, monkeypatch):
+    """A repo with 2+ features whose directory listing raises AFTER
+    yielding the first one must contribute ZERO features, not just the
+    first -- true all-or-nothing isolation per repo, not a partial leak."""
+    from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
+
+    backend_dir = tmp_path / "backend"
+    frontend_dir = tmp_path / "frontend"
+    _make_feature_dir(backend_dir, "001-x", {"spec.md": "# spec"})
+    _make_feature_dir(backend_dir, "002-y", {"spec.md": "# spec"})
+    _make_feature_dir(frontend_dir, "001-z", {"spec.md": "# spec"})
+
+    real_iterdir = Path.iterdir
+    backend_specs = backend_dir / "specs"
+
+    def _flaky_iterdir(self):
+        if self == backend_specs:
+            def _gen():
+                entries = list(real_iterdir(self))
+                yield entries[0]
+                raise OSError("disk error mid-scan")
+            return _gen()
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _flaky_iterdir)
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-mr", name="p", base_dir=str(tmp_path)))
+        session.add(ProjectRepo(id="repo-backend", project_id="proj-mr", label="backend", path=str(backend_dir), is_primary=True))
+        session.add(ProjectRepo(id="repo-frontend", project_id="proj-mr", label="frontend", path=str(frontend_dir)))
+        session.flush()
+
+        features = discover_speckit_features(session, "proj-mr", str(tmp_path))
+
+    assert len(features) == 1
+    assert features[0].repo_id == "repo-frontend"

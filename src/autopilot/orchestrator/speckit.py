@@ -36,6 +36,12 @@ class SpecKitFeature:
     tasks_path: Optional[Path] = None
     extra_files: List[Path] = field(default_factory=list)
 
+    @property
+    def dir_name(self) -> str:
+        """The exact specs/ directory name, e.g. '001-checkout-flow' --
+        what --feature accepts verbatim and what log/error messages list."""
+        return self.dir_path.name
+
 
 @dataclass
 class Candidate:
@@ -259,7 +265,12 @@ def check_feature_readiness(feature: SpecKitFeature) -> ReadinessReport:
     try:
         content = feature.spec_path.read_text(encoding="utf-8")
         needs_clarification = [m.strip() for m in _NEEDS_CLARIFICATION_RE.findall(content)]
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
+        # UnicodeDecodeError is a ValueError subclass, not an OSError one --
+        # a plain `except OSError` here never actually caught non-UTF-8
+        # spec.md content despite this function's own "best-effort, never
+        # raise" contract (NFR-07); found via a test exercising exactly
+        # this case.
         logger.warning(f"[SPECKIT] failed to read {feature.spec_path} for readiness check: {e}")
 
     missing_files: List[str] = []

@@ -16,9 +16,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.autopilot.orchestrator.queue import _sync_speckit_designs
+from src.autopilot.orchestrator.speckit import discover_speckit_features
 from src.core.database import AutopilotDesign, AutopilotProject, Base, ProjectRepo
 from src.core.schema_migrations import migrate_speckit_auto_scan_column
-from src.core.speckit_detection import find_speckit_features
 
 
 @pytest.fixture
@@ -398,7 +398,7 @@ class TestSyncSpeckitDesigns:
 
         def broken_max(column):
             # AutopilotDesign.ordinal is queried once per genuinely-new
-            # feature, in find_speckit_features's stable (repo_label, number)
+            # feature, in discover_speckit_features's stable (repo_label, number)
             # order -- "001-bad" is processed first, so raise only on the
             # first call and let every call after it (i.e. "002-good") behave
             # normally.
@@ -422,7 +422,7 @@ class TestSyncSpeckitDesigns:
         _make_feature(repo_path, "001", "foo", plan=True)
 
         with patch(
-            "src.core.speckit_detection.find_speckit_features",
+            "src.autopilot.orchestrator.speckit.discover_speckit_features",
             side_effect=RuntimeError("simulated detection failure"),
         ):
             _sync_speckit_designs(db_session, proj)  # must not raise
@@ -435,11 +435,11 @@ class TestSyncSpeckitDesigns:
 
         proj.speckit_auto_scan_enabled = False
         db_session.commit()
-        off_features = find_speckit_features(db_session, proj.id, proj.base_dir)
+        off_features = discover_speckit_features(db_session, proj.id, proj.base_dir)
 
         proj.speckit_auto_scan_enabled = True
         db_session.commit()
-        on_features = find_speckit_features(db_session, proj.id, proj.base_dir)
+        on_features = discover_speckit_features(db_session, proj.id, proj.base_dir)
 
         assert [f.dir_name for f in off_features] == [f.dir_name for f in on_features] == ["001-foo"]
 
@@ -447,7 +447,7 @@ class TestSyncSpeckitDesigns:
         # Gotcha 10: renaming/renumbering a synced-but-still-pending feature's
         # directory must NOT archive, delete, or otherwise mutate its old
         # AutopilotDesign row -- a prior revision did this and was reverted
-        # (architecture review round 3, BLOCKER 2) because find_speckit_features's
+        # (architecture review round 3, BLOCKER 2) because discover_speckit_features's
         # own is_dir()/exists() checks silently swallow OSError on ANY stat
         # failure, not just genuine deletion, so archiving on absence could
         # permanently hide a legitimately pending, ready feature.
