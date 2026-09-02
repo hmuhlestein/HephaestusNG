@@ -164,9 +164,23 @@ def reset_stale_executions_on_goto(
     """Reset PhaseExecution rows at or after a goto target to "pending".
 
     On a goto/rewind, phases after the target retain stale
-    "in_progress"/"completed" status from a prior pass.  Without
+    "in_progress"/"completed"/"failed" status from a prior pass.  Without
     resetting them, a later re-entry finds its execution already
-    "completed" and re-evaluates without running.
+    "completed" and re-evaluates without running -- or, for "failed",
+    never runs again at all: mark_phase_complete's idempotency guard only
+    checks for "completed", so a "failed" execution DOES still get a fresh
+    task dispatched and can genuinely succeed on retry, but nothing ever
+    flips its PhaseExecution.status off of "failed" once set. That stale
+    "failed" row is a permanent tombstone for derive_workflow_status,
+    whose phase-completeness check treats ANY status other than
+    "completed"/"skipped" as "this phase hasn't finished" -- so a
+    workflow whose every task is genuinely done can never derive
+    "completed" while one such tombstone survives. Observed live:
+    workflow 72ed4df8's development phase (order 5) failed once on
+    2026-08-30, succeeded on four later goto-retries over the following
+    two days, and its PhaseExecution sat "failed" the entire time --
+    silently blocking that feature (and the next one queued behind it)
+    from ever completing.
 
     Excludes the source phase's own execution (the one that just fired
     the goto) — its "completed" mark from mark_phase_complete must
@@ -215,7 +229,7 @@ def reset_stale_executions_on_goto(
             Phase.workflow_id == workflow_id,
             Phase.order >= target_phase_order,
             PhaseExecution.phase_id != exclude_phase_id,
-            PhaseExecution.status.in_(["in_progress", "completed"]),
+            PhaseExecution.status.in_(["in_progress", "completed", "failed"]),
         )
         .all()
     )
@@ -701,6 +715,126 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
     return recovered
 
 
+def _retry_exhausted_failed_workflows(logger: "OrchestratorLogger") -> int:
+    """Self-heal for a workflow failed by a phase exhausting its retry cap
+    (_phase_case_steps.py's "all failed tasks past retry cap" branch, which
+    sets both PhaseExecution.status="failed" and Workflow.status="failed").
+
+    That state had no automated path back at all. Every other recovery in
+    this sweep is scoped away from it:
+      - _retry_exhausted_paused_workflows selects status=="paused" only.
+      - _recover_abandoned_workflows_with_completed_phase requires
+        status_reason LIKE "Abandoned:%" AND an in_progress phase -- the
+        exhausted phase's own execution is "failed", so neither matches.
+      - Every _advance_phases dispatch case filters phase_statuses to
+        exactly "pending"/"in_progress"/"completed", so a "failed"
+        execution is invisible to all four.
+    The only way out was a human clicking Resume (resume_feature), which
+    also happens to be the only caller that resets the phase execution. A
+    fully automated pipeline cannot depend on that.
+
+    Bounded exactly like its paused sibling, and deliberately sharing that
+    policy's two knobs rather than inventing a second set: a cooldown since
+    the phase actually failed (the execution's own completed_at, the
+    moment of exhaustion -- there is no paused_at on a failed workflow),
+    and a hard cap on how many times one workflow gets this second chance
+    (paused_workflow_max_retry_cycles via Workflow.paused_retry_count).
+    Once the cap is hit the workflow is left alone permanently, with
+    status_reason saying so, exactly as the paused path does -- automation
+    that retries forever is the tight-loop problem the retry cap exists to
+    prevent.
+
+    Recovery itself is just reset_failed_phase_executions + status="active":
+    that makes the stuck phase visible to the normal dispatch cases again,
+    and they re-enter it on the very next tick. This function deliberately
+    does not evaluate or grade anything -- same division of labour as
+    _recover_abandoned_workflows_with_completed_phase.
+    """
+    from src.autopilot.orchestrator import (
+        _get_paused_workflow_max_retry_cycles,
+        _get_paused_workflow_retry_cooldown_seconds,
+    )
+    from src.autopilot.orchestrator.engine_client import reset_failed_phase_executions
+
+    max_cycles = _get_paused_workflow_max_retry_cycles()
+    cutoff = utc_now() - timedelta(seconds=_get_paused_workflow_retry_cooldown_seconds())
+    recovered = 0
+    with get_db() as db:
+        candidates = (
+            db.query(Workflow)
+            .filter(
+                Workflow.status == "failed",
+                Workflow.status_reason.like("%exhausted the retry cap%"),
+            )
+            .all()
+        )
+        for wf in candidates:
+            # Same superseded-workflow guard as the paused sibling: a
+            # per-feature workflow whose Feature no longer points back at it
+            # has been replaced by a later attempt, and resuming it
+            # resurrects already-dead work.
+            if wf.definition_id not in PHASE0_DEFINITION_IDS:
+                if not db.query(Feature).filter_by(workflow_id=wf.id).first():
+                    continue
+
+            if (wf.paused_retry_count or 0) >= max_cycles:
+                if "auto-retry gave up" not in (wf.status_reason or ""):
+                    logger.warning(
+                        f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} exhausted "
+                        f"{max_cycles} auto-retry cycles for its retry-capped "
+                        "phase -- giving up permanently, needs a manual resume"
+                    )
+                    wf.status_reason = (
+                        f"{wf.status_reason or ''} (auto-retry gave up after "
+                        f"{max_cycles} attempts -- manual resume required)"
+                    )
+                    recovered += 1
+                continue
+
+            # Cooldown anchored on when the phase actually failed. A
+            # workflow with no failed execution left doesn't belong to this
+            # function at all (something already healed it).
+            failed_at = (
+                db.query(PhaseExecution.completed_at)
+                .join(Phase, PhaseExecution.phase_id == Phase.id)
+                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "failed")
+                .order_by(PhaseExecution.completed_at.desc())
+                .limit(1)
+                .scalar()
+            )
+            if failed_at is None:
+                continue
+            if failed_at > cutoff:
+                continue  # still cooling down
+
+            n = reset_failed_phase_executions(wf.id, session=db)
+            if not n:
+                continue
+
+            wf.status = "active"
+            wf.paused_by = None
+            wf.paused_at = None
+            wf.paused_retry_count = (wf.paused_retry_count or 0) + 1
+            wf.status_reason = None
+            for feat in (
+                db.query(Feature)
+                .filter_by(workflow_id=wf.id)
+                .filter(Feature.status.in_(["paused", "failed"]))
+                .all()
+            ):
+                feat.status = "active"
+            logger.warning(
+                f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was failed by a "
+                f"retry-capped phase -- reset {n} failed phase execution(s) "
+                f"and resumed (cycle {wf.paused_retry_count}/{max_cycles}); "
+                "the normal dispatch cases re-enter the phase on the next tick"
+            )
+            recovered += 1
+        if recovered:
+            db.commit()
+    return recovered
+
+
 def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
     """Self-heal for a workflow _maybe_retry_failed_tasks paused after its
     retry cap was exhausted (Workflow.paused_by == "system") -- e.g. every
@@ -932,6 +1066,38 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
             # non-terminal (orphaned) task -- same blind spot, a task that
             # never reached "done" instead of one that did.
             _release_pending_phases_with_orphaned_task(db, workflow_id, logger)
+            # Third sibling, and the widest of the three: a phase whose
+            # execution is "failed" while the workflow itself is active.
+            # Every dispatch case below filters phase_statuses to exactly
+            # "pending"/"in_progress"/"completed", so a "failed" execution
+            # is invisible to all four -- the phase can never be entered
+            # again, and the workflow can never derive "completed" either
+            # (derive_workflow_status requires every execution to be
+            # "completed"/"skipped"). An ACTIVE workflow with a failed
+            # execution is unambiguously wrong: resuming a workflow means
+            # "try this again", and every un-fail path in the codebase
+            # resets the workflow and its tasks but historically not this
+            # row. Unconditional, with no cooldown, precisely because the
+            # workflow is already active -- the bounded-retry policy in
+            # _retry_exhausted_failed_workflows governs whether a FAILED
+            # workflow gets resumed at all; once it is active, leaving one
+            # of its phases invisible serves nothing. Observed live:
+            # workflow 72ed4df8 sat active-with-a-failed-development-
+            # execution for a full day, its work advancing through direct
+            # goto dispatch the whole time while its feature could never
+            # report completed.
+            if wf.status == "active":
+                from src.autopilot.orchestrator.engine_client import reset_failed_phase_executions
+
+                healed = reset_failed_phase_executions(workflow_id, session=db)
+                if healed:
+                    logger.warning(
+                        f"[PHASE-ADVANCE] Reset {healed} failed phase execution(s) on "
+                        f"active workflow {workflow_id[:8]} -- a failed execution is "
+                        "invisible to every dispatch case, so the phase could never "
+                        "be re-entered"
+                    )
+                    db.commit()
 
             # Self-heal: tasks that are "done" but have a failure_reason
             # indicate gate validation failed after the task completed.

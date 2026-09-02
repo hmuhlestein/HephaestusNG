@@ -484,6 +484,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     from src.autopilot.orchestrator.phase_transitions import (
         _maybe_resolve_arbitration,
         _maybe_resolve_human_arbitration_escalations,
+        _retry_exhausted_failed_workflows,
         _retry_exhausted_paused_workflows,
         _retry_failed_tasks,
         _try_advance_phases,
@@ -579,6 +580,15 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         _retry_exhausted_paused_workflows(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Paused-workflow retry error: {e}")
+
+    # The failed-workflow sibling of the call above. A phase that exhausts
+    # its retry cap fails the WORKFLOW too, and that state is invisible to
+    # every other recovery here (see the function's own docstring) -- without
+    # this, the only way out is a human clicking Resume.
+    try:
+        _retry_exhausted_failed_workflows(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Failed-workflow retry error: {e}")
 
     # Workflow-wide, not scoped to any one workflow -- same reasoning as
     # the feature/design-status syncs above: the target set here is
