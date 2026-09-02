@@ -2709,6 +2709,68 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
             assert execution.status == "in_progress"
             assert execution.started_at == original_started_at
 
+    def test_repair_sees_a_synchronize_session_false_started_at_update_made_after_preload(
+        self, db_manager, sample_workflow
+    ):
+        """Regression found in the next gap-check pass after this
+        migration shipped: this function's own local `execution` read
+        (used to compute extra_fields, not the internal read
+        transition_phase_execution already protects with
+        populate_existing()) had no such protection either -- and unlike
+        that internal read, a stale value here isn't caught by the atomic
+        UPDATE's WHERE clause, since it feeds a field VALUE, not the
+        transition validity check. A real caller
+        (_release_stale_task_creation_claims, a few hundred lines up in
+        phase_transitions.py) already loads this exact row into the same
+        session before calling this function -- mirrored here directly
+        rather than through that sweep, to isolate the read path being
+        tested."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.phase_transitions import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            _clear_stale_task_creation_claim,
+        )
+        from src.core.database import PhaseExecution
+
+        fresh_started_at = datetime.utcnow() - timedelta(minutes=2)
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="done",
+                created_at=datetime.utcnow() - timedelta(minutes=10),
+            ))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "completed"
+            execution.started_at = None
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            # The pre-load every real caller does (the sweep's own
+            # `for execution in stale_executions:` loop) before ever
+            # calling this function on the same session.
+            preloaded = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert preloaded.started_at is None
+
+            # A concurrent write sets started_at on the real row without
+            # touching the ORM's cached object.
+            session.query(PhaseExecution).filter(
+                PhaseExecution.phase_id == "phase-1"
+            ).update({"started_at": fresh_started_at}, synchronize_session=False)
+
+            result = _clear_stale_task_creation_claim(session, "phase-1")
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            # Without populate_existing(), the stale cached `started_at is
+            # None` would have been backfilled from task-1's created_at
+            # instead of leaving the row's REAL already-set value alone.
+            assert execution.started_at == fresh_started_at
+
 
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check

@@ -139,7 +139,16 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
         .update({"task_creation_claimed_at": None}, synchronize_session=False)
     )
     if cleared and repair_status:
-        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+        # populate_existing() matters here specifically because this read
+        # feeds extra_fields below -- unlike transition_phase_execution's
+        # OWN internal from_status read (protected by the atomic UPDATE's
+        # WHERE clause from ever causing an incorrect write), a stale
+        # execution.started_at read here would compute a WRONG value that
+        # gets written unconditionally on success, with no equivalent
+        # safety net. A real caller (_release_stale_task_creation_claims,
+        # a few hundred lines up) already loads this exact row into the
+        # same session's identity map before calling this function.
+        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
         # "failed" included alongside pending/completed/skipped -- same gap
         # as _create_phase_task's reopen condition (fixed in 4d2f2005): a
         # phase execution stuck "failed" from an earlier attempt must still
