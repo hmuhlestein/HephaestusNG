@@ -3939,6 +3939,34 @@ class TestCreatePhaseTaskResetsClaim:
             assert execution.task_creation_claimed_at is None
 
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_reactivates_a_failed_execution_too(self, mock_create_agent, db_manager, sample_workflow):
+        """Root-cause regression: a "failed" PhaseExecution wasn't in the
+        reopen-eligible set, so a goto/retry's real task ran with the
+        execution stuck "failed" the whole time -- invisible to every
+        _advance_phases case gated on the workflow-wide in_progress list
+        (e.g. _case_completed_with_successor's `not in_progress` guard,
+        meant to block dispatching a LATER phase while an earlier one is
+        still active). Observed live: workflow 72ed4df8's development
+        phase (order 5) sat "failed" while its goto-retried task ran for
+        real, and the sweep dispatched product_validation (order 10) as
+        if nothing were in progress -- twice, minutes apart, burning two
+        full redundant agent runs."""
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+
+        mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "failed"
+
+        result = _create_phase_task("wf-1", "phase-1", "requirements", "goto", MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_reactivated_phase_can_claim_after_completion(
         self, mock_create_agent, db_manager, sample_workflow
     ):
