@@ -749,7 +749,16 @@ class PhaseManager:
             transition_phase_execution,
         )
 
-        extra_fields = {"completion_summary": summary} if summary is not None else None
+        # completed_at is set here explicitly, not via _FIELD_RESETS:
+        # (in_progress, completed) and (in_progress, failed) -- the two
+        # transitions this function actually performs -- have no entry in
+        # that table, so without this the atomic UPDATE would silently
+        # leave completed_at NULL despite this function's whole purpose
+        # being to close out the execution. Matches the unconditional
+        # `execution.completed_at = utc_now()` this had before migrating.
+        extra_fields = {"completed_at": utc_now()}
+        if summary is not None:
+            extra_fields["completion_summary"] = summary
         result = transition_phase_execution(
             session, execution.phase_id, status, reason="_close_execution", extra_fields=extra_fields
         )

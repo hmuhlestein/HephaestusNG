@@ -376,6 +376,23 @@ before doing anything else — both to confirm the debounce actually
 eliminates false positives and to see how often each drift class fires in
 practice.
 
+**Implementation bug caught after this shipped, not by the unit tests
+that shipped with it:** the debounce state must be keyed per `workflow_id`
+(`Dict[str, set]`), not a single shared set. The sweep calls
+`check_and_log_phase_execution_drift` once per active/paused workflow per
+tick (`background_loops.py`), and a single shared set had every
+workflow's call `.clear()` out whatever the *previous* workflow in that
+same tick's iteration had just recorded — so a workflow's own genuine,
+persistent drift got compared against some *other* workflow's keys on the
+next tick and could never reach "second sighting." With more than one
+monitored workflow (the normal case — 9 active/paused workflows were live
+when this was caught), this silently defeated the debounce entirely: real
+drift never got logged. None of the original unit tests exercised calling
+this function for two different `workflow_id`s without clearing state in
+between, so all 12 passed anyway. Fixed by scoping the dict per workflow;
+a regression test covering exactly this two-workflow interleaving was
+added alongside the fix.
+
 ### Step 2 — `transition_phase_execution`, additive, unused at first
 
 A single function + explicit transition table, added as pure new code
@@ -497,6 +514,28 @@ In order of how cleanly each one maps onto the table above, not by risk:
 1. `_close_execution` (`phase_manager.py:725`) — already the closest thing
    to a shared writer; migrating it covers the `"completed"`/`"failed"`
    close paths from `mark_phase_complete` in one move.
+
+   **Bug caught migrating this, deployed live for ~10 minutes before being
+   caught and fixed:** `_FIELD_RESETS` has no entry for
+   `(in_progress, completed)` or `(in_progress, failed)` — the two
+   transitions this function actually performs — so the naive migration
+   silently stopped setting `completed_at` at all, despite that being this
+   function's whole purpose (`execution.completed_at = utc_now()` was
+   unconditional in the original). `PhaseExecution.completed_at` isn't
+   just cosmetic: `phase_transitions.py` sorts/selects on
+   `.completed_at.desc()` in at least two places to find "the last
+   completed phase," so a `NULL` there is a functional correctness bug,
+   not only a reporting gap. All 414 tests in the Step 3 regression set
+   passed anyway, because none of them asserted `completed_at` gets set —
+   only `status`/`action`. Fixed by passing `completed_at` through the
+   `extra_fields` extension point explicitly at this call site (not by
+   adding a blanket `_FIELD_RESETS` entry, since a future call site
+   reaching "completed"/"failed" from some other state may have different
+   needs). Confirmed via the live DB that no real completion happened
+   during the exposure window, so no data was actually lost — but the
+   window existed. A dedicated `TestCloseExecution` class was added
+   asserting `completed_at` directly, since caller-level tests alone had
+   missed it.
 2. The four reopen-to-`"in_progress"` sites in the table above
    (`_create_phase_task`, `_clear_stale_task_creation_claim`,
    `_release_phase_task_creation_claim`, `_start_next_phase`) — all four

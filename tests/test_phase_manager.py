@@ -523,6 +523,92 @@ class TestMarkPhaseCompleteForceGoto:
         assert result["metadata"] == {}
 
 
+class TestCloseExecution:
+    """Direct unit tests for _close_execution's own write, independent of
+    any particular mark_phase_complete caller. Regression: migrating this
+    to transition_phase_execution (Step 3 of
+    docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) silently
+    dropped completed_at -- (in_progress, completed) and
+    (in_progress, failed), the two transitions this function performs,
+    have no entry in _FIELD_RESETS, and the migration didn't pass
+    completed_at via extra_fields either. Every existing caller-level test
+    only checked status/action, never completed_at, so 414 passing tests
+    across the full Step 3 regression set did not catch it."""
+
+    def test_completing_sets_status_completed_at_and_summary(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-1", workflow_id="wf-1", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="in_progress"))
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            PhaseManager._close_execution(session, execution, "completed", "done")
+            assert execution.status == "completed"
+            assert execution.completed_at is not None
+            assert execution.completion_summary == "done"
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.completed_at is not None
+
+    def test_failing_sets_status_and_completed_at(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-1", workflow_id="wf-1", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="in_progress"))
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            PhaseManager._close_execution(session, execution, "failed", "bad")
+            assert execution.status == "failed"
+            assert execution.completed_at is not None
+
+    def test_no_summary_leaves_completion_summary_unset(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-1", workflow_id="wf-1", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="in_progress"))
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            PhaseManager._close_execution(session, execution, "completed")
+            assert execution.completion_summary is None
+            assert execution.completed_at is not None
+
+    def test_invalid_transition_is_skipped_not_forced(self, real_db):
+        """A "pending" execution has no valid path straight to "completed"
+        (see _VALID_TRANSITIONS) -- the write must be skipped, not forced,
+        and the caller's in-memory execution must reflect the real
+        (unchanged) row rather than being force-mutated to look closed."""
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-1", workflow_id="wf-1", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="pending"))
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            PhaseManager._close_execution(session, execution, "completed", "should not stick")
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.status == "pending"
+            assert execution.completed_at is None
+            assert execution.completion_summary is None
+
+
 @pytest.fixture
 def two_architect_phases(real_db):
     """architecture_design (order 3) and architectural_review (order 5)
