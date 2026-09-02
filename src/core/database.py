@@ -648,6 +648,18 @@ class PhaseExecution(Base):
     # Relationships
     phase = relationship("Phase", back_populates="executions")
 
+    # Every reader (_get_phase_statuses, _create_phase_task, and every
+    # sibling reopen/reset function -- see docs/designs/
+    # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) does
+    # .filter_by(phase_id=...).first() with no order_by, trusting exactly
+    # one row per phase. Nothing enforced that before this constraint --
+    # a second row would have been silently picked or dropped at random.
+    # See migrate_phase_execution_phase_id_unique (schema_migrations.py)
+    # for the matching migration on an existing (pre-constraint) database.
+    __table_args__ = (
+        UniqueConstraint("phase_id", name="uq_phase_execution_phase_id"),
+    )
+
 
 class AgentWorktree(Base):
     """Track git worktree isolation for agents."""

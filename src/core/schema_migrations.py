@@ -1409,6 +1409,87 @@ def _repoint_dangling_autopilot_designs_fk(engine) -> None:
     )
 
 
+def migrate_phase_execution_phase_id_unique(engine):
+    """Add a unique index on phase_executions.phase_id for existing databases.
+
+    Every reader of this table (_get_phase_statuses, _create_phase_task,
+    and every sibling reopen/reset function -- see docs/designs/
+    PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) does
+    .filter_by(phase_id=...).first() with no order_by, trusting exactly
+    one row per phase. Nothing in the schema enforced that until now -- a
+    second row for the same phase would have been silently picked (or
+    dropped) at random by whichever happened to sort first.
+
+    Preventive, not corrective: as of this migration's introduction, the
+    live database has zero phase_ids with more than one row. Still
+    defensive rather than assuming that stays true forever -- if any
+    duplicates exist by the time this runs, consolidate first (keep
+    whichever row completed most recently, then started most recently,
+    then the highest id as a final deterministic tiebreak; log exactly
+    what was merged) so the CREATE UNIQUE INDEX below doesn't fail outright
+    on the very database this migration exists to protect.
+
+    Uses CREATE UNIQUE INDEX rather than the rebuild-and-swap pattern
+    migrate_speckit_design_source_dir_unique uses for autopilot_designs:
+    SQLite enforces a unique index exactly like a table-level UNIQUE
+    constraint for every future write, without rebuilding the table.
+    phase_executions is read and written continuously by the live
+    orchestrator sweep -- skipping the rebuild-and-swap here avoids the
+    entire class of dangling-FK/interrupted-rebuild failure modes that
+    pattern is exposed to (see repair_dangling_autopilot_designs_fk below
+    and its own incident history: an earlier rebuild-and-swap migration on
+    a different table wiped it entirely on a DROP failure).
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            dupes = conn.execute(
+                text(
+                    "SELECT phase_id, COUNT(*) FROM phase_executions "
+                    "GROUP BY phase_id HAVING COUNT(*) > 1"
+                )
+            ).fetchall()
+            if dupes:
+                logger.warning(
+                    f"[MIGRATION] Found {len(dupes)} phase_id(s) with duplicate "
+                    f"phase_executions rows -- consolidating before adding the "
+                    f"unique index: {[d[0] for d in dupes]}"
+                )
+                for phase_id, _count in dupes:
+                    rows = conn.execute(
+                        text(
+                            "SELECT id, status FROM phase_executions WHERE phase_id = :phase_id "
+                            "ORDER BY completed_at IS NULL, completed_at DESC, "
+                            "started_at IS NULL, started_at DESC, id DESC"
+                        ),
+                        {"phase_id": phase_id},
+                    ).fetchall()
+                    keep_id, keep_status = rows[0]
+                    drop_ids = [r[0] for r in rows[1:]]
+                    logger.warning(
+                        f"[MIGRATION] phase_id={phase_id}: keeping execution "
+                        f"{keep_id} (status={keep_status!r}), dropping {drop_ids}"
+                    )
+                    for drop_id in drop_ids:
+                        conn.execute(
+                            text("DELETE FROM phase_executions WHERE id = :id"),
+                            {"id": drop_id},
+                        )
+                conn.commit()
+
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_phase_execution_phase_id "
+                    "ON phase_executions(phase_id)"
+                )
+            )
+            conn.commit()
+            logger.info("Ensured uq_phase_execution_phase_id unique index exists")
+    except Exception as e:
+        logger.warning(f"phase_executions phase_id unique index migration failed (not just 'already exists' -- check this): {e}")
+
+
 def repair_dangling_autopilot_designs_fk(engine):
     """Point workflows/features' design_id back at autopilot_designs.
 
@@ -1480,6 +1561,7 @@ SCHEMA_MIGRATIONS = [
     ("_drop_speckit_auto_scan_column", drop_speckit_auto_scan_column),
     ("_drop_speckit_autoscan_enabled_column", drop_speckit_autoscan_enabled_column),
     ("_migrate_design_spec_key", migrate_design_spec_key),
+    ("_migrate_phase_execution_phase_id_unique", migrate_phase_execution_phase_id_unique),
     # Last: repairs damage the rebuild-and-swap migrations above can do, so it
     # always sees their final state within the same startup pass.
     ("_repair_dangling_autopilot_designs_fk", repair_dangling_autopilot_designs_fk),
