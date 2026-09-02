@@ -578,6 +578,33 @@ In order of how cleanly each one maps onto the table above, not by risk:
    and `_release_phase_task_creation_claim` separately, each passing its
    own computed `started_at` through `extra_fields` to preserve its
    specific, hard-won semantics exactly.
+
+   **Second bug caught auditing this migration after it had already
+   shipped:** `_FIELD_RESETS[(completed, in_progress)]` and
+   `[(failed, in_progress)]` both cleared `completed_at` — but
+   `reopen_phase_execution`, the actual shared writer behind both
+   currently-migrated callers, never touches `completed_at` for any
+   transition (confirmed by reading its source, not assumed). That
+   `completed_at: None` was an unverified guess carried over from this
+   document's original Step 2 sketch, never checked against the real
+   function before Step 3.2 started actually exercising it in
+   production. Traced every reader of `PhaseExecution.completed_at` in
+   the codebase before concluding this was safe to have shipped
+   unnoticed: every one of them filters to `status == "completed"` or
+   `"failed"` first, so a freshly-reopened `"in_progress"` row is
+   excluded from all of them regardless of which value `completed_at`
+   holds — no functional consumer was ever affected either way. Fixed to
+   match `reopen_phase_execution`'s real behavior (leave it untouched),
+   which also restores consistency with `_escalate_unresolvable_goto`'s
+   still-unmigrated direct `reopen_phase_execution` call. Two new tests
+   added at both the `transition_phase_execution` unit level and the
+   `_create_phase_task` call-site level, asserting a prior cycle's
+   `completed_at` survives a reopen unchanged — this is now the second
+   time an unverified `_FIELD_RESETS` entry shipped before being checked
+   against the function it was supposed to model; each future migration
+   in this list should diff the ENTIRE set of fields the real call site
+   touches against the table before wiring it in, not just the fields
+   that seem relevant.
 3. `reset_stale_executions_on_goto` (`phase_transitions.py:157`) — covers
    "rewind resets to `pending`," the exact site of bug #2, including
    today's added live-task-termination logic (`f9c50d72`), which stays as

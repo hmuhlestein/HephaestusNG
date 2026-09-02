@@ -1616,8 +1616,22 @@ _FIELD_RESETS: Dict[Tuple[str, str], dict] = {
     (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.PENDING): {"completed_at": None, "started_at": None, "task_creation_claimed_at": None},
     (PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.PENDING): {"completed_at": None, "started_at": None, "task_creation_claimed_at": None},
     (PhaseExecutionStatus.PENDING, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
-    (PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None, "task_creation_claimed_at": None},
-    (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None, "task_creation_claimed_at": None},
+    # completed_at deliberately NOT reset here: reopen_phase_execution --
+    # the actual shared writer behind both currently-migrated callers of
+    # this pair, _create_phase_task and _start_next_phase -- never
+    # touches completed_at for any transition (verified by re-reading its
+    # source, not assumed). A first-pass version of this table cleared it
+    # anyway, an unverified carryover from this doc's original sketch that
+    # was never checked against the real function; caught before it could
+    # cause a live consumer to see something different, though tracing
+    # every completed_at reader found none that would have been affected
+    # either way (each one filters to status='completed'/'failed' first,
+    # so a freshly-reopened 'in_progress' row is excluded from all of them
+    # regardless). Left unset here to match reality exactly, and to stay
+    # consistent with _escalate_unresolvable_goto's still-unmigrated
+    # direct reopen_phase_execution call, which also leaves it untouched.
+    (PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
+    (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
     (PhaseExecutionStatus.SKIPPED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
     (PhaseExecutionStatus.PENDING, PhaseExecutionStatus.SKIPPED): {"completed_at": "now"},
 }
