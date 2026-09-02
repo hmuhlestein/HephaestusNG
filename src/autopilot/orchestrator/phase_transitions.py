@@ -74,6 +74,7 @@ from src.core.database import (
     Feature,
     Phase,
     PhaseExecution,
+    PhaseExecutionStatus,
     Task,
     Workflow,
     get_db,
@@ -1480,6 +1481,104 @@ def _release_pending_phases_with_orphaned_task(db, workflow_id: str, logger: "Or
     execution.status = "in_progress"
     execution.started_at = execution.started_at or orphaned_task.created_at
     db.commit()
+
+
+# Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md: detect
+# PhaseExecution/real-state drift and log it immediately, without changing
+# any write path yet. "pending" is included alongside the other live
+# statuses: a task that exists at all but hasn't been picked up yet is
+# still real, pending work under this phase (see
+# _release_pending_phases_with_orphaned_task above's own "never dispatched
+# to an agent, stale >1min" case) -- omitting it would make this detector
+# blind to exactly the failure mode that self-heal exists for.
+LIVE_TASK_STATUSES = ["pending", "assigned", "in_progress", "queued", "blocked", "needs_work", "under_review"]
+
+
+def find_phase_execution_drift(db, workflow_id: str) -> list:
+    """Any phase with a live task whose PhaseExecution isn't "in_progress"
+    is drift -- returns (Phase, PhaseExecution, Task) triples for the
+    caller to debounce and log. Does not fix anything; detection only.
+    """
+    return (
+        db.query(Phase, PhaseExecution, Task)
+        .join(PhaseExecution, PhaseExecution.phase_id == Phase.id)
+        .join(Task, Task.phase_id == Phase.id)
+        .filter(
+            Phase.workflow_id == workflow_id,
+            Task.status.in_(LIVE_TASK_STATUSES),
+            PhaseExecution.status != PhaseExecutionStatus.IN_PROGRESS,
+        )
+        .all()
+    )
+
+
+def find_stuck_active_workflows(db) -> list:
+    """A workflow marked "active" with any "failed" PhaseExecution is stuck
+    by definition -- nothing in _advance_phases's four dispatch cases will
+    ever look at a "failed" execution, live task or not. Catches the exact
+    shape of the tombstone bug (a done task, a "failed" execution, no live
+    task for find_phase_execution_drift to key off), the single
+    highest-cost failure mode this refactor's own history produced.
+    Workflow-wide (not scoped to one workflow_id) -- callers run it once
+    per sweep tick, not once per workflow.
+    """
+    return (
+        db.query(Workflow, Phase, PhaseExecution)
+        .join(Phase, Phase.workflow_id == Workflow.id)
+        .join(PhaseExecution, PhaseExecution.phase_id == Phase.id)
+        .filter(
+            Workflow.status == "active",
+            PhaseExecution.status == PhaseExecutionStatus.FAILED,
+        )
+        .all()
+    )
+
+
+# Debounce state for find_phase_execution_drift: module-level, in-memory,
+# reset on restart -- same tradeoff orphan_reaper.py's _first_seen_orphan
+# accepts for the same reason (a false positive here costs nothing but a
+# log line; a missed detection self-heals on the next tick regardless).
+# A task legitimately spends a few hundred milliseconds "pending" before
+# _create_phase_task reopens its phase's execution to "in_progress" --
+# logging on the first sighting would flag that normal window as drift.
+# Require the SAME (phase_id, task_id) pair to still be present on a
+# SECOND, later check before treating it as real. find_stuck_active_workflows
+# needs no such debounce -- an active workflow with a failed execution is
+# never a normal, momentary state.
+_drift_previously_seen: set = set()
+
+
+def check_and_log_phase_execution_drift(db, workflow_id: str, logger: "OrchestratorLogger") -> None:
+    """Debounced wrapper around find_phase_execution_drift -- call once per
+    workflow per sweep tick. Logs a WARNING for drift confirmed present on
+    two consecutive calls; never raises, never writes anything."""
+    current = find_phase_execution_drift(db, workflow_id)
+    current_keys = {(phase.id, task.id) for phase, _execution, task in current}
+    for phase, execution, task in current:
+        key = (phase.id, task.id)
+        if key in _drift_previously_seen:
+            logger.warning(
+                f"[PHASE-DRIFT] {phase.name} ({phase.id[:8]}): task {task.id[:8]} "
+                f"is {task.status!r} but PhaseExecution.status is {execution.status!r}, "
+                "not 'in_progress'"
+            )
+    # Keep only entries seen on THIS call, so a mismatch that resolves
+    # between ticks doesn't get logged if it later (coincidentally)
+    # recurs -- each occurrence needs its own two-in-a-row confirmation.
+    _drift_previously_seen.clear()
+    _drift_previously_seen.update(current_keys)
+
+
+def check_and_log_stuck_active_workflows(db, logger: "OrchestratorLogger") -> None:
+    """Undebounced wrapper around find_stuck_active_workflows -- call once
+    per sweep tick, not once per workflow. Logs a WARNING for every result;
+    never raises, never writes anything."""
+    for workflow, phase, execution in find_stuck_active_workflows(db):
+        logger.warning(
+            f"[PHASE-DRIFT] Workflow {workflow.id[:8]} is 'active' but phase "
+            f"{phase.name} ({phase.id[:8]})'s PhaseExecution is 'failed' -- "
+            "invisible to every _advance_phases dispatch case"
+        )
 
 
 def _get_phase_statuses(db, workflow_id: str) -> list:

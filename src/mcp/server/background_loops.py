@@ -609,6 +609,23 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Arbitration-escalation resolve error: {e}")
 
+    # Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md:
+    # detection only. _advance_phases already self-heals this exact shape
+    # (an active workflow with a "failed" PhaseExecution) inline every time
+    # it runs for that workflow -- this workflow-wide pass exists to catch
+    # the case that inline heal can't: a workflow whose _advance_phases
+    # never gets called at all (e.g. _is_workflow_monitored wrongly true
+    # for a loop that already died).
+    try:
+        from src.autopilot.orchestrator.phase_transitions import (
+            check_and_log_stuck_active_workflows,
+        )
+
+        with server_state.db_manager.session_scope() as drift_session:
+            check_and_log_stuck_active_workflows(drift_session, sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Stuck-active-workflow check error: {e}")
+
     session = server_state.db_manager.get_session()
     try:
         # Scope sweep to the active projects (plural, capped at
@@ -669,6 +686,22 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
                 _maybe_resolve_arbitration(wf_id, sweep_logger)
             except Exception as e:
                 logger.error(f"[PHASE-SWEEP] Arbitration resolve error for {wf_id[:8]}: {e}")
+
+        try:
+            # Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md:
+            # detection only, no write path -- runs regardless of the
+            # _is_workflow_monitored skip below, deliberately, since the
+            # whole point is to catch drift independent of whether that
+            # optimization's assumption ("the live loop is handling this
+            # one") is actually still true for this workflow.
+            from src.autopilot.orchestrator.phase_transitions import (
+                check_and_log_phase_execution_drift,
+            )
+
+            with server_state.db_manager.session_scope() as drift_db:
+                check_and_log_phase_execution_drift(drift_db, wf_id, sweep_logger)
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Drift check error for {wf_id[:8]}: {e}")
 
         try:
             # Skip workflows actively monitored by run_single_workflow as a

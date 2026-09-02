@@ -340,3 +340,101 @@ class TestWorktreeSweepThrottle:
         server._run_phase_advancement_sweep_once(MagicMock())
 
         assert len(call_count) == 1
+
+
+class TestPhaseExecutionDriftChecksAreWired:
+    """Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md:
+    the two detection-only checks must actually run every sweep tick --
+    per-workflow drift detection regardless of wf_status (active or
+    paused), and the workflow-wide stuck-active-workflow check exactly
+    once per tick, not once per workflow."""
+
+    @pytest.mark.asyncio
+    async def test_drift_check_runs_for_every_active_or_paused_workflow(
+        self, db_manager, monkeypatch
+    ):
+        from src.mcp.server import background_loops as server
+
+        _make_workflow(db_manager, "wf-active", "active")
+        _make_workflow(db_manager, "wf-paused", "paused")
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+        server.server_state.shutdown_event = asyncio.Event()
+
+        checked_ids = []
+
+        def fake_drift_check(db, wf_id, logger):
+            checked_ids.append(wf_id)
+            # Stop the sweep after this single pass over the DB snapshot.
+            server.server_state.shutdown_event.set()
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.phase_transitions.check_and_log_phase_execution_drift",
+            fake_drift_check,
+        )
+
+        await server.background_phase_advancement_sweep()
+
+        assert sorted(checked_ids) == ["wf-active", "wf-paused"]
+
+    @pytest.mark.asyncio
+    async def test_stuck_active_workflow_check_runs_exactly_once_per_tick(
+        self, db_manager, monkeypatch
+    ):
+        from src.mcp.server import background_loops as server
+
+        _make_workflow(db_manager, "wf-active-1", "active")
+        _make_workflow(db_manager, "wf-active-2", "active")
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+        server.server_state.shutdown_event = asyncio.Event()
+
+        call_count = []
+
+        def fake_stuck_check(session, logger):
+            call_count.append(1)
+            # Stop the sweep after this single pass over the DB snapshot.
+            server.server_state.shutdown_event.set()
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.phase_transitions.check_and_log_stuck_active_workflows",
+            fake_stuck_check,
+        )
+
+        await server.background_phase_advancement_sweep()
+
+        assert len(call_count) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_drift_check_error_does_not_block_other_workflows(
+        self, db_manager, monkeypatch
+    ):
+        """Same resilience guarantee every other per-workflow sweep step
+        has: one workflow's exception must not stop the loop from reaching
+        the rest."""
+        from src.mcp.server import background_loops as server
+
+        _make_workflow(db_manager, "wf-boom", "active")
+        _make_workflow(db_manager, "wf-fine", "active")
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+        server.server_state.shutdown_event = asyncio.Event()
+
+        checked_ids = []
+
+        def fake_drift_check(db, wf_id, logger):
+            # Stop the sweep after this single pass over the DB snapshot,
+            # regardless of which workflow raises.
+            server.server_state.shutdown_event.set()
+            if wf_id == "wf-boom":
+                raise RuntimeError("boom")
+            checked_ids.append(wf_id)
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.phase_transitions.check_and_log_phase_execution_drift",
+            fake_drift_check,
+        )
+
+        await server.background_phase_advancement_sweep()
+
+        assert checked_ids == ["wf-fine"]
