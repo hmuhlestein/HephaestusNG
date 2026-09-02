@@ -226,16 +226,11 @@ refreshed if `spec.md` changed since it was last queued; a row already past
 skipped, never allowed to abort the scan or (per an adversarial-review fix)
 bypass the per-project budget gate for the rest of the pass.
 
-**Note:** this auto-scan path calls `find_speckit_features` from
-`src/core/speckit_detection.py` — a second, independently-maintained
-detection implementation from the `discover_speckit_features` used by the
-manual `--feature` CLI/API path documented above. The two use very similar
-scanning logic (same directory convention, same per-location error
-isolation, same symlink-safety posture) but are not the same code path.
-This is a real duplication in the codebase as of this writing, not a
-documentation error — worth a maintainer's attention, since a future change
-to detection semantics (e.g. which optional files count, dedup rules) would
-need to land in both modules to stay consistent.
+This auto-scan path calls the same `discover_speckit_features` used by the
+manual `--feature` CLI/API path documented above — it previously called a
+second, independently-maintained detection implementation
+(`src/core/speckit_detection.py`), unified into this one module so a future
+change to detection semantics only needs to land in one place.
 
 ---
 

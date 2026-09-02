@@ -37,7 +37,6 @@ from src.autopilot.orchestrator.engine_client import (
     get_tasks,
     get_workflow_status,
 )
-from src.core.speckit_detection import find_speckit_features
 
 from typing import TYPE_CHECKING
 
@@ -305,9 +304,13 @@ def _sync_speckit_designs(db, project) -> None:
     """Fold ready specs/<NNN>-<name>/ Spec Kit features into pending
     AutopilotDesign rows, gated on project.speckit_auto_scan_enabled.
 
-    No-op (REQ-06) unless the flag is set. Reuses find_speckit_features for
-    all directory/readiness parsing (REQ-10, NFR-04) -- this function only
-    decides which already-detected features become queue entries.
+    No-op (REQ-06) unless the flag is set. Reuses discover_speckit_features
+    (src/autopilot/orchestrator/speckit.py -- the same detection module the
+    manual --feature/--repo CLI/API path uses; previously a second,
+    independently-maintained implementation lived here in
+    src/core/speckit_detection.py, unified away) for all directory parsing
+    (REQ-10, NFR-04) -- this function only decides which already-detected
+    features become queue entries.
 
     Dedup key is (project_id, filename), the ACTUAL unique constraint on
     AutopilotDesign (uq_design_project_filename, src/core/database.py:1358)
@@ -342,14 +345,14 @@ def _sync_speckit_designs(db, project) -> None:
     every subsequent scan, on top of blocking every OTHER speckit feature
     in the same pass from ever syncing. Swallow-and-continue here matches
     the philosophy already used a few lines above for a
-    find_speckit_features-level failure; every unexpected error is still
-    visible at ERROR with a traceback, just without cascading into
+    discover_speckit_features-level failure; every unexpected error is
+    still visible at ERROR with a traceback, just without cascading into
     unrelated, more safety-critical logic one level up).
 
     Deliberately does NOT archive/clean up a pending row whose feature
-    stops appearing in find_speckit_features's output (e.g. a renamed or
-    deleted specs/<NNN>-<name>/ directory) -- find_speckit_features's own
-    is_dir() check and a plain Path.exists() call both silently swallow
+    stops appearing in discover_speckit_features's output (e.g. a renamed
+    or deleted specs/<NNN>-<name>/ directory) -- discover_speckit_features's
+    own is_dir() check and a plain Path.exists() call both silently swallow
     OSError and return False on a transient filesystem/mount hiccup, not
     just on genuine deletion, so archiving on absence could permanently
     hide a legitimately pending, ready feature. No REQ-XX requires
@@ -357,17 +360,17 @@ def _sync_speckit_designs(db, project) -> None:
     """
     if not getattr(project, "speckit_auto_scan_enabled", False):
         return
+    from src.autopilot.orchestrator.speckit import discover_speckit_features
     from src.core.database import AutopilotDesign, directory_spec_key, utc_now
-    from src.core.speckit_detection import find_speckit_features
 
     try:
-        features = find_speckit_features(db, project.id, project.base_dir)
+        features = discover_speckit_features(db, project.id, project.base_dir)
     except Exception:
         logger.error(f"[SPECKIT-AUTOSCAN] detection failed for project {project.id[:8]}", exc_info=True)
         return
 
     for feat in features:
-        if not feat.has_plan:  # REQ-07
+        if feat.plan_path is None:  # REQ-07
             continue
         spec_path = feat.dir_path / "spec.md"
 
