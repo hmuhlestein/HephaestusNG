@@ -14,9 +14,11 @@ from src.autopilot.orchestrator.state import (
 )
 from src.core.constants import (
     CONTEXT_DIR_NAME,
+    PHASE0_DEFINITION_IDS,
 )
 from src.core.database import (
     Agent,
+    AutopilotDesign,
     Feature,
     Phase,
     PhaseExecution,
@@ -844,6 +846,27 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
     normal result_missing handling sends it to development with the
     available report text as context, same as any other run -- this
     function only unblocks the workflow, it doesn't grade the work.
+
+    Considers a phase whose execution is "failed" as well as "in_progress".
+    A "failed" execution is invisible to every _advance_phases dispatch case
+    (all four filter phase_statuses to exactly "pending"/"in_progress"/
+    "completed"), so a workflow abandoned while one of its phases sat failed
+    could never be re-entered by anything -- the same blind spot fixed for
+    the retry-cap and active-workflow cases in 6c13cd02, reached by a third
+    route. The unfinished/has_done gates below are what actually decide
+    whether it is evaluable, and they apply identically either way.
+
+    Guarded against resurrecting superseded work in BOTH directions, which
+    is what makes widening the scope safe. A per-feature workflow needs a
+    Feature still pointing back at it (the paused sibling's existing check);
+    a Phase 0 workflow needs an AutopilotDesign still naming it as its
+    phase0_workflow_id. Without the second half, an orphaned Phase 0
+    workflow from a design that has long since moved on to a later
+    decomposition attempt would be resumed here -- the "design started
+    processing again by itself" bug _retry_exhausted_paused_workflows
+    already documents. Observed live: workflow 9bcdc55b, a feature_architect
+    run with every task done and no design referencing it, correctly left
+    failed by this guard.
     """
 
     recovered = 0
@@ -858,11 +881,20 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
             .all()
         )
         for wf in candidates:
+            # Superseded-work guard -- see the docstring. Both halves are
+            # required: the Feature backlink for a per-feature workflow, the
+            # design's phase0_workflow_id for a Phase 0 one.
+            if wf.definition_id in PHASE0_DEFINITION_IDS:
+                if not db.query(AutopilotDesign).filter_by(phase0_workflow_id=wf.id).first():
+                    continue
+            elif not db.query(Feature).filter_by(workflow_id=wf.id).first():
+                continue
+
             in_progress_phase_ids = {
-                pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
+                pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status.in_(["in_progress", "failed"])).all()
             }
             if not in_progress_phase_ids:
-                continue  # nothing in_progress -- not this function's case
+                continue  # nothing in flight or failed -- not this function's case
 
             unfinished = (
                 db.query(Task)
@@ -887,6 +919,14 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
             )
             wf.status = "active"
             wf.status_reason = None
+            # Resuming the workflow alone is not enough when the phase that
+            # stalled it is the one sitting "failed": _case_in_progress_
+            # complete (the path this function hands off to) only ever looks
+            # at "in_progress" phases, so the execution has to come back into
+            # a status the dispatch cases can see.
+            from src.autopilot.orchestrator.engine_client import reset_failed_phase_executions
+
+            reset_failed_phase_executions(wf.id, session=db)
             # Sync feature status -- same reasoning as
             # _recover_abandoned_workflows_missing_worktree.
             for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
