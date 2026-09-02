@@ -8,7 +8,7 @@ thinking_level: high
 # uncomment to override for this phase specifically:
 # cli_tool: claude
 # cli_model: sonnet
-# fallback_cli_tool: pi
+# fallback_cli_tool:
 # fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 description: |
   Gate between product requirements and architecture. Verifies that the

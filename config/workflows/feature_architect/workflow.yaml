@@ -9,8 +9,10 @@ description: >-
 default_cli_tool: claude
 default_model: sonnet
 default_thinking_level: high
-fallback_cli_tool: pi
-fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+# pi removed as the secondary/fallback CLI tool -- falls through to
+# hephaestus_config.yaml's agents.default_fallback_cli_tool, also unset.
+# fallback_cli_tool:
+# fallback_cli_model:
 
 # Phase 0: Feature Architect decomposes the design into features, then
 # Feature Review adversarially compares that decomposition back against the
