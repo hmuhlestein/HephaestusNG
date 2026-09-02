@@ -9,10 +9,11 @@ plumbing itself.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, TMUX_PANE_WIDTH
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, TMUX_PANE_WIDTH, WORKTREES_SUBDIR
 from src.core.database import Agent, AgentLog
 
 logger = logging.getLogger(__name__)
@@ -306,6 +307,26 @@ class AgentOutputCapture:
             candidate_dir = Path(agent.working_directory) / CONTEXT_DIR_NAME / "tmux"
             if _has_transcript(candidate_dir):
                 return candidate_dir
+
+            # agent.working_directory is itself a worktree path
+            # (<repo_root>/.worktrees/<name>) that WorktreeRemover.remove
+            # already archived transcripts out of before deleting -- to
+            # the REPO ROOT's own .hephaestus/tmux/ (see
+            # _archive_tmux_transcripts), which for a nested/monorepo repo
+            # is that specific sub-repo's root, not necessarily
+            # AutopilotProject.base_dir. Deriving it directly from this
+            # path (rather than only via the Task->Workflow->Project chain
+            # below) doesn't depend on any of those rows still resolving --
+            # confirmed live: an agent with no Task row referencing it at
+            # all (assigned_agent_id matched nothing, current_task_id
+            # already cleared on termination) had this be the ONLY way to
+            # find its archived transcript.
+            wt_marker = f"{os.sep}{WORKTREES_SUBDIR}{os.sep}"
+            idx = agent.working_directory.find(wt_marker)
+            if idx != -1:
+                candidate_dir = Path(agent.working_directory[:idx]) / CONTEXT_DIR_NAME / "tmux"
+                if _has_transcript(candidate_dir):
+                    return candidate_dir
 
         # Rederive project_base/working_dir through whichever of the
         # agent's tasks is still reachable -- also the legacy fallback for
@@ -735,10 +756,27 @@ class AgentOutputCapture:
                     # chrome/sep. The Spacing pass further down still
                     # collapses any resulting runs down to one and drops
                     # leading blanks either way.
+                    #
+                    # Append `line` here, not a hardcoded "" -- a row
+                    # classified blank because its VISIBLE content is
+                    # empty can still carry real bytes: a lone SGR reset
+                    # with no character attached (e.g. a TUI jumping the
+                    # cursor far down a tall pane to reset color state
+                    # after a highlighted banner, landing on an otherwise-
+                    # empty row). Substituting "" here silently drops that
+                    # reset -- every real character rendered afterward
+                    # then inherits whatever SGR state was left active.
+                    # Confirmed live: a background color set by a status
+                    # banner bled into all following output for the rest
+                    # of a transcript once its reset -- ~1975 rows below
+                    # on a 2000-row pane -- landed on a row exactly like
+                    # this one. `line` renders identically to "" either
+                    # way (no visible glyph), so this changes nothing
+                    # about what's displayed, only what state survives.
                     prev_kind = classified[idx - 1][0] if idx > 0 else None
                     next_kind = classified[idx + 1][0] if idx + 1 < len(classified) else None
                     if prev_kind not in ('sep', 'chrome') and next_kind not in ('sep', 'chrome'):
-                        filtered_lines.append("")
+                        filtered_lines.append(line)
                         clean_lines.append("")
                 elif kind == 'sep':
                     j = idx + 1
@@ -847,15 +885,35 @@ class AgentOutputCapture:
             block_start_re = re.compile(
                 r'^(?:\$ |(?:read|write|edit|bash|grep|find|ls|mcp|subagent)\b)'
             )
+            # A blank line's `line` can still carry a real SGR reset with no
+            # visible character attached (see the 'blank' classification
+            # above, which now preserves that instead of substituting "").
+            # It must never survive as its OWN output entry, though --
+            # emitting escape bytes with nothing visible on the same line
+            # is exactly the "ANSI-only garbage line" a non-HTML-converting
+            # consumer (e.g. copy-to-clipboard) would show verbatim. Every
+            # blank line's raw bytes are carried forward instead: onto the
+            # single "" transition marker if this is where a blank run
+            # begins (never appended a second time for later blanks in the
+            # same run -- that's still what "one visible blank line" means),
+            # or onto the next real content line once the run ends. Either
+            # way the reset is still applied where it lands, just never
+            # standalone.
             out_lines = []
             prev_blank = True  # also drops leading blanks
+            carried = ""
             for line, cl in zip(final_lines, final_clean):
                 blank = not cl
-                if blank and prev_blank:
+                if blank:
+                    carried += line
+                    if not prev_blank:
+                        out_lines.append("")
+                    prev_blank = True
                     continue
-                if not blank and not prev_blank and block_start_re.match(cl):
+                if not prev_blank and block_start_re.match(cl):
                     out_lines.append("")
-                out_lines.append(line)
+                out_lines.append(carried + line)
+                carried = ""
                 prev_blank = blank
 
             # Cache the fully-filtered result (before tailing) keyed on
