@@ -7643,6 +7643,68 @@ class TestStageForensicsInputs:
         assert (tmp_path / ".hephaestus" / "run_health.json").exists()
 
 
+class TestCreatePhaseTaskReopensExecution:
+    """_create_phase_task's PhaseExecution reopen, migrated to
+    transition_phase_execution in Step 3 of
+    docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md. Regression
+    coverage this area didn't have before: every existing
+    TestCreatePhaseTask* test asserts Task-level outcomes, none assert
+    the PhaseExecution's own status/started_at/task_creation_claimed_at
+    after a reopen -- exactly the kind of gap that let the completed_at
+    bug through _close_execution's migration undetected."""
+
+    def _seed(self, db, status, task_creation_claimed_at=None):
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-reopen", name="t", phases_folder_path="/tmp",
+                    status="active", working_directory="/tmp/wf-reopen",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-reopen", workflow_id="wf-reopen", name="development",
+                    order=5, description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-reopen", phase_id="phase-reopen",
+                    workflow_execution_id="wf-reopen", status=status,
+                    task_creation_claimed_at=task_creation_claimed_at,
+                )
+            )
+
+    @pytest.mark.parametrize("from_status", ["pending", "completed", "skipped", "failed"])
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_reopens_to_in_progress_and_clears_stale_claim(
+        self, mock_create_agent, from_status, orch_db_env, tmp_path
+    ):
+        from datetime import datetime, timedelta
+
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import PhaseExecution
+
+        stale_claim = datetime.utcnow() - timedelta(minutes=10)
+        self._seed(orch_db_env, status=from_status, task_creation_claimed_at=stale_claim)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-reopen", "phase-reopen", "development", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-reopen").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at is not None
+            assert execution.task_creation_claimed_at is None
+
+
 class TestCreatePhaseTaskReviewCap:
     """_create_phase_task's opt-in review-run cap + prior-findings
     injection (workflow.yaml's max_review_runs) -- closes the review-fix-

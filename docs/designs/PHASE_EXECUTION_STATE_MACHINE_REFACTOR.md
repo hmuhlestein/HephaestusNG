@@ -540,10 +540,44 @@ In order of how cleanly each one maps onto the table above, not by risk:
    (`_create_phase_task`, `_clear_stale_task_creation_claim`,
    `_release_phase_task_creation_claim`, `_start_next_phase`) — all four
    now carry the identical, correct `("pending", "completed", "skipped",
-   "failed")` gate as of this session's follow-up fix, which is exactly
-   why they're a single migration item: one transition
-   (`X -> "in_progress"` on dispatch), copy-pasted four times, is the
-   textbook case for collapsing into one call.
+   "failed")` gate as of this session's follow-up fix.
+
+   **Revised after actually reading all four call sites, not just their
+   shared gate:** only the GATE (which from-statuses are eligible) is
+   identical across all four. The `started_at` write is not — three
+   distinct behaviors, not one copy-pasted four times:
+   - `_create_phase_task` and `_start_next_phase` both call the shared
+     `reopen_phase_execution(status="in_progress", started_at="now")` and
+     are genuinely identical. Migrated together.
+   - `_clear_stale_task_creation_claim` does NOT go through
+     `reopen_phase_execution` at all — it backfills `started_at` from the
+     phase's latest task's `created_at`, but only if `started_at` isn't
+     already set (`execution.started_at or latest_task.created_at`).
+   - `_release_phase_task_creation_claim` also bypasses
+     `reopen_phase_execution` and anchors `started_at` to the EARLIEST
+     task's `created_at` — its docstring documents a real live incident
+     (a duplicate self-heal task) caused by a prior version of this exact
+     code using `utc_now()` instead. Blindly applying `_FIELD_RESETS`'s
+     `started_at: "now"` default here would silently reintroduce that
+     bug.
+
+   Also found in the process: `_FIELD_RESETS` itself only cleared
+   `task_creation_claimed_at` for `(pending, in_progress)`, not for
+   `(completed, in_progress)`, `(failed, in_progress)`, or
+   `(skipped, in_progress)` — even though `reopen_phase_execution` clears
+   it unconditionally for every one of those. Never exercised in
+   production (`transition_phase_execution` had no caller reaching
+   `in_progress` yet), so no live impact, but fixed before migrating
+   anything that depends on it, with dedicated tests added for each of
+   the three previously-missing entries.
+
+   Given the divergent `started_at` handling, this item is being done as
+   two-plus migrations, not one: `_create_phase_task` + `_start_next_phase`
+   together first (their behavior is provably identical and now fully
+   covered by `_FIELD_RESETS`), then `_clear_stale_task_creation_claim`
+   and `_release_phase_task_creation_claim` separately, each passing its
+   own computed `started_at` through `extra_fields` to preserve its
+   specific, hard-won semantics exactly.
 3. `reset_stale_executions_on_goto` (`phase_transitions.py:157`) — covers
    "rewind resets to `pending`," the exact site of bug #2, including
    today's added live-task-termination logic (`f9c50d72`), which stays as
