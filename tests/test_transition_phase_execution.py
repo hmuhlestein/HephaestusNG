@@ -175,12 +175,33 @@ class TestFieldResets:
             result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="goto-reentry")
             assert result.task_creation_claimed_at is None
 
+    def test_completed_to_in_progress_leaves_completed_at_untouched(self, db_manager):
+        """reopen_phase_execution -- the real writer behind both current
+        callers of this pair, _create_phase_task and _start_next_phase --
+        never touches completed_at for any transition (verified by
+        reading its source). A first-pass version of this table cleared
+        it anyway, an unverified guess carried over from this doc's
+        original sketch; this locks in the corrected, real behavior so it
+        can't silently drift back."""
+        old_completed_at = datetime.utcnow() - timedelta(days=2)
+        _seed(db_manager, status="completed", completed_at=old_completed_at)
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="goto-reentry")
+            assert result.completed_at == old_completed_at
+
     def test_failed_to_in_progress_clears_claim(self, db_manager):
         claimed = datetime.utcnow() - timedelta(minutes=5)
         _seed(db_manager, status="failed", task_creation_claimed_at=claimed)
         with db_manager.session_scope() as session:
             result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="retry")
             assert result.task_creation_claimed_at is None
+
+    def test_failed_to_in_progress_leaves_completed_at_untouched(self, db_manager):
+        old_completed_at = datetime.utcnow() - timedelta(days=2)
+        _seed(db_manager, status="failed", completed_at=old_completed_at)
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="retry")
+            assert result.completed_at == old_completed_at
 
     def test_skipped_to_in_progress_clears_claim(self, db_manager):
         claimed = datetime.utcnow() - timedelta(minutes=5)

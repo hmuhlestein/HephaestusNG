@@ -7653,7 +7653,7 @@ class TestCreatePhaseTaskReopensExecution:
     after a reopen -- exactly the kind of gap that let the completed_at
     bug through _close_execution's migration undetected."""
 
-    def _seed(self, db, status, task_creation_claimed_at=None):
+    def _seed(self, db, status, task_creation_claimed_at=None, completed_at=None):
         from src.core.database import Phase, PhaseExecution, Workflow
 
         with db.session_scope() as session:
@@ -7674,6 +7674,7 @@ class TestCreatePhaseTaskReopensExecution:
                     id="exec-reopen", phase_id="phase-reopen",
                     workflow_execution_id="wf-reopen", status=status,
                     task_creation_claimed_at=task_creation_claimed_at,
+                    completed_at=completed_at,
                 )
             )
 
@@ -7703,6 +7704,38 @@ class TestCreatePhaseTaskReopensExecution:
             assert execution.status == "in_progress"
             assert execution.started_at is not None
             assert execution.task_creation_claimed_at is None
+
+    @pytest.mark.parametrize("from_status", ["completed", "failed"])
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_reopening_leaves_a_prior_cycles_completed_at_untouched(
+        self, mock_create_agent, from_status, orch_db_env, tmp_path
+    ):
+        """reopen_phase_execution -- the real writer behind this call site
+        before AND after its Step 3 migration -- never touches
+        completed_at for any transition. A first-pass _FIELD_RESETS
+        cleared it anyway for (completed/failed, in_progress), an
+        unverified guess that would have silently changed this call
+        site's real, live behavior had it not been caught."""
+        from datetime import datetime, timedelta
+
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import PhaseExecution
+
+        old_completed_at = datetime.utcnow() - timedelta(days=2)
+        self._seed(orch_db_env, status=from_status, completed_at=old_completed_at)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-reopen", "phase-reopen", "development", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-reopen").first()
+            assert execution.status == "in_progress"
+            assert execution.completed_at == old_completed_at
 
 
 class TestCreatePhaseTaskReviewCap:
