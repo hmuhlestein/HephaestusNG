@@ -543,6 +543,11 @@ def test_start_next_phase_resets_task_creation_claim(db_session, db_manager, pha
     db_session.refresh(next_execution)
     assert next_execution.status == "in_progress"
     assert next_execution.task_creation_claimed_at is None
+    # transition_phase_execution's started_at="now" reset (Step 3 of
+    # docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- this
+    # migration's whole reason for existing was to stamp a fresh cycle
+    # start, not just to clear the claim.
+    assert next_execution.started_at is not None
 
 
 def test_mark_phase_complete_target_phase_id_matches_started_phase(

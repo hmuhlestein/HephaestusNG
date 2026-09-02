@@ -161,6 +161,34 @@ class TestFieldResets:
             result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="goto-back")
             assert result.started_at is not None
 
+    def test_completed_to_in_progress_clears_claim(self, db_manager):
+        """reopen_phase_execution (phase_transitions.py) clears
+        task_creation_claimed_at unconditionally on every reopen to
+        in_progress, regardless of the from-status -- this table must
+        match that for every X -> in_progress entry, not just
+        (pending, in_progress), or a phase reopened from completed/failed/
+        skipped would keep a stale claim and stay invisible to
+        _case_in_progress_complete's own claim-gated evaluation forever."""
+        claimed = datetime.utcnow() - timedelta(minutes=5)
+        _seed(db_manager, status="completed", task_creation_claimed_at=claimed)
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="goto-reentry")
+            assert result.task_creation_claimed_at is None
+
+    def test_failed_to_in_progress_clears_claim(self, db_manager):
+        claimed = datetime.utcnow() - timedelta(minutes=5)
+        _seed(db_manager, status="failed", task_creation_claimed_at=claimed)
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="retry")
+            assert result.task_creation_claimed_at is None
+
+    def test_skipped_to_in_progress_clears_claim(self, db_manager):
+        claimed = datetime.utcnow() - timedelta(minutes=5)
+        _seed(db_manager, status="skipped", task_creation_claimed_at=claimed)
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(session, "phase-1", "in_progress", reason="goto-back")
+            assert result.task_creation_claimed_at is None
+
     def test_pending_to_skipped_sets_completed_at(self, db_manager):
         _seed(db_manager, status="pending")
         with db_manager.session_scope() as session:

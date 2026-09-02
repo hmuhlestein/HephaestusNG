@@ -1806,8 +1806,21 @@ class PhaseManager:
                 # earlier attempt must still reopen once it becomes
                 # next_phase again, or it stays invisible to every
                 # _advance_phases dispatch case.
-                _reopen_phase_execution(execution, status="in_progress", started_at="now")
-                session.commit()
+                #
+                # transition_phase_execution's atomic UPDATE replaces
+                # _reopen_phase_execution's plain in-memory mutation here
+                # (Step 3 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_
+                # REFACTOR.md) -- _FIELD_RESETS carries the identical
+                # started_at="now" + task_creation_claimed_at=None reset
+                # for every one of these four from-statuses. Deferred
+                # import: see _close_execution's own note on why.
+                from src.autopilot.orchestrator.phase_transitions import (
+                    transition_phase_execution,
+                )
+
+                transition_phase_execution(
+                    session, next_phase.id, "in_progress", reason="_start_next_phase"
+                )
 
                 logger.info(f"Started next phase: {next_phase.name}")
             return next_phase

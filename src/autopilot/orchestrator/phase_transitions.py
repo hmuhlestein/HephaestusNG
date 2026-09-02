@@ -1616,9 +1616,9 @@ _FIELD_RESETS: Dict[Tuple[str, str], dict] = {
     (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.PENDING): {"completed_at": None, "started_at": None, "task_creation_claimed_at": None},
     (PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.PENDING): {"completed_at": None, "started_at": None, "task_creation_claimed_at": None},
     (PhaseExecutionStatus.PENDING, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
-    (PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None},
-    (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None},
-    (PhaseExecutionStatus.SKIPPED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now"},
+    (PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None, "task_creation_claimed_at": None},
+    (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "completed_at": None, "task_creation_claimed_at": None},
+    (PhaseExecutionStatus.SKIPPED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
     (PhaseExecutionStatus.PENDING, PhaseExecutionStatus.SKIPPED): {"completed_at": "now"},
 }
 
@@ -3655,7 +3655,14 @@ def _create_phase_task(
                 # were in progress -- twice, minutes apart -- burning two
                 # full redundant agent runs.
                 if execution.status in ("pending", "completed", "skipped", "failed"):
-                    reopen_phase_execution(execution, status="in_progress", started_at="now")
+                    # transition_phase_execution's atomic UPDATE ... WHERE
+                    # status = :from_status replaces reopen_phase_execution's
+                    # plain in-memory mutation here (Step 3 of
+                    # docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md).
+                    # _FIELD_RESETS carries the identical started_at="now" +
+                    # task_creation_claimed_at=None reset reopen_phase_execution
+                    # always applied, for every one of these four from-statuses.
+                    transition_phase_execution(db, phase_id, "in_progress", reason="_create_phase_task")
                 else:
                     # Always release the claim once the task it was guarding
                     # actually exists, regardless of the entry status. The
