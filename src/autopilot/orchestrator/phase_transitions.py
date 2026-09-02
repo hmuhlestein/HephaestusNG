@@ -139,7 +139,12 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
     )
     if cleared and repair_status:
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
-        if execution and execution.status in ("pending", "completed", "skipped"):
+        # "failed" included alongside pending/completed/skipped -- same gap
+        # as _create_phase_task's reopen condition (fixed in 4d2f2005): a
+        # phase execution stuck "failed" from an earlier attempt must still
+        # reopen to "in_progress" once a fresh task exists under it, or it
+        # stays invisible to every _advance_phases dispatch case.
+        if execution and execution.status in ("pending", "completed", "skipped", "failed"):
             latest_task = (
                 db.query(Task)
                 .filter_by(phase_id=phase_id)
@@ -1576,7 +1581,11 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
     if not execution:
         return
-    if execution.status in ("pending", "completed", "skipped"):
+    # "failed" included alongside pending/completed/skipped -- same gap as
+    # _create_phase_task's reopen condition (fixed in 4d2f2005): a phase
+    # execution stuck "failed" must still reopen once its guarded task
+    # exists, or it stays invisible to every _advance_phases dispatch case.
+    if execution.status in ("pending", "completed", "skipped", "failed"):
         execution.status = "in_progress"
         earliest_task = (
             db.query(Task)
@@ -2287,15 +2296,32 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             # Has failed tasks — try to retry them before marking complete
             if not _claim_phase_task_creation(db, phase.id):
                 continue
+            retried = None
             try:
-                if _retry_failed_tasks_with_done(
+                retried = _retry_failed_tasks_with_done(
                     db, phase, workflow_id, execution, logger,
                     failed_count, done_count, cycle_filter,
-                ) is True:
+                )
+                if retried is True:
                     return True
                 continue
             finally:
-                _release_phase_task_creation_claim(db, phase.id)
+                # _retry_failed_tasks_with_done's exhaustion branch
+                # (retried is not True) deliberately sets
+                # execution.status="failed" as a terminal decision.
+                # _release_phase_task_creation_claim's reopen-eligible set
+                # now includes "failed" (this session's fix for the
+                # tombstone bug), so calling it unconditionally here would
+                # flip that terminal decision straight back to
+                # "in_progress" one line after it was made. Only
+                # release-and-maybe-reopen on the genuine retry path; the
+                # exhausted path just clears the claim field directly, so
+                # the deliberately-"failed" status sticks.
+                if retried is True:
+                    _release_phase_task_creation_claim(db, phase.id)
+                elif execution:
+                    execution.task_creation_claimed_at = None
+                    db.commit()
 
         # Phase is complete — fire transition. mark_phase_complete's engine
         # evaluation can take minutes (an LLM call in phase_manager.py), and

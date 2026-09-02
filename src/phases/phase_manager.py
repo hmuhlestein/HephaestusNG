@@ -1747,7 +1747,7 @@ class PhaseManager:
                 session.query(PhaseExecution).filter_by(phase_id=next_phase.id).first()
             )
 
-            if execution and execution.status in ("pending", "completed", "skipped"):
+            if execution and execution.status in ("pending", "completed", "skipped", "failed"):
                 # Fresh start for this cycle: stamp started_at now, and
                 # reset the task-creation/evaluation claim (see
                 # orchestrator.py's _claim_phase_task_creation) -- it's a
@@ -1766,6 +1766,14 @@ class PhaseManager:
                 # completeness check treats it as terminal and can mark
                 # the whole workflow "completed" while this phase is
                 # actually about to start real work.
+                #
+                # "failed" included the same way, added later (4d2f2005
+                # fixed only _create_phase_task's copy of this same gate;
+                # this is the "main forward-progress path" sibling that had
+                # drifted from it): a phase execution stuck "failed" from an
+                # earlier attempt must still reopen once it becomes
+                # next_phase again, or it stays invisible to every
+                # _advance_phases dispatch case.
                 _reopen_phase_execution(execution, status="in_progress", started_at="now")
                 session.commit()
 

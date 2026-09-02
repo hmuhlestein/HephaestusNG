@@ -1697,6 +1697,33 @@ class TestStartNextPhaseMarksJumpedOverPhasesSkipped:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-arch-review").first()
             assert execution.status == "completed"
 
+    def test_reopens_the_target_phase_even_if_it_was_left_failed(self, real_db):
+        """Root-cause regression: this function's reopen gate was an
+        identical, independently-drifted ("pending", "completed",
+        "skipped") copy of _create_phase_task's own gate (fixed there in
+        4d2f2005) -- missing "failed" here too. _start_next_phase is the
+        MAIN forward-progress path, so a target phase left "failed" from an
+        earlier attempt never reopened here either, staying invisible to
+        every _advance_phases dispatch case even once this jump correctly
+        selected it as the goto target."""
+        from src.core.database import PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            prodval_execution = session.query(PhaseExecution).filter_by(phase_id="phase-prodval").first()
+            prodval_execution.status = "failed"
+
+        with real_db.session_scope() as session:
+            next_phase = pm._start_next_phase(session, "phase-dev")
+            assert next_phase.name == "product_validation"
+
+        with real_db.session_scope() as session:
+            prodval_execution = session.query(PhaseExecution).filter_by(phase_id="phase-prodval").first()
+            assert prodval_execution.status == "in_progress"
+
     def test_reopens_a_previously_skipped_target_phase(self, real_db):
         """Regression: next_phase's own reopen only handled entry status
         "pending"/"completed" -- if the target itself was already "skipped"

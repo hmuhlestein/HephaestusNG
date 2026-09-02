@@ -238,6 +238,33 @@ class TestReleasePhaseTaskCreationClaim:
             assert exec1.status == "in_progress"
             assert exec1.started_at == original_started_at
 
+    def test_reopens_a_failed_execution_too(self, db_manager, sample_workflow):
+        """Root-cause regression: this function's gate list was an
+        identical, independently-drifted copy of _create_phase_task's own
+        gate (fixed in 4d2f2005) -- missing "failed" here too, so a phase
+        execution stuck "failed" from an earlier attempt never reopened via
+        this path either, staying invisible to every _advance_phases
+        dispatch case even while its guarded task ran for real."""
+        from src.autopilot.orchestrator.phase_transitions import (
+    _claim_phase_task_creation,
+    _release_phase_task_creation_claim,
+)
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "failed"
+
+        with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+        with db_manager.session_scope() as session:
+            _release_phase_task_creation_claim(session, "phase-1")
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert exec1.task_creation_claimed_at is None
+            assert exec1.status == "in_progress"
+
     def test_clears_claim_when_execution_was_already_loaded_in_the_same_session(
         self, db_manager, sample_workflow
     ):
@@ -2561,6 +2588,41 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is not None
+
+    def test_repairs_a_failed_execution_too(self, db_manager, sample_workflow):
+        """Root-cause regression: this function's repair_status branch had
+        the identical, independently-drifted ("pending", "completed",
+        "skipped") gate as _create_phase_task's own reopen condition
+        (fixed for that one site in 4d2f2005) -- missing "failed" here too,
+        so a stale claim on a "failed" execution cleared the claim but
+        never reopened the phase, leaving it invisible to every
+        _advance_phases dispatch case even after its task had already run."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.phase_transitions import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            _clear_stale_task_creation_claim,
+        )
+        from src.core.database import PhaseExecution
+
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="done",
+            ))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "failed"
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            result = _clear_stale_task_creation_claim(session, "phase-1")
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
 
 
 class TestReleaseStaleTaskCreationClaims:
