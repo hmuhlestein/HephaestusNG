@@ -2825,7 +2825,19 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                     # sat in_progress for 12+ hours after this exact branch
                     # fired, with development's later goto back to it
                     # silently never creating a new task.
-                    execution = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+                    # populate_existing() matters here: db is the caller's
+                    # shared, longer-lived sweep session (this function
+                    # iterates many phases on the same session), not a
+                    # fresh one -- this phase's PhaseExecution may already
+                    # be loaded into its identity map from earlier in the
+                    # same sweep. A stale execution.completed_at read here
+                    # would compute and write a WRONG value via
+                    # extra_fields below, with no atomic-UPDATE-WHERE-
+                    # clause backstop protecting a field VALUE the way it
+                    # protects the transition's validity -- same class of
+                    # gap found and fixed in _clear_stale_task_creation_
+                    # claim's own read.
+                    execution = db.query(PhaseExecution).filter_by(phase_id=phase.id).populate_existing().first()
                     if execution:
                         # transition_phase_execution's atomic UPDATE
                         # replaces reopen_phase_execution's plain mutation

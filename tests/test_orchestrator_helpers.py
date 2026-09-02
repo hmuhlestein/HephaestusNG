@@ -2387,6 +2387,76 @@ class TestMaybeRetryFailedTasksRoutesTicketBlockedToDevelopment:
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_sees_a_completed_at_update_made_after_preload(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """Regression found in the next gap-check pass after this
+        migration shipped: unlike _retry_failed_tasks's sibling branch
+        (which always opens a fresh session), this function is called
+        with `db` as the CALLER's own shared, longer-lived sweep session
+        (see _case_in_progress_complete's per-phase loop) -- this phase's
+        PhaseExecution can already be sitting in that session's identity
+        map before this branch runs. Without populate_existing() on the
+        read that feeds extra_fields={"completed_at": ...}, a stale
+        cached value would get written back unchanged instead of the
+        row's real current one -- and unlike transition_phase_execution's
+        own from_status read, there's no atomic-UPDATE-WHERE-clause
+        backstop protecting a field VALUE the way it protects the
+        transition's validity."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        fresh_completed_at = datetime.utcnow() - timedelta(minutes=2)
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-under-test", workflow_id="wf-1", name="git_expert",
+                order=10, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-under-test", phase_id="phase-under-test",
+                workflow_execution_id="wf-1", status="in_progress",
+                completed_at=None,
+            ))
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-under-test",
+                raw_description="r", done_definition="d", status="failed",
+                failure_reason="Cannot mark done: 1 open bug ticket(s) still unresolved — ticket-abc: some finding.",
+                retry_count=0,
+            ))
+
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            # The pre-load every real caller does (_case_in_progress_
+            # complete's own per-phase sweep loop, which reads phase
+            # statuses well before reaching this specific branch) before
+            # ever calling this function on the same session.
+            preloaded = session.query(PhaseExecution).filter_by(id="exec-under-test").first()
+            assert preloaded.completed_at is None
+
+            # A concurrent write sets completed_at on the real row
+            # without touching the ORM's cached object.
+            session.query(PhaseExecution).filter(
+                PhaseExecution.id == "exec-under-test"
+            ).update({"completed_at": fresh_completed_at}, synchronize_session=False)
+
+            _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-under-test").first()
+            assert execution.status == "pending"
+            # Without populate_existing(), the stale cached completed_at
+            # (None) would have overwritten the row's REAL value instead
+            # of preserving it.
+            assert execution.completed_at == fresh_completed_at
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_ticket_blocked_git_expert_does_not_get_re_routed_on_a_second_call(
         self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
     ):
