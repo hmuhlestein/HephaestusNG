@@ -770,6 +770,27 @@ In order of how cleanly each one maps onto the table above, not by risk:
    Updated to patch `transition_phase_execution` at its source module
    (the import is deferred/function-level, so patching
    `phase_manager.transition_phase_execution` would not have worked).
+
+   **One more gap-check finding after this step shipped:** of the three
+   `in_progress -> pending` sites migrated here, two
+   (`_handle_evaluation_retry`, `_retry_failed_tasks`) run on a
+   single-use or freshly-opened session and are safe; the third,
+   `_maybe_retry_failed_tasks`, is called with `db` as the CALLER's own
+   shared, longer-lived sweep session (`_case_in_progress_complete`'s
+   per-phase loop) -- this phase's `PhaseExecution` can already be
+   sitting in that session's identity map from earlier in the same
+   sweep. Its local `execution` read (feeding
+   `extra_fields={"completed_at": ...}`) had no `populate_existing()`
+   protection, and — unlike `transition_phase_execution`'s own
+   `from_status` read, which the atomic UPDATE's `WHERE` clause backstops
+   against ever causing an incorrect write — this read has no such
+   backstop: its value is written unconditionally once the transition
+   succeeds. Fixed with `populate_existing()`, matching the pattern
+   already established for `_clear_stale_task_creation_claim`'s
+   equivalent read. Verified with a test proving the fix (confirmed to
+   fail without it, pass with it) using the same pre-load +
+   `synchronize_session=False` update technique as that earlier fix's
+   own test.
 5. The self-heal functions split into two categories, not one — conflating
    them was an earlier mistake in this document:
 
