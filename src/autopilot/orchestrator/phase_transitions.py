@@ -1545,28 +1545,42 @@ def find_stuck_active_workflows(db) -> list:
 # SECOND, later check before treating it as real. find_stuck_active_workflows
 # needs no such debounce -- an active workflow with a failed execution is
 # never a normal, momentary state.
-_drift_previously_seen: set = set()
+#
+# Keyed by workflow_id -- NOT a single shared set. The sweep calls this once
+# per active/paused workflow per tick (background_loops.py), so a single
+# global set would have every workflow's call clear() out whatever the
+# PREVIOUS workflow in that same tick's iteration just recorded, and this
+# workflow's own genuine, persistent drift would then never match on the
+# next tick (it'd be compared against some other workflow's keys instead).
+# With >1 monitored workflow -- the normal case -- that silently defeated
+# the debounce entirely: real drift never reached "second sighting" and
+# never got logged. Stale per-workflow entries for since-completed
+# workflows are left in place rather than cleaned up -- bounded by total
+# workflow count, resets on restart, not worth the extra bookkeeping.
+_drift_previously_seen: Dict[str, set] = {}
 
 
 def check_and_log_phase_execution_drift(db, workflow_id: str, logger: "OrchestratorLogger") -> None:
     """Debounced wrapper around find_phase_execution_drift -- call once per
     workflow per sweep tick. Logs a WARNING for drift confirmed present on
-    two consecutive calls; never raises, never writes anything."""
+    two consecutive calls for THIS workflow; never raises, never writes
+    anything."""
     current = find_phase_execution_drift(db, workflow_id)
     current_keys = {(phase.id, task.id) for phase, _execution, task in current}
+    previously_seen = _drift_previously_seen.get(workflow_id, set())
     for phase, execution, task in current:
         key = (phase.id, task.id)
-        if key in _drift_previously_seen:
+        if key in previously_seen:
             logger.warning(
                 f"[PHASE-DRIFT] {phase.name} ({phase.id[:8]}): task {task.id[:8]} "
                 f"is {task.status!r} but PhaseExecution.status is {execution.status!r}, "
                 "not 'in_progress'"
             )
-    # Keep only entries seen on THIS call, so a mismatch that resolves
-    # between ticks doesn't get logged if it later (coincidentally)
-    # recurs -- each occurrence needs its own two-in-a-row confirmation.
-    _drift_previously_seen.clear()
-    _drift_previously_seen.update(current_keys)
+    # Keep only entries seen on THIS call for THIS workflow, so a mismatch
+    # that resolves between ticks doesn't get logged if it later
+    # (coincidentally) recurs -- each occurrence needs its own
+    # two-in-a-row confirmation.
+    _drift_previously_seen[workflow_id] = current_keys
 
 
 def check_and_log_stuck_active_workflows(db, logger: "OrchestratorLogger") -> None:

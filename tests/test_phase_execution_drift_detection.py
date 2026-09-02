@@ -139,6 +139,41 @@ class TestCheckAndLogPhaseExecutionDriftDebounce:
         logger.warning.assert_not_called()  # first sighting of the NEW recurrence
 
 
+class TestCheckAndLogPhaseExecutionDriftMultiWorkflow:
+    """Regression: the sweep calls check_and_log_phase_execution_drift once
+    per active/paused workflow per tick (background_loops.py), not once
+    per tick overall. A single shared debounce set previously had every
+    workflow's call clear() whatever the PREVIOUS workflow in that same
+    tick's iteration had just recorded, so a workflow's own persistent
+    drift was compared against some OTHER workflow's keys on the next
+    tick and could never reach "second sighting" -- with >1 monitored
+    workflow (the normal case), real drift silently never got logged."""
+
+    def test_two_workflows_each_reach_second_sighting_independently(self, db_manager):
+        with db_manager.session_scope() as session:
+            session.add(Workflow(id="wf-a", name="a", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-a", workflow_id="wf-a", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-a", phase_id="phase-a", status="failed"))
+            session.add(Task(id="task-a", workflow_id="wf-a", phase_id="phase-a", raw_description="r", done_definition="d", status="pending"))
+
+            session.add(Workflow(id="wf-b", name="b", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-b", workflow_id="wf-b", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-b", phase_id="phase-b", status="pending"))
+            # wf-b has no live task -- no drift for it.
+
+        logger = MagicMock()
+
+        with db_manager.session_scope() as session:
+            pt.check_and_log_phase_execution_drift(session, "wf-a", logger)
+            pt.check_and_log_phase_execution_drift(session, "wf-b", logger)
+        logger.warning.assert_not_called()  # wf-a's first sighting
+
+        with db_manager.session_scope() as session:
+            pt.check_and_log_phase_execution_drift(session, "wf-a", logger)
+            pt.check_and_log_phase_execution_drift(session, "wf-b", logger)
+        logger.warning.assert_called_once()  # wf-a's second sighting -- must fire
+
+
 class TestCheckAndLogStuckActiveWorkflows:
     def test_logs_immediately_no_debounce_needed(self, db_manager):
         _seed(db_manager, execution_status="failed", task_status="done", workflow_status="active")
