@@ -676,12 +676,62 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
             assert execution.started_at is None
             assert execution.task_creation_claimed_at is None
 
+    def test_retry_preserves_a_stale_completed_at(self, seeded_workflow):
+        """This reset was migrated to transition_phase_execution (Step 3
+        of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md), whose
+        default _FIELD_RESETS[(in_progress, pending)] entry clears
+        completed_at -- correct for the already-migrated
+        reset_stale_executions_on_goto, but reopen_phase_execution (this
+        site's real pre-migration writer) never touched it. A stale,
+        non-null completed_at can legitimately survive here from a prior
+        completed -> in_progress reopen (_create_phase_task/
+        _start_next_phase deliberately leave it untouched) -- must not be
+        cleared as an incidental side effect of this migration."""
+        from datetime import datetime, timedelta
+
+        from src.core.database import Phase, PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+        from src.workflow_engine.orchestrator import EvaluationResult, OrchestrationAction
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        stale_completed_at = datetime.utcnow() - timedelta(hours=5)
+        with seeded_workflow.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-dev").first()
+            execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
+            execution.status = "in_progress"
+            execution.started_at = datetime.utcnow()
+            execution.completed_at = stale_completed_at
+            session.flush()
+
+            evaluation = EvaluationResult(
+                action=OrchestrationAction.RETRY,
+                reason="score too low",
+                metadata={"retry_count": 1, "max_retries": 2},
+            )
+            pm._handle_evaluation_retry(session, phase, execution, "summary", evaluation)
+
+            assert execution.status == "pending"
+            assert execution.completed_at == stale_completed_at
+
     def test_arbitrate_sets_in_progress_and_preserves_started_at(self, seeded_workflow):
         """Must NOT land on "pending" -- _case_completed_with_successor's
         next-pending-by-order picking would skip a phase reopened as
         pending while later phases are already completed (see this
         handler's own comment). started_at must survive untouched: this
-        reopens the SAME already-running execution, not a fresh start."""
+        reopens the SAME already-running execution, not a fresh start.
+
+        Seeds status="completed", not "in_progress" -- this handler's own
+        comment documents the real precondition: "the phase whose gate
+        fired this arbitrate decision closes its own execution to
+        'completed' before handing off". "in_progress" was never a real
+        state this fires from; it only passed before because the old
+        direct-mutation reopen_phase_execution never validated the
+        from-status at all -- transition_phase_execution's atomic
+        UPDATE (Step 3) correctly rejects "in_progress" -> "in_progress"
+        as invalid, which this test's original fixture would have
+        silently masked as a passing false-negative."""
         from datetime import datetime
 
         from src.core.database import Phase, PhaseExecution
@@ -694,7 +744,7 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
         with seeded_workflow.session_scope() as session:
             phase = session.query(Phase).filter_by(id="phase-dev").first()
             execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
-            execution.status = "in_progress"
+            execution.status = "completed"
             original_started_at = datetime.utcnow()
             execution.started_at = original_started_at
             execution.task_creation_claimed_at = datetime.utcnow()

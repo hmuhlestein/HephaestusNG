@@ -266,7 +266,13 @@ class TestUnresolvableGotoEscalates:
 
         with (
             patch.object(type(manager), "_close_execution", create=True),
-            patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
+            # transition_phase_execution replaced _reopen_phase_execution
+            # here (Step 3 of docs/designs/
+            # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md), via a deferred
+            # (function-level) import -- patch it at its source module,
+            # not phase_manager, since a `from X import Y` inside a
+            # function resolves X.Y fresh at call time.
+            patch("src.autopilot.orchestrator.phase_transitions.transition_phase_execution") as reopen,
             patch.object(
                 type(manager), "_find_phase_by_name_or_order", return_value=None, create=True
             ),
@@ -320,7 +326,10 @@ class TestUnresolvableGotoEscalates:
 
         with (
             patch.object(type(manager), "_close_execution", create=True),
-            patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
+            # See test_gate_decided_goto_with_a_bad_target_escalates above
+            # for why this patches transition_phase_execution at its
+            # source module rather than _reopen_phase_execution.
+            patch("src.autopilot.orchestrator.phase_transitions.transition_phase_execution") as reopen,
             patch.object(
                 type(manager), "_find_phase_by_name_or_order", return_value=None, create=True
             ),
@@ -330,7 +339,9 @@ class TestUnresolvableGotoEscalates:
                 session, phase, execution, "done", evaluation
             )
 
-        assert reopen.call_args.kwargs["status"] == "in_progress"
+        # to_status is transition_phase_execution's 3rd positional arg
+        # (session, phase_id, to_status, *, reason, extra_fields=None).
+        assert reopen.call_args.args[2] == "in_progress"
 
     def test_a_resolvable_goto_is_untouched(self):
         """The escalation must only fire when the target genuinely does not

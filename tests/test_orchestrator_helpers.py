@@ -1984,6 +1984,52 @@ class TestRetryFailedTasks:
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_preserves_a_stale_completed_at(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """This reset was migrated to transition_phase_execution (Step 3
+        of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md), whose
+        default _FIELD_RESETS[(in_progress, pending)] entry clears
+        completed_at -- correct for the already-migrated
+        reset_stale_executions_on_goto, but reopen_phase_execution (this
+        site's real pre-migration writer) never touched it. A stale,
+        non-null completed_at can legitimately survive here from a PRIOR
+        completed -> in_progress reopen (_create_phase_task/
+        _start_next_phase deliberately leave it untouched) -- must not be
+        cleared as an incidental side effect of this migration."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Phase, PhaseExecution, Task
+
+        stale_completed_at = datetime.utcnow() - timedelta(hours=5)
+        with orch_db_env.session_scope() as session:
+            session.add(Phase(
+                id="phase-git-expert", workflow_id="wf-1", name="git_expert",
+                order=10, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-git-expert", phase_id="phase-git-expert",
+                status="in_progress", started_at=datetime.utcnow(),
+                completed_at=stale_completed_at,
+            ))
+        self._make_workflow_and_failed_task(orch_db_env, phase_id="phase-git-expert")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.failure_reason = "Cannot mark done: 1 open bug ticket(s) still unresolved — ticket-abc: some finding."
+
+        _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-git-expert").first()
+            assert execution.status == "pending"
+            assert execution.completed_at == stale_completed_at
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_ticket_blocked_git_expert_does_not_get_re_routed_on_a_second_sweep(
         self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
     ):
@@ -2289,6 +2335,55 @@ class TestMaybeRetryFailedTasksRoutesTicketBlockedToDevelopment:
             assert execution.status == "pending"
             assert execution.started_at is None
             assert execution.task_creation_claimed_at is None
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_preserves_a_stale_completed_at(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """See TestRetryFailedTasks's identical sibling test -- this
+        reset was migrated to transition_phase_execution (Step 3 of
+        docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md), whose
+        default _FIELD_RESETS[(in_progress, pending)] entry clears
+        completed_at, but reopen_phase_execution (this site's real
+        pre-migration writer) never touched it -- a stale, non-null
+        completed_at surviving a prior completed -> in_progress reopen
+        must not be cleared as an incidental side effect."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        stale_completed_at = datetime.utcnow() - timedelta(hours=5)
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-under-test", workflow_id="wf-1", name="git_expert",
+                order=10, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-under-test", phase_id="phase-under-test",
+                workflow_execution_id="wf-1", status="in_progress",
+                completed_at=stale_completed_at,
+            ))
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-under-test",
+                raw_description="r", done_definition="d", status="failed",
+                failure_reason="Cannot mark done: 1 open bug ticket(s) still unresolved — ticket-abc: some finding.",
+                retry_count=0,
+            ))
+
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-under-test").first()
+            assert execution.status == "pending"
+            assert execution.completed_at == stale_completed_at
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")

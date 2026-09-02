@@ -691,6 +691,85 @@ In order of how cleanly each one maps onto the table above, not by risk:
    loop itself, not just the filtering.
 4. `reset_failed_phase_executions` (`engine_client.py:407`) and the
    remaining `reopen_phase_execution` call sites.
+
+   **Migrated, all of it.** Found five remaining direct
+   `reopen_phase_execution` callers, not two or three as earlier framing
+   suggested: `_escalate_unresolvable_goto` and `_handle_evaluation_arbitrate`
+   (`phase_manager.py`, both `completed -> in_progress, started_at="leave"`),
+   `_handle_evaluation_retry` (`phase_manager.py`,
+   `in_progress -> pending, started_at="clear"`), and `_retry_failed_tasks`
+   / `_maybe_retry_failed_tasks` (`phase_transitions.py`, sibling
+   ticket-blocked branches, same `in_progress -> pending, started_at="clear"`
+   pair). `reopen_phase_execution` and its `phase_manager.py` lazy-import
+   wrapper `_reopen_phase_execution` are now fully unused, dead code --
+   left in place per this codebase's convention (not deleted without being
+   asked), noted here for whoever eventually does.
+
+   Two further `_FIELD_RESETS`-vs-real-behavior mismatches found and fixed
+   before they could ship, same pattern as Steps 3.2/3.3's gap-checks:
+   - `_escalate_unresolvable_goto`/`_handle_evaluation_arbitrate` need
+     `started_at` preserved (the phase was closed to `"completed"`
+     moments earlier in the same evaluation and reopened for arbitration,
+     not freshly dispatched) -- `_FIELD_RESETS[(completed, in_progress)]`'s
+     `started_at="now"` default is correct for `_create_phase_task`/
+     `_start_next_phase` but wrong here. Passed through `extra_fields` as
+     the execution's own current value.
+   - `_handle_evaluation_retry`/`_retry_failed_tasks`/
+     `_maybe_retry_failed_tasks` transition `in_progress -> pending`, and
+     `_FIELD_RESETS[(in_progress, pending)]` clears `completed_at` --
+     correct for the already-migrated `reset_stale_executions_on_goto`,
+     but `reopen_phase_execution` (these three sites' real pre-migration
+     writer) never touched it. Normally moot (an `in_progress` execution's
+     `completed_at` is usually already `None`), except it can legitimately
+     carry a stale, non-null value surviving a PRIOR `completed ->
+     in_progress` reopen (the exact thing `_create_phase_task`/
+     `_start_next_phase` deliberately preserve, per Step 3.2's own
+     gap-check). Preserved via `extra_fields` at all three sites.
+
+   Also found: `test_arbitrate_sets_in_progress_and_preserves_started_at`
+   seeded `status="in_progress"` before calling `_handle_evaluation_arbitrate`
+   -- but that handler's own comment documents the real precondition as
+   `"completed"` (closed moments earlier in the same evaluation).
+   `"in_progress" -> "in_progress"` isn't even a member of
+   `_VALID_TRANSITIONS`, so the atomic version correctly rejected it
+   outright; the test's own assertions couldn't tell the difference
+   between "genuinely reopened, started_at preserved" and "transition
+   rejected, nothing touched, coincidentally looks identical" until a
+   `task_creation_claimed_at` assertion caught it. Same fixture-realism
+   class of bug as Step 3.1's `test_goto_target_found`. Fixed by seeding
+   `"completed"`, matching the handler's own documented precondition.
+
+   New capability added to `transition_phase_execution` itself for this
+   step: `commit: bool = True`. `reset_failed_phase_executions` has an
+   explicit, pre-existing "caller controls the transaction" contract
+   (`session=None` means open-and-commit-a-fresh-session;
+   `session=<existing>` means the caller commits) -- two of its five real
+   callers rely on this to bundle the phase reset atomically with other
+   workflow-state writes (un-pausing, resuming) in the same transaction.
+   Committing internally by default would have silently broken that: an
+   exception after this call but before the caller's own writes would
+   leave the phase reset permanently applied while the workflow-level
+   change it was meant to accompany rolled back. `commit=False` defers
+   entirely to the caller; `db.refresh()` still works correctly without an
+   intervening commit (a same-connection read sees an uncommitted write
+   immediately -- only other connections have to wait for a commit), and
+   the atomic UPDATE's own safety is a property of that one SQL statement,
+   independent of when the transaction commits. Verified with unit tests
+   proving `commit=False` really does defer (a caller rollback afterward
+   undoes it) as well as the normal default-commit path.
+
+   Existing test coverage for the `_reopen_phase_execution`-mocking style
+   tests in `test_condition_evaluation_fails_loudly.py`
+   (`TestUnresolvableGotoEscalates`) needed updating: they patched
+   `_reopen_phase_execution`, which this migration no longer calls at all
+   (a direct `transition_phase_execution` import replaced it) -- two of
+   the four tests asserted it WAS called and failed outright once the
+   mock became inert; the other two asserted it was NOT called and kept
+   passing, but only because the code path they exercise never reached
+   the reopen call either way, not because the mock still meant anything.
+   Updated to patch `transition_phase_execution` at its source module
+   (the import is deferred/function-level, so patching
+   `phase_manager.transition_phase_execution` would not have worked).
 5. The self-heal functions split into two categories, not one — conflating
    them was an earlier mistake in this document:
 
