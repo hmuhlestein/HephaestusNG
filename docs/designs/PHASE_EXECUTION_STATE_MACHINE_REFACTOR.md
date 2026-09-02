@@ -464,8 +464,24 @@ def transition_phase_execution(db, phase_id: str, to_status: str, *, reason: str
     if changed == 0:
         logger.info(f"[PHASE-TRANSITION] Lost the race on phase {phase_id}: no longer {from_status!r} ({reason})")
         return None
-    return db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+    # This session has expire_on_commit=False (see database.py), so the
+    # `execution` object loaded above is still cached in the identity map
+    # with its pre-update attribute values -- a plain re-query would return
+    # that same stale in-memory object rather than the row this call just
+    # wrote. db.refresh() forces it to reload from the database.
+    db.refresh(execution)
+    return execution
 ```
+
+**Implementation note (caught by the Step 2 unit tests, not anticipated in
+the sketch above):** the naive `return db.query(...).filter_by(...).first()`
+silently returns stale data on this codebase's session configuration.
+`expire_on_commit=False` (see Conventions in CLAUDE.md) means SQLAlchemy's
+identity map keeps returning the SAME in-memory `execution` object for a
+given primary key rather than re-populating it from a fresh SELECT — so the
+caller would see the pre-transition status even though the UPDATE
+succeeded. Fixed with `db.refresh(execution)` before returning it, which
+forces an actual reload from the row this call just wrote.
 
 `_FIELD_RESETS` above is a first pass built from re-reading the four call
 sites this document already cites (`reset_stale_executions_on_goto`,
