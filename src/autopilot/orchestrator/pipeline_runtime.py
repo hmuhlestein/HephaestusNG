@@ -190,4 +190,79 @@ def _resync_pipeline_registry(logger: OrchestratorLogger, loop: "asyncio.Abstrac
             logger.warning(
                 f"[PIPELINE-RESYNC] Failed to restart project {project_id[:8]}: {e}"
             )
+
+    # Second net: an is_active project with no live pipeline and no
+    # persisted "was running" marker either. The marker-based loop above
+    # can't see these at all -- and is_active is NOT a reliable proxy for
+    # "a marker exists": several legitimate, non-"leave this idle" code
+    # paths call AutopilotService.stop() (which deletes the marker)
+    # without touching AutopilotProject.is_active -- e.g. control_routes'
+    # zombie-pipeline auto-stop and repair_service's rerun-design stop
+    # (both stop-then-immediately-restart under normal conditions, but
+    # leave the project permanently idle if anything raises in between).
+    # Only the user-facing POST /autopilot/stop sets is_active=False, so
+    # is_active=True with no live pipeline and real queued work is never
+    # an intentional "stay off" state -- it's exactly the self-heal gap
+    # this whole function exists to close. Observed live: project
+    # ParentChat sat with is_active=True, a pending feature whose
+    # dependency had long since completed, and no running pipeline or
+    # marker for over a day -- every other self-heal in this sweep only
+    # advances phases of ALREADY-active workflows, and dispatching a new
+    # feature's workflow only happens from inside a live pipeline walk
+    # (run_feature_pipelines), so nothing ever picked it up.
+    try:
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.database import get_db as _get_db
+
+        already_resynced = {pid for pid, _ in persisted}
+        with _get_db() as db:
+            active_projects = db.query(AutopilotProject).filter_by(is_active=True).all()
+            candidates = []
+            for proj in active_projects:
+                if proj.id in already_resynced:
+                    continue
+                has_work = (
+                    db.query(AutopilotDesign)
+                    .filter(
+                        AutopilotDesign.project_id == proj.id,
+                        AutopilotDesign.status.in_(["pending", "active"]),
+                        AutopilotDesign.archived_at.is_(None),
+                    )
+                    .first()
+                    is not None
+                )
+                if has_work:
+                    candidates.append((proj.id, proj.base_dir))
+
+        for project_id, project_path in candidates:
+            existing = registry.get(project_id)
+            if existing and existing.running:
+                continue
+            if _should_stop(project_id):
+                logger.debug(
+                    f"[PIPELINE-RESYNC] Project {project_id[:8]}: stop "
+                    "already in flight, skipping this tick"
+                )
+                continue
+            logger.warning(
+                f"[PIPELINE-RESYNC] Project {project_id[:8]}: is_active with "
+                "pending/active designs but no live pipeline and no running "
+                "marker -- restarting"
+            )
+            try:
+                service = registry.get_or_create(project_id)
+                future = asyncio.run_coroutine_threadsafe(
+                    service.start(project_path=project_path),
+                    loop,
+                )
+                future.result(timeout=30.0)
+                resumed += 1
+            except Exception as e:
+                logger.warning(
+                    f"[PIPELINE-RESYNC] Failed to restart idle active project "
+                    f"{project_id[:8]}: {e}"
+                )
+    except Exception as e:
+        logger.warning(f"[PIPELINE-RESYNC] Idle-active-project scan failed: {e}")
+
     return resumed
