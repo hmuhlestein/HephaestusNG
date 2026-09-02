@@ -47,19 +47,62 @@ value a sibling list already has. This document proposes closing that
 class of bug structurally, not by continuing to patch individual lists as
 each new gap surfaces.
 
-**Why `PhaseExecution` specifically, not `Feature.status` or
-`Workflow.status`.** This same session separately found the identical
-disease one level up the hierarchy — `Feature.status` stuck `"active"`
-needing a manual completion cascade, gated by a sibling mechanism
-(`AutopilotProject.is_active`) that also drifted. Those are real instances
-of the same architectural problem and are deliberately **not** in scope
-here: `PhaseExecution` is where all three of *this* session's concretely
-diagnosed, reproduced bugs live, it's the highest-frequency write target
-(every phase transition, every retry, every goto touches it), and fixing
-it first gives a template — and a track record — to point at before
-proposing the same treatment for `Feature`/`Workflow`. Revisit those two
-as a follow-up once this pass has shipped and held up, not as an
-expansion of this one.
+**Why `PhaseExecution` specifically, not `Feature.status`,
+`Workflow.status`, or `AutopilotDesign.status`.** This same session
+separately found the identical disease at three other levels of the
+hierarchy:
+
+- `Feature.status` stuck `"active"` needing a manual completion cascade,
+  gated by a sibling mechanism (`AutopilotProject.is_active`) that also
+  drifted.
+- `AutopilotDesign.status` stranded in the transient value `"decomposing"`
+  (`run_phase0` sets it before Phase 0 starts; `pick_next_design` only ever
+  selects `"pending"`). Any interruption between those two points — a
+  backend restart, a kill, an exception on a path that fails to write the
+  outcome back — left the design in no queue, with no live workflow, and
+  invisible to `_sync_stale_design_statuses` (which only looks at
+  `"active"`). It disappeared from the pipeline entirely, twice in one
+  session, each time needing a manual status reset. Fixed in `50a37f7c` by
+  the recovery-policy route, not the centralization route:
+  `_recover_designs_stuck_mid_decomposition` resets it to `"pending"` when
+  no live Phase 0 workflow exists, bounded by the same
+  `MAX_DESIGN_RETRIES` counter `pick_next_design`'s own retry uses.
+
+These are the same architectural problem — **a status value that no
+selector picks up, making the row invisible to the machinery that owns it**
+— and are deliberately **not** in scope here. `PhaseExecution` is where
+all three of *this* document's concretely diagnosed, reproduced bugs live,
+it's the highest-frequency write target (every phase transition, every
+retry, every goto touches it), and fixing it first gives a template — and
+a track record — to point at before proposing the same treatment
+elsewhere. Revisit the others as follow-ups once this pass has shipped and
+held up, not as an expansion of this one.
+
+Worth noting for that follow-up: the design-level instance was fixed with
+a *bounded recovery policy*, not a centralized writer, and that was the
+right call there — `"decomposing"` is a legitimately transient state, so
+the fix is "notice it stopped being transient and act," not "prevent the
+write." Which of the two treatments a given level needs is a per-level
+judgement, not a foregone conclusion once this document's approach is
+proven. See also the drift-vs-policy split under Step 3 item 5.
+
+**The read side has the same disease, and this pass does not address it.**
+This document's thesis is entirely about *writers* ("no single function
+owns writing `PhaseExecution.status`"). But every consumer of
+`_get_phase_statuses` also hardcodes its own *selection predicate* over
+those statuses, and those drift independently in exactly the same way. A
+live example from this session, distinct from bugs #1-#3 and not fixed by
+anything proposed here: `_case_completed_with_successor` picks the phase to
+advance *from* by most-recent completion, then searches for a pending phase
+with `order > last_completed.order`. When the most-recently-completed phase
+is also the highest-order one in the workflow (`deploy`), that search can
+never match, and the case returned `None` — "no pending work" — with an
+obviously actionable pending phase sitting right there at a lower order.
+Fixed in `8a2e8b48` by adding a lowest-order-pending fallback. No amount of
+write-centralization would have prevented it: every status involved was
+correct; the *query* was wrong. Cataloguing the read-side predicates the
+way §"Writers" catalogues the write sites is a natural sequel to this work
+and is called out again under Non-Goals.
 
 ## Current State: Roughly Ten Places Read or Write This Field Independently
 
@@ -533,10 +576,18 @@ Each step: run the full existing suite covering this area
 (`test_advance_phases.py`, `test_phase_transitions_spec_gate.py`,
 `test_condition_evaluation_fails_loudly.py`, `test_goto_reconvergence.py`,
 `test_status_derivation.py`, `test_status_derivation_wiring.py`,
-`test_phase_manager.py`, `test_retry_exhausted_failed_workflows.py` — all
-green as of `4d2f2005`) plus the new transition-table tests, deploy, watch
-Step 1's invariant check for new violations before starting the next
-site.
+`test_phase_manager.py`, `test_retry_exhausted_failed_workflows.py`,
+`test_reset_failed_phase_executions.py`,
+`test_abandoned_workflow_failed_execution.py`,
+`test_recover_designs_stuck_mid_decomposition.py` — green as of
+`3adcff64`) plus the new transition-table tests, deploy, watch Step 1's
+invariant check for new violations before starting the next site.
+
+Note the last three cover the *recovery-policy* paths (Step 3 item 5's
+"keep" list), not the write paths being migrated. They are the regression
+net for the thing most easily broken by accident during this refactor:
+a migration that makes a status un-writable in some state, and in doing so
+silently disables the self-heal that depended on writing it.
 
 ## Non-Goals
 
@@ -550,8 +601,21 @@ site.
   implicitly relies on (see the data-integrity section above), not an
   expansion of scope.
 - Not changing orchestrator *decision* logic (what counts as a goto vs.
-  retry vs. skip) — only who writes the resulting status and how
-  consistently.
+  retry vs. skip, or which phase is selected next) — only who writes the
+  resulting status and how consistently. This is a real boundary, not a
+  formality: `8a2e8b48` fixed a live stall in this session where every
+  status was correct and `_case_completed_with_successor`'s *successor
+  search predicate* was what failed. Nothing in this document would have
+  caught it, and a reader who assumes "centralize the phase state machine"
+  covers "phases not advancing" will be wrong in exactly that way.
+- Not auditing or centralizing the **read-side** predicates over
+  `PhaseExecution.status` (the four `_advance_phases` dispatch cases and
+  `derive_workflow_status`/`derive_feature_status`, each partitioning
+  `_get_phase_statuses` by its own hardcoded status list). Same drift
+  class, opposite side of the field; see the read-side note in Goal. A
+  natural sequel, deliberately not bundled in — mixing a write-path
+  refactor with read-path semantic changes in one pass is how a
+  "mechanical" migration turns into a behavioural one.
 
 ## Risks
 
