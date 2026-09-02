@@ -605,6 +605,53 @@ In order of how cleanly each one maps onto the table above, not by risk:
    in this list should diff the ENTIRE set of fields the real call site
    touches against the table before wiring it in, not just the fields
    that seem relevant.
+
+   **`_clear_stale_task_creation_claim` and `_release_phase_task_creation_claim`,
+   migrated next, following this item's own guidance above.** Both are
+   two-part functions: an already-atomic claim-release step (untouched by
+   either migration) plus a conditional status-repair step, which is what
+   moved to `transition_phase_execution`. Neither shares `started_at`
+   semantics with `_create_phase_task`/`_start_next_phase` or with each
+   other:
+   - `_clear_stale_task_creation_claim`: leave `started_at` if already
+     set, else backfill from the phase's LATEST task's `created_at`.
+   - `_release_phase_task_creation_claim`: always overwrite `started_at`
+     with the guarded task's EARLIEST `created_at` (or `utc_now()` if
+     somehow no task exists) — its own docstring documents a real live
+     incident (a duplicate self-heal task) from a prior version using
+     `utc_now()` unconditionally instead.
+
+   Both computed values are passed through `extra_fields`, bypassing
+   `_FIELD_RESETS`'s `started_at="now"` default entirely for these two
+   call sites.
+
+   **A third, more fundamental gap found here, in `transition_phase_execution`
+   itself, not in the per-site table:** `_release_phase_task_creation_claim`'s
+   own docstring documents a real, previously-fixed live incident
+   (`test_maybe_retry_failed_tasks_is_claim_protected`) caused by this
+   project's `expire_on_commit=False` sessions combined with a
+   `synchronize_session=False` claiming UPDATE elsewhere — a PhaseExecution
+   already loaded into the session's identity map (as `_get_phase_statuses`
+   does for nearly every caller) stays stale after such an UPDATE, unless
+   the read that follows uses `.populate_existing()`. That function was
+   already fixed to use it; `transition_phase_execution`'s own initial
+   read was not, since none of the first three migrated sites happened to
+   need it. Fixed by adding `.populate_existing()` to
+   `transition_phase_execution`'s own query, protecting every current and
+   future caller, not just this one.
+
+   Traced the actual severity before treating this as launch-blocking: the
+   atomic UPDATE's own `WHERE status = :from_status` clause always queries
+   the real row, never the possibly-stale Python object, so a stale
+   `from_status` read can never cause an incorrect WRITE — at worst it
+   makes `_VALID_TRANSITIONS` wrongly REJECT a transition the row's real
+   current status would actually allow (a legitimate transition silently
+   skipped, not a corrupted one). Still worth fixing outright given the
+   documented precedent. Verified with a synthetic unit test (confirmed to
+   fail without the fix, pass with it) plus the pre-existing
+   `test_clears_claim_when_execution_was_already_loaded_in_the_same_session`,
+   which already covered this exact scenario for the real call site and
+   also fails without the fix.
 3. `reset_stale_executions_on_goto` (`phase_transitions.py:157`) — covers
    "rewind resets to `pending`," the exact site of bug #2, including
    today's added live-task-termination logic (`f9c50d72`), which stays as

@@ -217,6 +217,65 @@ class TestFieldResets:
             assert result.completed_at is not None
 
 
+class TestPopulateExistingProtectsAgainstStaleIdentityMap:
+    """Regression found migrating _release_phase_task_creation_claim (Step
+    3): this project's sessions run with expire_on_commit=False, and
+    several atomic claim/release UPDATEs elsewhere in this file use
+    synchronize_session=False. If a PhaseExecution was already loaded
+    into the session's identity map (e.g. via _get_phase_statuses, which
+    most callers of the reopen sites read first) before one of those ran,
+    a plain query would return that same stale in-memory object instead
+    of a fresh one -- from_status would then reflect the pre-update
+    value, not the row's real current state. See
+    _release_phase_task_creation_claim's own docstring for the exact live
+    incident (test_maybe_retry_failed_tasks_is_claim_protected) this same
+    pattern was originally added to fix, at that one call site --
+    transition_phase_execution needed the identical protection since it
+    is now a shared primitive other call sites route through."""
+
+    def test_sees_a_synchronize_session_false_update_made_after_the_row_was_first_loaded(
+        self, db_manager
+    ):
+        """The atomic UPDATE's own WHERE status=:from_status clause always
+        queries the REAL row, so a stale from_status read can never cause
+        an incorrect WRITE -- at worst it makes _VALID_TRANSITIONS reject a
+        transition that the row's real current status would actually
+        allow (a legitimate transition silently, wrongly skipped). Picks
+        exactly that case: from a stale "skipped" read, "pending" is NOT
+        an allowed destination (_VALID_TRANSITIONS[skipped] == {in_progress}),
+        but the row's REAL current status, "completed", legitimately
+        allows it (_VALID_TRANSITIONS[completed] includes pending) -- a
+        stale read wrongly rejects this; a fresh one must not."""
+        _seed(db_manager, status="skipped")
+        with db_manager.session_scope() as session:
+            # Load the row into this session's identity map first --
+            # mirrors _get_phase_statuses being read before a reopen site
+            # runs, in every real caller this bug class was found in.
+            preloaded = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert preloaded.status == "skipped"
+
+            # A concurrent atomic UPDATE changes the row's real status
+            # without touching the ORM's cached object -- exactly what
+            # _claim_phase_task_creation's own claiming UPDATE does today.
+            session.query(PhaseExecution).filter(
+                PhaseExecution.phase_id == "phase-1"
+            ).update({"status": "completed"}, synchronize_session=False)
+
+            # Without populate_existing(), transition_phase_execution's own
+            # query would return the SAME cached `preloaded` object
+            # (status still "skipped" in memory). _VALID_TRANSITIONS[skipped]
+            # only allows "in_progress" -- "pending" would be wrongly
+            # rejected as invalid, even though the row's REAL current
+            # status, "completed", legitimately allows pending
+            # (_VALID_TRANSITIONS[completed] includes it). A fresh read
+            # must let this valid transition through.
+            result = pt.transition_phase_execution(
+                session, "phase-1", "pending", reason="test"
+            )
+            assert result is not None
+            assert result.status == "pending"
+
+
 class TestExtraFields:
     """extra_fields lets a call site (e.g. _close_execution) atomically set
     fields the transition table itself doesn't otherwise touch, such as
