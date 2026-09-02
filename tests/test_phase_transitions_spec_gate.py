@@ -518,6 +518,49 @@ class TestFireSpecGateIfReadyGoto:
             qa_exec = session.query(PhaseExecution).filter_by(phase_id="phase-qa").first()
             assert qa_exec.status == "pending"
 
+    @pytest.mark.asyncio
+    async def test_goto_resets_multiple_stale_phases_in_one_call(self, gate_db, tmp_path):
+        """reset_stale_executions_on_goto migrated to
+        transition_phase_execution's per-row atomic UPDATE (Step 3 of
+        docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md), replacing
+        one batch commit at the end of a direct-mutation loop with N
+        independent atomic commits. None of the existing tests in this
+        class exercise more than one stale candidate at once -- this
+        confirms the loop still correctly resets every qualifying row,
+        not just the first, and that the returned count reflects all of
+        them."""
+        from src.autopilot.orchestrator.phase_transitions import reset_stale_executions_on_goto
+        from src.core.database import Phase, PhaseExecution
+
+        self._seed(gate_db, tmp_path)
+        with gate_db.session_scope() as session:
+            session.query(PhaseExecution).filter_by(phase_id="phase-adv").first().status = "completed"
+            # phase-dev (order 4) is already seeded by _seed above.
+            session.add(PhaseExecution(
+                id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                status="completed",
+            ))
+            session.add(Phase(
+                id="phase-qa", workflow_id="wf-1", order=9,
+                name="qa_validation", description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-qa", phase_id="phase-qa", workflow_execution_id="wf-1",
+                status="failed",
+            ))
+
+        with gate_db.session_scope() as session:
+            n = reset_stale_executions_on_goto(
+                session, "wf-1", 4, exclude_phase_id="phase-adv",
+            )
+
+        assert n == 2
+        with gate_db.session_scope() as session:
+            dev_exec = session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
+            qa_exec = session.query(PhaseExecution).filter_by(phase_id="phase-qa").first()
+            assert dev_exec.status == "pending"
+            assert qa_exec.status == "pending"
+
 
 class TestUngatedPhaseAdvancesFromCompletion:
     """Regression: an ungated phase had no synchronous advancement at all.

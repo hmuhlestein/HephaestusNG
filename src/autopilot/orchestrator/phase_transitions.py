@@ -301,14 +301,26 @@ def reset_stale_executions_on_goto(
             db.flush()
             kept.append(s)
         stale = kept
+    # transition_phase_execution's atomic UPDATE replaces the direct
+    # mutation here (Step 3 of docs/designs/
+    # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md). No extra_fields needed --
+    # _FIELD_RESETS[(in_progress/completed/failed, pending)] already
+    # clears completed_at/started_at/task_creation_claimed_at exactly as
+    # this loop did directly. Each call commits independently rather than
+    # one batch commit at the end; a mid-loop crash now leaves a properly
+    # consistent PREFIX of resets committed instead of losing all of them
+    # to an uncommitted transaction, matching this refactor's per-row
+    # atomicity goal rather than batch atomicity. Returns the count of
+    # transitions that actually succeeded, not just candidates identified
+    # above -- these only diverge if another caller raced this exact row
+    # between the batch query above and this call, in which case
+    # transition_phase_execution's own atomic check (not this function's
+    # earlier, now possibly-stale read) is the one that's actually correct.
+    reset_count = 0
     for s in stale:
-        s.status = "pending"
-        s.completed_at = None
-        s.task_creation_claimed_at = None
-        s.started_at = None
-    if stale:
-        db.commit()
-    return len(stale)
+        if transition_phase_execution(db, s.phase_id, "pending", reason="reset_stale_executions_on_goto") is not None:
+            reset_count += 1
+    return reset_count
 
 
 def mark_skipped_over_phases(db, workflow_id: str, from_order: int, to_order: int, logger: "OrchestratorLogger") -> None:

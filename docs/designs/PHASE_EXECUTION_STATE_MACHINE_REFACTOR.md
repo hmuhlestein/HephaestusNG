@@ -658,6 +658,37 @@ In order of how cleanly each one maps onto the table above, not by risk:
    a wrapper around the centralized transition rather than being absorbed
    into it (terminating agents is a side effect the transition table
    itself shouldn't own).
+
+   **Migrated.** Structurally different from every site above: this one
+   operates on a BATCH of `PhaseExecution` rows at once, not a single
+   `phase_id`, with the live-task/agent-termination logic above deciding
+   which rows in the batch qualify. That decision logic is left
+   completely untouched (it is call-site business logic, exactly what
+   `transition_phase_execution` was never meant to own) — only the
+   final write loop (`s.status = "pending"; s.completed_at = None; ...`
+   for each qualifying row) moved to a per-row `transition_phase_execution`
+   call. No `extra_fields` needed: `_FIELD_RESETS[(in_progress/completed/
+   failed, pending)]` already clears exactly the three fields this loop
+   cleared directly (verified against the real function's source during
+   Step 3.2's gap-check, before this migration even started).
+
+   One deliberate behavior change: one batch `db.commit()` at the end
+   became N independent atomic commits, one per row. A mid-loop crash now
+   leaves a consistent PREFIX of resets committed instead of losing all
+   of them to an uncommitted transaction — matching this refactor's
+   per-row atomicity goal rather than preserving incidental batch
+   atomicity nothing actually depended on. The return value (count of
+   rows reset) now reflects transitions that actually succeeded rather
+   than candidates identified by the batch query, which only diverge
+   under a genuine concurrent race on one of these rows — in which case
+   the atomic UPDATE's own check is correct and the batch query's earlier
+   read isn't. Existing test coverage was thorough for the qualification
+   logic (exclusion of the firing phase, target-order inclusion, stale
+   "failed" tombstones, live-task protection, agent termination for
+   phases rewound past) but had no test exercising more than one
+   qualifying row per call — added
+   `test_goto_resets_multiple_stale_phases_in_one_call` to cover the
+   loop itself, not just the filtering.
 4. `reset_failed_phase_executions` (`engine_client.py:407`) and the
    remaining `reopen_phase_execution` call sites.
 5. The self-heal functions split into two categories, not one — conflating
