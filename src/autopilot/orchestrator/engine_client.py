@@ -53,7 +53,7 @@ def directory_content_hash(feature_dir: Path) -> str:
 
     Args:
         feature_dir: the specs/<NNN>-<name>/ directory. Must contain
-            spec.md -- callers only invoke this after find_speckit_features
+            spec.md -- callers only invoke this after discover_speckit_features
             has already confirmed spec.md exists.
 
     Raises:
