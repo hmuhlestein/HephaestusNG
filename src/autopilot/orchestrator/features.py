@@ -404,6 +404,91 @@ def _pause_stale_completed_workflows_for_review(logger: "OrchestratorLogger") ->
     return paused
 
 
+def _recover_designs_stuck_mid_decomposition(logger: "OrchestratorLogger") -> int:
+    """Self-heal: reset a design stranded in a transient status back to
+    "pending" so pick_next_design retries it.
+
+    run_phase0 flips AutopilotDesign.status to "decomposing" before Phase 0
+    starts, and pick_next_design only ever selects "pending" designs. Any
+    interruption between those two points -- a backend restart, a kill, or
+    an exception on a path that fails to write the outcome back -- strands
+    the design in "decomposing" with nothing to ever move it again. It is
+    not in the queue (not "pending"), not running (no live workflow), and
+    invisible to _sync_stale_design_statuses, which only looks at "active".
+    The design simply disappears from the pipeline.
+
+    Observed live twice in one session, both needing a manual status reset
+    to recover -- exactly the class of intervention a fully automated
+    pipeline should never require.
+
+    Only resets a design with no live Phase 0 workflow behind it: an active
+    or paused workflow means decomposition genuinely is still in flight,
+    and resetting there would double-dispatch it. Bounded by the same
+    MAX_DESIGN_RETRIES counter pick_next_design's own failed-workflow retry
+    uses, so a design that keeps dying mid-decomposition is given up on
+    with a recorded reason rather than retried forever.
+
+    Returns the number of designs reset.
+    """
+    from src.autopilot.orchestrator.queue import MAX_DESIGN_RETRIES
+    from src.autopilot.orchestrator.state import _get_project_context, _set_project_context
+    from src.core.constants import PHASE0_DEFINITION_IDS
+    from src.core.database import AutopilotDesign
+
+    repaired = 0
+    with get_db() as db:
+        stranded = (
+            db.query(AutopilotDesign)
+            .filter(
+                AutopilotDesign.status.in_(["decomposing", "processing"]),
+                AutopilotDesign.archived_at.is_(None),
+            )
+            .all()
+        )
+        for design in stranded:
+            live_phase0 = (
+                db.query(Workflow)
+                .filter(
+                    Workflow.design_id == design.id,
+                    Workflow.definition_id.in_(PHASE0_DEFINITION_IDS),
+                    Workflow.status.in_(["active", "paused"]),
+                )
+                .first()
+            )
+            if live_phase0:
+                continue  # decomposition genuinely still in flight
+
+            retry_key = f"autopilot_retry_{design.id}"
+            retry_count = _get_project_context(db, retry_key) or 0
+            if retry_count >= MAX_DESIGN_RETRIES:
+                if design.status != "failed":
+                    logger.warning(
+                        f"[DESIGN-RECOVERY] Design {design.name} stranded in "
+                        f"'{design.status}' and already past {MAX_DESIGN_RETRIES} "
+                        "retries -- marking failed rather than retrying again"
+                    )
+                    design.status = "failed"
+                    design.error = (
+                        f"Gave up after {MAX_DESIGN_RETRIES} retries: kept being "
+                        "interrupted mid-decomposition"
+                    )
+                    repaired += 1
+                continue
+
+            logger.warning(
+                f"[DESIGN-RECOVERY] Design {design.name} stranded in "
+                f"'{design.status}' with no live Phase 0 workflow -- resetting to "
+                f"pending for retry ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
+            )
+            _set_project_context(db, retry_key, retry_count + 1)
+            design.status = "pending"
+            design.error = None
+            repaired += 1
+        if repaired:
+            db.commit()
+    return repaired
+
+
 def _sync_stale_design_statuses(logger: "OrchestratorLogger") -> int:
     """Self-heal: flip AutopilotDesign.status to "completed" for any
     "active" design whose every Feature has reached completed/skipped.
