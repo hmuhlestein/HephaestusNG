@@ -3799,6 +3799,92 @@ class TestCaseCompletedWithSuccessor:
             assert exec2.status == "skipped"
 
 
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_falls_back_to_lowest_order_pending_when_the_most_recently_completed_phase_has_no_higher_order_successor(
+        self, mock_create, db_manager
+    ):
+        """Regression, observed live: reset_failed_phase_executions
+        (engine_client.py) resets only the ONE phase whose PhaseExecution
+        was stuck "failed" -- not everything downstream of it, unlike a
+        normal goto's reset_stale_executions_on_goto (which resets by order
+        range and so never leaves this shape behind). After un-failing a
+        workflow that had already finished a full successful pass (deploy,
+        the highest-order phase, "completed"), an EARLIER phase reset to
+        "pending" leaves last_completed's own successor search (order >
+        last_completed's order) with nothing to find, since nothing has a
+        higher order than deploy -- the case fell through to `return None`
+        as though there were no pending work at all, even with an
+        obviously actionable pending phase sitting right there.
+
+        Workflow 72ed4df8: development (order 5) came back "pending" this
+        way while deploy (order 14) was still "completed" from the run
+        that actually finished. _try_advance_phases returned False against
+        the real, current data.
+        """
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
+
+        with db_manager.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", status="active", phases_folder_path="/tmp"))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development", order=5,
+                description="d", done_definitions=["d"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                status="pending",
+            ))
+            session.add(Phase(
+                id="phase-deploy", workflow_id="wf-1", name="deploy", order=14,
+                description="d", done_definitions=["d"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-deploy", phase_id="phase-deploy", workflow_execution_id="wf-1",
+                status="completed", completed_at=datetime.utcnow(),
+            ))
+            session.add(Task(
+                id="task-deploy", workflow_id="wf-1", phase_id="phase-deploy",
+                raw_description="r", done_definition="d", status="done",
+                action="continue",
+            ))
+        mock_create.return_value = True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is True
+        assert mock_create.call_args[0][:4] == ("wf-1", "phase-dev", "development", "continue")
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_does_not_fall_back_when_a_real_higher_order_successor_exists(
+        self, mock_create, db_manager, sample_workflow
+    ):
+        """The fallback must not shadow the normal, correct path -- when a
+        genuine by-order successor exists, it wins, not the lowest-order
+        pending phase in the workflow."""
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
+
+        self._seed_completed_with_pending_successor(db_manager)
+        mock_create.return_value = True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is True
+        assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
+
+
 class TestGetPhaseStatuses:
     """Tests for _get_phase_statuses helper."""
 

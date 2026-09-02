@@ -1768,6 +1768,31 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
                 key=lambda p: p["phase"].order,
                 default=None,
             )
+        if successor is None:
+            # last_completed is picked by MOST RECENT completion, which can
+            # legitimately be a HIGHER-order phase than a phase still
+            # sitting "pending" -- e.g. reset_failed_phase_executions
+            # (engine_client.py) resets only the ONE phase whose execution
+            # was stuck "failed", not everything downstream of it, so an
+            # earlier-order phase can come back "pending" while a
+            # later-order one is still "completed" from whatever run
+            # actually finished the pipeline while the failed phase's own
+            # bookkeeping never got closed out. The by-order search above
+            # (order > last_completed's order) then finds nothing, and this
+            # case falls through to `return None` as though there were
+            # genuinely no pending work -- even with a fully actionable
+            # pending phase sitting right there. Fall back to the
+            # lowest-order pending phase in the whole workflow, exactly
+            # what _case_start_first_phase picks for a brand-new one; the
+            # existing_tasks/claim guards below are the same either way, so
+            # this can't double-dispatch a phase that already has a live
+            # cycle's task. Observed live: workflow 72ed4df8's development
+            # (order 5) came back "pending" this way while deploy (order
+            # 14) was still "completed" from the run that actually
+            # finished -- _try_advance_phases returned False against the
+            # real, current data with nothing further to explain why.
+            successor = min(pending, key=lambda p: p["phase"].order, default=None)
+            successor_action = "continue"
         if successor and successor["phase"].order > last_completed["phase"].order + 1:
             # Same jump-over-intermediate-phases case _start_next_phase's
             # own action_target_phase handling covers -- an explicit goto
