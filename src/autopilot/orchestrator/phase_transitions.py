@@ -1609,13 +1609,22 @@ _FIELD_RESETS: Dict[Tuple[str, str], dict] = {
 }
 
 
-def transition_phase_execution(db, phase_id: str, to_status: str, *, reason: str) -> Optional[PhaseExecution]:
+def transition_phase_execution(
+    db, phase_id: str, to_status: str, *, reason: str, extra_fields: Optional[dict] = None
+) -> Optional[PhaseExecution]:
     """Atomically move phase_id's PhaseExecution to to_status. Returns the
     (freshly re-read) row on success, None if the row wasn't in a state
     this transition is valid from (someone else already moved it, or the
     caller's assumption about current state was wrong) -- callers treat
     None the same way _claim_phase_task_creation's False is treated today:
     skip, don't retry blindly, let the next sweep tick re-evaluate.
+
+    extra_fields lets a call site atomically set fields this table doesn't
+    otherwise touch (e.g. completion_summary) as part of the same UPDATE --
+    added migrating _close_execution (Step 3), which sets status,
+    completed_at, and an optional summary in one write. Only applied when
+    the transition actually succeeds; a caller's summary must not land on
+    a row this call didn't touch.
 
     Step 2 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md --
     additive and not yet wired into any existing call site. See that
@@ -1643,6 +1652,8 @@ def transition_phase_execution(db, phase_id: str, to_status: str, *, reason: str
     values = {"status": to_status}
     for field, val in _FIELD_RESETS.get((from_status, to_status), {}).items():
         values[field] = utc_now() if val == "now" else val
+    if extra_fields:
+        values.update(extra_fields)
 
     # The atomic step: succeeds only if the row is STILL from_status right
     # now -- closes the exact race a SELECT-then-mutate would reopen.

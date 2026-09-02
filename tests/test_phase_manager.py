@@ -410,7 +410,17 @@ class TestMarkPhaseCompleteForceGoto:
     an explicit target/reason instead of an orchestrator Evaluation."""
 
     def test_goto_target_found(self, seeded_workflow):
+        from src.core.database import PhaseExecution
         from src.phases.phase_manager import PhaseManager
+
+        # force_action="goto" resolves an arbitration decision for the
+        # CURRENTLY RUNNING phase (see class docstring) -- the fixture's
+        # default "pending" for phase-dev is not a state arbitration ever
+        # fires from. Matches the explicit in_progress setup already used
+        # by TestHandleEvaluationRetryAndArbitrateReopenExecution below.
+        with seeded_workflow.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
+            execution.status = "in_progress"
 
         pm = PhaseManager(db_manager=seeded_workflow)
         pm.workflow_id = "wf-1"
