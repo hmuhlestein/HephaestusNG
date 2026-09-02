@@ -441,18 +441,36 @@ def reset_failed_phase_executions(workflow_id: str, *, session=None) -> int:
     """
 
     def _do_reset(s):
+        # transition_phase_execution's atomic UPDATE replaces the direct
+        # mutation here (Step 3 of docs/designs/
+        # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md). commit=False: this
+        # function's own "session is not None: caller commits" contract
+        # (see docstring above) means the caller may bundle this reset
+        # atomically with OTHER writes in the same transaction (both real
+        # session= callers do -- un-pausing/resuming a workflow alongside
+        # un-failing the phase that stalled it); letting this commit
+        # internally would silently break that. Deferred import:
+        # phase_transitions.py imports from this module (get_db etc.), so
+        # a module-level import here would cycle. No extra_fields needed
+        # -- _FIELD_RESETS[(failed, pending)] already clears exactly the
+        # three fields this loop cleared directly.
+        from src.autopilot.orchestrator.phase_transitions import (
+            transition_phase_execution,
+        )
+
         rows = (
             s.query(PhaseExecution)
             .join(Phase, PhaseExecution.phase_id == Phase.id)
             .filter(Phase.workflow_id == workflow_id, PhaseExecution.status == "failed")
             .all()
         )
+        reset_count = 0
         for row in rows:
-            row.status = "pending"
-            row.completed_at = None
-            row.started_at = None
-            row.task_creation_claimed_at = None
-        return len(rows)
+            if transition_phase_execution(
+                s, row.phase_id, "pending", reason="reset_failed_phase_executions", commit=False
+            ) is not None:
+                reset_count += 1
+        return reset_count
 
     if session is not None:
         return _do_reset(session)

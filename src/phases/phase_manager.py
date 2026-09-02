@@ -893,8 +893,28 @@ class PhaseManager:
         # resolving the target, and _advance_phases picks the next pending
         # phase after the latest COMPLETED one -- a phase left completed while
         # awaiting arbitration gets raced straight past.
-        _reopen_phase_execution(execution, status="in_progress", started_at="leave")
-        session.commit()
+        #
+        # transition_phase_execution's atomic UPDATE replaces
+        # _reopen_phase_execution's plain in-memory mutation here (Step 3
+        # of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md).
+        # started_at is passed through explicitly via extra_fields as its
+        # own CURRENT value, not left to _FIELD_RESETS[(completed,
+        # in_progress)]'s started_at="now" default -- that default is
+        # correct for _create_phase_task/_start_next_phase (a genuinely
+        # fresh dispatch cycle) but wrong here: this execution was closed
+        # to "completed" moments ago in this SAME evaluation, and "leave"
+        # (per this function's own comment above) must preserve that
+        # original cycle's start time, not restamp it. Deferred import:
+        # see _close_execution's own note on why.
+        from src.autopilot.orchestrator.phase_transitions import (
+            transition_phase_execution,
+        )
+
+        transition_phase_execution(
+            session, execution.phase_id, "in_progress",
+            reason="_escalate_unresolvable_goto",
+            extra_fields={"started_at": execution.started_at},
+        )
         return {
             "action": "arbitrate",
             "target_phase": phase.name,
@@ -1009,8 +1029,31 @@ class PhaseManager:
         # task actually gets created for the retry. See
         # reopen_phase_execution's docstring for why started_at differs
         # from the other 3 call sites of this same write.
-        _reopen_phase_execution(execution, status="pending", started_at="clear")
-        session.commit()
+        #
+        # transition_phase_execution's atomic UPDATE replaces
+        # _reopen_phase_execution's plain in-memory mutation here (Step 3
+        # of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md).
+        # _FIELD_RESETS[(in_progress, pending)] also clears completed_at --
+        # verified correct for reset_stale_executions_on_goto (already
+        # migrated), which really does clear it, but reopen_phase_execution
+        # (this site's real writer) never touches completed_at for any
+        # transition. Normally moot (an in_progress execution's
+        # completed_at is already None), except this execution CAN
+        # legitimately carry a stale, non-null completed_at surviving a
+        # PRIOR completed -> in_progress reopen (see
+        # _create_phase_task/_start_next_phase, which deliberately leave
+        # it untouched -- Step 3.2's own gap-check fix). Preserved
+        # explicitly via extra_fields rather than letting this migration
+        # incidentally start clearing a field it never touched before.
+        # Deferred import: see _close_execution's own note on why.
+        from src.autopilot.orchestrator.phase_transitions import (
+            transition_phase_execution,
+        )
+
+        transition_phase_execution(
+            session, execution.phase_id, "pending", reason="_handle_evaluation_retry",
+            extra_fields={"completed_at": execution.completed_at},
+        )
 
         logger.info(
             f"Retrying phase {phase.name} "
@@ -1156,8 +1199,26 @@ class PhaseManager:
         # arbitration fired (this is the same execution, not a fresh
         # start), so resetting it would understate how long it's
         # actually been open.
-        _reopen_phase_execution(execution, status="in_progress", started_at="leave")
-        session.commit()
+        #
+        # transition_phase_execution's atomic UPDATE replaces
+        # _reopen_phase_execution's plain in-memory mutation here (Step 3
+        # of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md).
+        # started_at passed through explicitly via extra_fields as its own
+        # CURRENT value, same reasoning as _escalate_unresolvable_goto's
+        # identical (completed, in_progress) transition just above.
+        # completed_at needs no override -- _FIELD_RESETS[(completed,
+        # in_progress)] already leaves it untouched (Step 3.2's own
+        # gap-check fix). Deferred import: see _close_execution's own
+        # note on why.
+        from src.autopilot.orchestrator.phase_transitions import (
+            transition_phase_execution,
+        )
+
+        transition_phase_execution(
+            session, execution.phase_id, "in_progress",
+            reason="_handle_evaluation_arbitrate",
+            extra_fields={"started_at": execution.started_at},
+        )
         logger.warning(
             f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
         )

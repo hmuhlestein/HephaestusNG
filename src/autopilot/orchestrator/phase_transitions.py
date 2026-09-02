@@ -547,7 +547,26 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                             # _maybe_retry_failed_tasks's sibling branch.
                             _execution = _db_consume.query(PhaseExecution).filter_by(phase_id=phase_id).first()
                             if _execution:
-                                reopen_phase_execution(_execution, status="pending", started_at="clear")
+                                # transition_phase_execution's atomic UPDATE
+                                # replaces reopen_phase_execution's plain
+                                # mutation here (Step 3 of docs/designs/
+                                # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md).
+                                # completed_at preserved explicitly via
+                                # extra_fields -- reopen_phase_execution
+                                # never touched it, but _FIELD_RESETS[(in_
+                                # progress, pending)] would clear it by
+                                # default (correct for the already-migrated
+                                # reset_stale_executions_on_goto, wrong
+                                # here); see _handle_evaluation_retry's
+                                # identical fix in phase_manager.py for why
+                                # a stale non-null completed_at is reachable
+                                # here even though this execution is
+                                # in_progress.
+                                transition_phase_execution(
+                                    _db_consume, phase_id, "pending",
+                                    reason="_retry_failed_tasks",
+                                    extra_fields={"completed_at": _execution.completed_at},
+                                )
                             _db_consume.commit()
                     continue
 
@@ -1672,7 +1691,8 @@ _FIELD_RESETS: Dict[Tuple[str, str], dict] = {
 
 
 def transition_phase_execution(
-    db, phase_id: str, to_status: str, *, reason: str, extra_fields: Optional[dict] = None
+    db, phase_id: str, to_status: str, *, reason: str, extra_fields: Optional[dict] = None,
+    commit: bool = True,
 ) -> Optional[PhaseExecution]:
     """Atomically move phase_id's PhaseExecution to to_status. Returns the
     (freshly re-read) row on success, None if the row wasn't in a state
@@ -1687,6 +1707,23 @@ def transition_phase_execution(
     completed_at, and an optional summary in one write. Only applied when
     the transition actually succeeds; a caller's summary must not land on
     a row this call didn't touch.
+
+    commit=False defers the commit to the caller, added migrating
+    reset_failed_phase_executions (Step 3), which has an explicit,
+    documented "caller controls the transaction" contract when called
+    with an existing session -- two of its real callers bundle this reset
+    atomically with OTHER workflow-state writes (un-pausing/resuming) in
+    the same transaction, and this function committing internally would
+    silently break that: an exception after this call but before the
+    caller's own writes would leave the phase reset permanently applied
+    while the workflow-level change it was meant to accompany rolled
+    back, an inconsistent half-applied state neither side intended.
+    db.refresh() below still works correctly without an intervening
+    commit -- the UPDATE's write is visible to a same-connection SELECT
+    as soon as it's issued, commit or not; only OTHER connections have to
+    wait for a commit to see it. The atomic UPDATE's own safety (the
+    WHERE status=:from_status clause) is a property of that one SQL
+    statement, independent of when the surrounding transaction commits.
 
     Step 2 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md --
     additive and not yet wired into any existing call site. See that
@@ -1740,7 +1777,8 @@ def transition_phase_execution(
         .filter(PhaseExecution.phase_id == phase_id, PhaseExecution.status == from_status)
         .update(values, synchronize_session=False)
     )
-    db.commit()
+    if commit:
+        db.commit()
     if changed == 0:
         logger.info(f"[PHASE-TRANSITION] Lost the race on phase {phase_id}: no longer {from_status!r} ({reason})")
         return None
@@ -2789,7 +2827,18 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                     # silently never creating a new task.
                     execution = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
                     if execution:
-                        reopen_phase_execution(execution, status="pending", started_at="clear")
+                        # transition_phase_execution's atomic UPDATE
+                        # replaces reopen_phase_execution's plain mutation
+                        # here (Step 3 of docs/designs/
+                        # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md).
+                        # completed_at preserved explicitly via
+                        # extra_fields -- see _retry_failed_tasks's
+                        # identical sibling fix above for why.
+                        transition_phase_execution(
+                            db, phase.id, "pending",
+                            reason="_maybe_retry_failed_tasks",
+                            extra_fields={"completed_at": execution.completed_at},
+                        )
                     db.commit()
                     failed_tasks = [t for t in failed_tasks if t not in ticket_blocked]
                     if not failed_tasks:

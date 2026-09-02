@@ -312,3 +312,60 @@ class TestExtraFields:
             result = pt.transition_phase_execution(session, "phase-1", "completed", reason="test")
             assert result.status == "completed"
             assert result.completion_summary is None
+
+
+class TestCommitParameter:
+    """commit=False defers the commit to the caller -- added migrating
+    reset_failed_phase_executions (Step 3), which has an explicit
+    "caller controls the transaction" contract so it can bundle this
+    reset atomically with other workflow-state writes."""
+
+    def test_commit_true_by_default_persists_immediately(self, db_manager):
+        _seed(db_manager, status="failed")
+        with db_manager.session_scope() as session:
+            pt.transition_phase_execution(session, "phase-1", "pending", reason="test")
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "pending"
+
+    def test_commit_false_returns_the_updated_row_without_committing(self, db_manager):
+        """The write must be visible within the SAME session immediately
+        (a same-connection read sees an uncommitted write), proving the
+        atomic UPDATE itself doesn't depend on committing to take effect
+        -- only durability/cross-connection visibility does."""
+        _seed(db_manager, status="failed")
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(
+                session, "phase-1", "pending", reason="test", commit=False
+            )
+            assert result is not None
+            assert result.status == "pending"
+
+            reread = session.query(PhaseExecution).filter_by(phase_id="phase-1").populate_existing().first()
+            assert reread.status == "pending"
+
+    def test_commit_false_lets_a_caller_rollback_undo_it(self, db_manager):
+        """The real contract this exists for: if the caller's own later
+        write in the same transaction fails, rolling back must undo this
+        transition too, not leave it stranded as a half-applied change
+        the surrounding operation never intended to commit on its own."""
+        _seed(db_manager, status="failed")
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(
+                session, "phase-1", "pending", reason="test", commit=False
+            )
+            assert result is not None
+            session.rollback()
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "failed"  # rolled back, never committed
+
+    def test_commit_false_still_returns_none_on_a_lost_race(self, db_manager):
+        _seed(db_manager, status="skipped")
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(
+                session, "phase-1", "completed", reason="test", commit=False
+            )
+            assert result is None
