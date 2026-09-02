@@ -730,12 +730,35 @@ class PhaseManager:
         Extracted so the same status/completed_at/summary/commit sequence
         isn't hand-copied at every branch of mark_phase_complete (SOLID
         review 2.12 — this exact block was duplicated 3+ times).
+
+        Step 3 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md:
+        delegates the actual write to transition_phase_execution's atomic
+        UPDATE ... WHERE status = :from_status, instead of the plain
+        attribute assignment this used before -- closes the race where two
+        callers both see the current status as closeable and both write.
+        Deferred import: phase_transitions.py imports PhaseManager from
+        this module's package, so a module-level import here would cycle.
+
+        If the row was no longer in a state "close to status" is valid
+        from (someone else already moved it), the write is skipped and
+        logged rather than forced -- this callable has no return value for
+        its caller to check, so `execution` is left reflecting whatever its
+        actual current state is instead of being force-overwritten.
         """
-        execution.status = status
-        execution.completed_at = utc_now()
+        from src.autopilot.orchestrator.phase_transitions import (
+            transition_phase_execution,
+        )
+
+        extra_fields = {"completion_summary": summary} if summary is not None else None
+        result = transition_phase_execution(
+            session, execution.phase_id, status, reason="_close_execution", extra_fields=extra_fields
+        )
+        if result is None:
+            return
+        execution.status = result.status
+        execution.completed_at = result.completed_at
         if summary is not None:
-            execution.completion_summary = summary
-        session.commit()
+            execution.completion_summary = result.completion_summary
 
     def _advance_or_complete(self, session, phase_id: str) -> Dict[str, Any]:
         """Start the next phase, or complete the workflow if there isn't one."""

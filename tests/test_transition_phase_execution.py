@@ -166,3 +166,41 @@ class TestFieldResets:
         with db_manager.session_scope() as session:
             result = pt.transition_phase_execution(session, "phase-1", "skipped", reason="condition-not-met")
             assert result.completed_at is not None
+
+
+class TestExtraFields:
+    """extra_fields lets a call site (e.g. _close_execution) atomically set
+    fields the transition table itself doesn't otherwise touch, such as
+    completion_summary, in the same UPDATE as the status change."""
+
+    def test_extra_fields_are_written_atomically_with_the_transition(self, db_manager):
+        _seed(db_manager, status="in_progress")
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(
+                session, "phase-1", "completed", reason="test",
+                extra_fields={"completion_summary": "all good"},
+            )
+            assert result.status == "completed"
+            assert result.completion_summary == "all good"
+
+    def test_extra_fields_are_not_applied_when_the_transition_is_invalid(self, db_manager):
+        """A caller's summary must not land on a row this call didn't
+        actually touch."""
+        _seed(db_manager, status="skipped")
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(
+                session, "phase-1", "completed", reason="test",
+                extra_fields={"completion_summary": "should not stick"},
+            )
+            assert result is None
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.completion_summary is None
+
+    def test_no_extra_fields_behaves_as_before(self, db_manager):
+        _seed(db_manager, status="in_progress")
+        with db_manager.session_scope() as session:
+            result = pt.transition_phase_execution(session, "phase-1", "completed", reason="test")
+            assert result.status == "completed"
+            assert result.completion_summary is None
