@@ -478,6 +478,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     from src.autopilot.orchestrator.features import (
         _clean_stale_assigned_tasks,
         _pause_stale_completed_workflows_for_review,
+        _recover_designs_stuck_mid_decomposition,
         _sync_stale_design_statuses,
         _sync_stale_feature_statuses,
     )
@@ -523,6 +524,14 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         _sync_stale_design_statuses(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Design-status sync error: {e}")
+
+    # The other direction from the sync above: a design stranded in a
+    # transient status ("decomposing") is in no queue and has no live
+    # workflow, so nothing else would ever touch it again.
+    try:
+        _recover_designs_stuck_mid_decomposition(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Stranded-design recovery error: {e}")
 
     if loop is not None:
         try:
