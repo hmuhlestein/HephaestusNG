@@ -1467,6 +1467,51 @@ class TestMaybeRetryFailedTasks:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "active"
 
+    def test_usage_limit_failure_retries_past_the_cap(self, db_manager, sample_workflow):
+        """Regression: _limit_failure's exemption previously only matched
+        "session limit"/"spend limit" text -- missing the exact third
+        wording (limit_kind = "usage limit (auto-resume window)")
+        mechanical_recovery.py's _check_spend_or_session_limit produces
+        for Claude Code's own rolling-usage-window banner. A task failing
+        with that specific wording was silently subject to the plain
+        retry cap instead of always-retryable like its session/spend-limit
+        siblings. Confirmed live: task 8c3ba0f8 climbed to retry_count=31
+        before landing on this exact wording, which then wasn't exempted
+        and immediately paused the workflow with retries already far past
+        the cap."""
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-usage-limit-past-cap",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="CLI usage limit (auto-resume window) reached",
+                    retry_count=31,
+                )
+            )
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("usage-limit-retry-agent"),
+        ) as mock_create_agent:
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger)
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-usage-limit-past-cap").first()
+            assert task.status == "in_progress"
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+
     def test_action_target_phase_survives_retry_reset(self, db_manager, sample_workflow):
         """Regression (this function's own inline comment): a failed task
         created by an earlier phase's goto/retry carries action_target_

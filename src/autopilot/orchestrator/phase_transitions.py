@@ -2841,11 +2841,24 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                         "phase to route back to -- falling through to normal retry handling"
                     )
 
-        # Orphaned tasks (never dispatched), session/spend limit failures,
-        # and stuck-task failures are not agent faults -- they should always
-        # be retryable. Session limit failures will use the fallback model on retry.
+        # Orphaned tasks (never dispatched), session/spend/usage limit
+        # failures, and stuck-task failures are not agent faults -- they
+        # should always be retryable. Session/usage limit failures will use
+        # the fallback model on retry. "usage limit" must be checked
+        # alongside "session limit"/"spend limit" -- mechanical_recovery.py's
+        # _check_spend_or_session_limit produces exactly that third wording
+        # (limit_kind = "usage limit (auto-resume window)") for Claude
+        # Code's own rolling-window banner, and missing it here meant a task
+        # failing with THAT specific wording was subject to the plain
+        # max_retry_count cap while the other two wordings retried
+        # unconditionally -- confirmed live: task 8c3ba0f8 climbed to
+        # retry_count=31 (presumably under session/spend-limit-shaped
+        # wording on earlier attempts) before one retry recorded as "usage
+        # limit" instead, wasn't exempted, and immediately paused the whole
+        # workflow with retries already far past the cap.
         def _limit_failure(r):
-            return "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+            r = (r or "").lower()
+            return "session limit" in r or "spend limit" in r or "usage limit" in r
         def _stuck_failure(r):
             return "task stuck" in (r or "").lower()
         retryable_tasks = [

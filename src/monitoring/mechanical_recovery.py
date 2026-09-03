@@ -204,10 +204,15 @@ class MechanicalRecoveryDetector:
 
     async def _check_spend_or_session_limit(self, agent, raw_text) -> bool:
         """Spend/session-limit hard blocker check against the live pane --
-        mechanical_recovery_for_agent's first check. Terminate + fail the task,
-        then re-dispatch on a configured fallback (injecting the retry context)
-        or pause the workflow. Verbatim extraction; returns True when an
-        intervention happened."""
+        mechanical_recovery_for_agent's first check. For a genuine spend cap
+        or session limit: terminate + fail the task, then re-dispatch on a
+        configured fallback (injecting the retry context) or pause the
+        workflow. A pure usage-limit hit (Claude Code's own self-resolving
+        rolling-window banner, no spend/session wording alongside it) is
+        deliberately NOT treated as a hard blocker -- see that branch's own
+        comment. Returns True whenever this check recognized and handled the
+        pane's state, whether or not that meant actually terminating
+        anything."""
         # Spend/session limit check using the already-captured pane output.
         # The interactive menu ("Stop and wait for limit to reset") only
         # appears in the live pane, not in the transcript log.
@@ -215,7 +220,37 @@ class MechanicalRecoveryDetector:
         if stripped_raw:
             spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
             usage_limit_hit = _USAGE_LIMIT_RE.search(stripped_raw)
-            if spend_limit_hit or usage_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
+            session_limit_hit = _SESSION_LIMIT_RE.search(stripped_raw)
+
+            if usage_limit_hit and not spend_limit_hit and not session_limit_hit:
+                # Unlike a spend cap or a genuine session limit, Claude
+                # Code's own rolling usage-window banner literally says it
+                # will "continue automatically" at a stated time -- nothing
+                # external (a human raising a cap, a fresh CLI process) is
+                # needed to clear it. Terminating the agent here (the old
+                # behavior, identical to the two genuinely hard blockers
+                # below) only forces a retry that immediately re-hits the
+                # SAME account-level window with a freshly-spawned process,
+                # which gets no new allowance -- confirmed live: task
+                # 8c3ba0f8 retried 31 times over ~15 hours this way before
+                # exhausting its retry cap and pausing the whole workflow,
+                # discarding an agent that had already finished its real
+                # work. The pane keeps re-rendering this exact line as its
+                # own countdown updates, so it never trips the frozen-pane
+                # stuck-detector either (see _USAGE_LIMIT_RE's own docstring
+                # in patterns.py) -- leaving the agent alone is genuinely
+                # safe, not just "no worse." Returns True (not False, and
+                # not falling through) to claim this tick as recognized and
+                # handled, so no other detector in this same pass mistakes
+                # the banner for a different failure mode.
+                logger.info(
+                    f"[USAGE-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit its "
+                    "usage-limit auto-resume window -- leaving it running; Claude "
+                    "Code will continue on its own at the stated time"
+                )
+                return True
+
+            if spend_limit_hit or usage_limit_hit or session_limit_hit:
                 # Determine the specific limit kind for accurate logging
                 if spend_limit_hit:
                     matched_text = spend_limit_hit.group(0).lower()
