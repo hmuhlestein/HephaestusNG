@@ -679,6 +679,17 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
     return false;
   });
 
+  // A design paused with pausedBy === 'review' is waiting on a human to
+  // approve/reject the Feature Architect's (phase0-) git push -- see
+  // phase_transitions.py's _pause_for_manual_handoff. A blind Resume here
+  // would restart that workflow without ever surfacing the diff, so swap
+  // it for the same Review action the nested Feature Architect row already
+  // offers once expanded, pulled from this design's already-polled
+  // features list.
+  const phase0Feature = status === 'paused' && pausedBy === 'review'
+    ? features.find((f: any) => f.id?.startsWith('phase0-'))
+    : undefined;
+
   // Calculate elapsed time from features' tasks
   const designElapsedSeconds = features.reduce((acc: number, f: any) => {
     const tasks = f.tasks || [];
@@ -841,7 +852,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             <RowActionIcons
               canPause={status === 'active'}
               canStop={status === 'active' || status === 'paused'}
-              canResume={status === 'paused' || status === 'failed'}
+              canResume={(status === 'paused' && !phase0Feature) || status === 'failed'}
               canRerun={status === 'completed' || status === 'failed'}
               onPause={() => onAction?.('pause')}
               onStop={() => onAction?.('stop')}
@@ -849,6 +860,19 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
               onRerun={() => onAction?.('rerun')}
               pending={actionPending}
             />
+            {phase0Feature && onReviewFeature && (
+              // Same modal/flow as the nested Feature Architect row's
+              // Review button (see FeatureRow below) -- surfaced here too
+              // so approving doesn't require expanding the design first.
+              <button
+                onClick={(e) => { e.stopPropagation(); onReviewFeature(phase0Feature.id, phase0Feature); }}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition-colors"
+                title="Review this feature"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Review
+              </button>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
