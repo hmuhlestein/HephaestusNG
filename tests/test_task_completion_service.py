@@ -1450,20 +1450,23 @@ class TestVerifyGitExpertMergedAndPushed:
         repo.index.commit("feat: implement handler")
         return repo
 
-    def _mock_session_for(self, working_directory, project_id=None, review_mode=False):
-        """Two distinct session.query(...) call chains (Workflow, then
-        AutopilotProject only if project_id is set) need two distinct
-        return values -- a single blanket .return_value (as the sibling
-        development test class uses, which only ever queries Workflow)
-        isn't enough here."""
+    def _mock_session_for(self, working_directory, project_id=None, review_mode=False, feature=None):
+        """Three distinct session.query(...) call chains (Workflow,
+        AutopilotProject only if project_id is set, and Feature for the
+        §3.3 pr_url write-through) need distinct return values -- a single
+        blanket .return_value (as the sibling development test class uses,
+        which only ever queries Workflow) isn't enough here."""
         wf = Mock(working_directory=working_directory, project_id=project_id)
         project = Mock(review_mode=review_mode)
         session = Mock()
 
         def _query(model):
             q = Mock()
-            if getattr(model, "__name__", "") == "AutopilotProject":
+            name = getattr(model, "__name__", "")
+            if name == "AutopilotProject":
                 q.filter_by.return_value.first.return_value = project
+            elif name == "Feature":
+                q.filter_by.return_value.first.return_value = feature
             else:
                 q.filter_by.return_value.first.return_value = wf
             return q
@@ -1698,6 +1701,202 @@ class TestVerifyGitExpertMergedAndPushed:
         result = TaskCompletionService.verify_git_expert_merged_and_pushed(
             session=session, task=task, phase=phase
         )
+
+        assert result is None
+        assert task.status == "done"
+
+    def _pushed_review_mode_repo(self, tmp_path):
+        """Same fixture shape as test_review_mode_passes_once_feature_
+        branch_pushed -- a feature branch pushed to a remote, review_mode
+        on -- the state §3.3's new PR-status check runs from."""
+        from git import Repo
+
+        remote_path = tmp_path / "remote.git"
+        Repo.init(remote_path, bare=True)
+        repo_path = tmp_path / "work"
+        repo_path.mkdir()
+        repo = self._init_repo_with_feature_branch(repo_path)
+        origin = repo.create_remote("origin", str(remote_path))
+        origin.push("feature")
+        return repo_path
+
+    def test_review_mode_rejects_when_ci_is_failing(self, tmp_path):
+        """§3.3: pushed-to-remote alone isn't enough in review_mode --
+        the PR itself must actually be passing CI, independently verified
+        via `gh pr view` rather than trusting the agent's self-report."""
+        from src.services.github_pr_status import PRStatus
+
+        repo_path = self._pushed_review_mode_repo(tmp_path)
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(repo_path), project_id="proj-1", review_mode=True)
+
+        fake_status = PRStatus(
+            url="https://github.com/o/r/pull/1", state="OPEN",
+            ci_conclusion="failing", review_decision=None,
+            failing_checks=["lint"], summary="CI check(s) failed: lint",
+        )
+        with patch("src.services.github_pr_status.get_pr_status", return_value=fake_status):
+            result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+                session=session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "lint" in result["message"]
+        assert "same" in result["message"].lower()  # push to the SAME PR, don't recreate
+        assert task.status == "failed"
+
+    def test_review_mode_rejects_when_changes_requested(self, tmp_path):
+        from src.services.github_pr_status import PRStatus
+
+        repo_path = self._pushed_review_mode_repo(tmp_path)
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(repo_path), project_id="proj-1", review_mode=True)
+
+        fake_status = PRStatus(
+            url="https://github.com/o/r/pull/1", state="OPEN",
+            ci_conclusion="passing", review_decision="CHANGES_REQUESTED",
+            summary="a reviewer requested changes on this PR",
+        )
+        with patch("src.services.github_pr_status.get_pr_status", return_value=fake_status):
+            result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+                session=session, task=task, phase=phase
+            )
+
+        assert result["status"] == "failed"
+        assert "requested changes" in result["message"]
+        assert task.status == "failed"
+
+    def test_review_mode_leaves_task_in_progress_while_ci_is_pending(self, tmp_path):
+        """§3.3's key behavior: CI still running is NOT a rejection --
+        marking it 'failed' would burn real retry budget on pure waiting.
+        task.status must revert from the 'done' _complete_task_normally
+        already wrote back to 'in_progress', so neither the retry
+        machinery (only ever looks at status=='failed') nor the phase-
+        completion sweep touches it -- _resolve_pending_pr_status is what
+        eventually finishes the job.
+
+        assigned_agent_id must ALSO be cleared: the reporting agent gets
+        terminated unconditionally regardless of what task.status ends up
+        as (_complete_task_normally's own terminate_agents_and_process_
+        queue), and _clean_stale_assigned_tasks (every sweep tick) matches
+        any in_progress/pending/etc task with a non-null assigned_agent_id
+        pointing at a terminated agent -- confirmed live by reading that
+        detector directly: without clearing it, it would re-fail this
+        exact task as "Agent terminated unexpectedly" within one tick,
+        silently discarding the real still-pending outcome."""
+        from src.services.github_pr_status import PRStatus
+
+        repo_path = self._pushed_review_mode_repo(tmp_path)
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done", assigned_agent_id="agent-1",
+        )
+        session = self._mock_session_for(str(repo_path), project_id="proj-1", review_mode=True)
+
+        fake_status = PRStatus(
+            url="https://github.com/o/r/pull/1", state="OPEN",
+            ci_conclusion="pending", review_decision=None,
+            summary="CI is still running",
+        )
+        with patch("src.services.github_pr_status.get_pr_status", return_value=fake_status):
+            result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+                session=session, task=task, phase=phase
+            )
+
+        assert task.assigned_agent_id is None
+        assert result is not None
+        assert result["status"] == "pending"
+        assert "CI hasn't finished" in result["message"]
+        assert task.status == "in_progress"  # NOT "failed" -- no retry budget spent
+
+    def test_review_mode_writes_pr_url_through_to_feature_once(self, tmp_path):
+        """Feature.pr_url exists but was never written anywhere before
+        §3.3 -- everything else only ever read it with a memory-scraping
+        regex fallback. First-write only: an operator-corrected URL must
+        not be clobbered back by a stale gh response on a later retry."""
+        from src.services.github_pr_status import PRStatus
+
+        repo_path = self._pushed_review_mode_repo(tmp_path)
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        feature = Mock(pr_url=None)
+        session = self._mock_session_for(
+            str(repo_path), project_id="proj-1", review_mode=True, feature=feature
+        )
+
+        fake_status = PRStatus(
+            url="https://github.com/o/r/pull/42", state="OPEN",
+            ci_conclusion="passing", review_decision=None, summary="ok",
+        )
+        with patch("src.services.github_pr_status.get_pr_status", return_value=fake_status):
+            result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+                session=session, task=task, phase=phase
+            )
+
+        assert result is None
+        assert task.status == "done"
+        assert feature.pr_url == "https://github.com/o/r/pull/42"
+
+    def test_review_mode_does_not_overwrite_an_existing_pr_url(self, tmp_path):
+        from src.services.github_pr_status import PRStatus
+
+        repo_path = self._pushed_review_mode_repo(tmp_path)
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        feature = Mock(pr_url="https://github.com/o/r/pull/1")
+        session = self._mock_session_for(
+            str(repo_path), project_id="proj-1", review_mode=True, feature=feature
+        )
+
+        fake_status = PRStatus(
+            url="https://github.com/o/r/pull/999", state="OPEN",
+            ci_conclusion="passing", review_decision=None, summary="ok",
+        )
+        with patch("src.services.github_pr_status.get_pr_status", return_value=fake_status):
+            TaskCompletionService.verify_git_expert_merged_and_pushed(
+                session=session, task=task, phase=phase
+            )
+
+        assert feature.pr_url == "https://github.com/o/r/pull/1"
+
+    def test_review_mode_falls_open_when_gh_lookup_fails(self, tmp_path):
+        """A transient gh failure (network, rate limit, gh not installed)
+        must not block a real completion -- matches this whole module's
+        existing fail-open philosophy for git errors."""
+        repo_path = self._pushed_review_mode_repo(tmp_path)
+        phase = Mock(id="phase-1")
+        phase.name = "git_expert"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+        )
+        session = self._mock_session_for(str(repo_path), project_id="proj-1", review_mode=True)
+
+        with patch("src.services.github_pr_status.get_pr_status", return_value=None):
+            result = TaskCompletionService.verify_git_expert_merged_and_pushed(
+                session=session, task=task, phase=phase
+            )
 
         assert result is None
         assert task.status == "done"

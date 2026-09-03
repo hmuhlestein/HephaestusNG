@@ -769,7 +769,7 @@ def verify_git_expert_merged_and_pushed(session, task, phase=None) -> Optional[D
     """
     from pathlib import Path
 
-    from src.core.database import AutopilotProject, Phase, Workflow
+    from src.core.database import AutopilotProject, Feature, Phase, Workflow
 
     if phase is None:
         phase = session.query(Phase).filter_by(id=task.phase_id).first()
@@ -841,6 +841,68 @@ def verify_git_expert_merged_and_pushed(session, task, phase=None) -> Optional[D
                         f"the feature branch has commits not yet pushed to {remote.name if remote else 'the remote'}. "
                         "Push the feature branch before calling update_task_status(done)."
                     )
+
+            # §3.3: the branch being pushed only means a PR CAN exist, not
+            # that it's actually mergeable -- independently check CI/review
+            # state via `gh pr view` rather than trusting the agent's own
+            # "I created/updated the PR" self-report, same reasoning as
+            # every other hard floor in this module.
+            from src.services.github_pr_status import get_pr_status
+
+            pr_status = get_pr_status(repo.active_branch.name, cwd=wf.working_directory)
+            if pr_status is not None and pr_status.url:
+                feature = session.query(Feature).filter_by(workflow_id=task.workflow_id).first()
+                if feature and not feature.pr_url:
+                    feature.pr_url = pr_status.url
+                    session.commit()
+
+                if pr_status.needs_work:
+                    return _reject(
+                        f"{pr_status.summary} -- push additional commits to this SAME branch/PR to "
+                        "address it (do not open a new PR)."
+                    )
+                if pr_status.is_pending:
+                    # Not a rejection -- there is nothing left for THIS
+                    # agent to do, and CI/review can take minutes. Revert
+                    # the "done" _complete_task_normally already wrote
+                    # (task.status, line ~285) back to in_progress so
+                    # neither the retry machinery (which only ever looks
+                    # at status=="failed") nor the phase-completion sweep
+                    # (which needs an all-done phase to advance) act on
+                    # this task at all -- _resolve_pending_pr_status (the
+                    # new periodic sweep check) is what finishes the job
+                    # once gh reports a real outcome, without spinning up
+                    # a fresh agent every tick just to ask "done yet?".
+                    #
+                    # assigned_agent_id is cleared too, not just status:
+                    # the reporting agent gets terminated unconditionally
+                    # once this call returns (_complete_task_normally's own
+                    # terminate_agents_and_process_queue, unrelated to what
+                    # task.status ends up as), and _clean_stale_assigned_
+                    # tasks (background_loops.py, every sweep tick) matches
+                    # ANY task with status in_progress/pending/etc AND a
+                    # non-null assigned_agent_id pointing at a terminated
+                    # agent -- it would otherwise immediately re-fail this
+                    # exact task as "Agent terminated unexpectedly" within
+                    # one tick, silently discarding the real "still
+                    # pending" outcome and burning retry budget on nothing.
+                    # Confirmed by reading that detector directly: every
+                    # OTHER completion path is exempt only because it sets
+                    # status to done/failed (outside that query's status
+                    # list) before the agent is terminated -- this is the
+                    # one path that doesn't, by design.
+                    task.status = "in_progress"
+                    task.assigned_agent_id = None
+                    session.commit()
+                    return {
+                        "status": "pending",
+                        "message": (
+                            f"PR is up ({pr_status.url}) but CI hasn't finished yet -- nothing more to "
+                            "do this turn. The orchestrator will check back automatically and either "
+                            "mark this done or dispatch a follow-up once CI/review resolves."
+                        ),
+                    }
+                # Passing, no unresolved review -- fall through, done stands.
             return None
 
         try:

@@ -209,14 +209,34 @@ additional_notes: |
   ```
   
   ## STEP 6: RECORD AND SAVE TO MEMORY
-  
+
   Record the merge commit hash:
   ```bash
   git log --oneline -3
   COMMIT=$(git rev-parse HEAD)
   echo "Merge commit: $COMMIT"
   ```
-  
+
+  ## IF YOU WERE RETRIED WITH A CI OR REVIEW FAILURE
+
+  Your task description may carry a RETRY banner reporting that an open
+  PR's CI failed or a reviewer requested changes (the orchestrator checks
+  this independently against the real PR, not just what you last reported).
+  In that case:
+  - Do NOT run `gh pr create` — a PR for this branch already exists; the
+    `gh pr create` command above already fails safely and falls back to
+    looking up the existing PR's URL when one is already open, so this is
+    also safe to just re-run unchanged.
+  - Fix the actual problem the RETRY banner describes (a failing check, a
+    reviewer's specific comment) and push a follow-up commit to this SAME
+    branch — you have full read/write access to the worktree, this is not
+    limited to git commands. Small, direct fixes (a lint error, a flaky-
+    looking test, a straightforward review nit) belong here. If the fix
+    genuinely requires reopening development's own work, say so plainly in
+    your completion summary rather than guessing — the orchestrator's
+    arbitration step (not you) decides whether to route back to development
+    after enough retries don't converge.
+
   ## CRITICAL RULES
   
   DO:
