@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, TMUX_PANE_WIDTH, WORKTREES_SUBDIR
 from src.core.database import Agent, AgentLog
+from src.shared.terminal_reconstruction import reconstruct_terminal_rows
 
 logger = logging.getLogger(__name__)
 
@@ -507,145 +508,15 @@ class AgentOutputCapture:
 
             # Reconstruct rows the way a real terminal would, instead of
             # treating \n as the only row boundary and stripping every
-            # cursor-movement CSI sequence as if it had no effect. TUI
-            # apps (Claude Code, pi) redraw in place using CSI G (cursor
-            # to absolute column -- skips re-sending an unchanged prefix),
-            # CSI C/D (relative column move), and CSI B/A (row up/down),
-            # not just \r/\n. Deleting those sequences outright (the old
-            # behavior) throws away the position information they carry,
-            # so text written before and after one gets concatenated as
-            # if they were always adjacent. Observed live: "The
-            # adversarial review identified\"" + CSI 81G (jump to column
-            # 81) + "with no findings listed" collapsed into
-            # "...identified\"withnofindingslisted" -- and, at a larger
-            # scale, an entire ~700KB/14000-\r stretch of one real session
-            # (agent 8389d7e0) had NO \n at all (a live-redrawn status
-            # block relies entirely on CSI G/C/B, never \n), collapsing
-            # minutes of real content into one unreadable line.
-            #
-            # SGR color codes (kept as literal text everywhere else in
-            # this pipeline) are tracked as a "pending" prefix attached to
-            # the next character written, rather than occupying a column
-            # of their own -- correctly interleaving them with arbitrary
-            # overwrites is a full terminal emulator's job. A run of SGR
-            # codes with no following character before the row ends (e.g.
-            # a trailing reset) is simply dropped -- cosmetic only, and
-            # sgr_at_end_re further down already cleans up analogous
-            # trailing-code debris.
-            token_re = re.compile(r'\x1b\[([0-9;?]*)([A-Za-z])|([^\x1b])', re.DOTALL)
-            # Bounds on how far a single CSI move can push the cursor --
-            # not a real terminal limit, just a safety clamp against a
-            # corrupted/truncated escape sequence (e.g. a partial write
-            # split mid-parameter across two pipe-pane reads) whose
-            # numeric parameter comes out absurdly large. Without this, a
-            # single \x1b[999999999G would try to pad one row to a
-            # billion elements -- confirmed live to exhaust multiple GB
-            # and hang within a second. Generous relative to any real
-            # terminal (width) or realistic session length (rows), so
-            # legitimate content is never affected.
-            _MAX_COL = 100_000
-            _MAX_ROW = 100_000
-            rows: List[List[str]] = [[]]
-            cursor_row = 0
-            cursor_col = 0
-            pending_sgr = ""
-
-            def _ensure_row(r: int) -> None:
-                while len(rows) <= r:
-                    rows.append([])
-
-            def _end_row() -> None:
-                # Shared by \n and auto-wrap: flush any pending SGR onto
-                # the row that's ending (it was already committed there,
-                # however it renders with nothing visible after it) rather
-                # than carrying it forward to prefix the next row's first
-                # character with a code that belongs here instead.
-                nonlocal pending_sgr, cursor_row, cursor_col
-                if pending_sgr:
-                    rows[cursor_row].append(pending_sgr)
-                    pending_sgr = ""
-                cursor_row += 1
-                _ensure_row(cursor_row)
-                cursor_col = 0
-
-            for m in token_re.finditer(text):
-                params, letter, ch = m.group(1), m.group(2), m.group(3)
-                if letter is not None:
-                    if letter == 'm':
-                        pending_sgr += m.group(0)
-                        continue
-                    parts = [int(p) for p in params.split(';') if p.isdigit()] if params else []
-                    n = parts[0] if parts else None
-                    if letter == 'G':  # CHA -- move to absolute column n
-                        cursor_col = min(max(0, (n or 1) - 1), _MAX_COL)
-                    elif letter == 'C':  # CUF -- move forward n columns
-                        cursor_col = min(cursor_col + (n or 1), _MAX_COL)
-                    elif letter == 'D':  # CUB -- move back n columns
-                        cursor_col = max(0, cursor_col - (n or 1))
-                    elif letter == 'B':  # CUD -- move down n rows
-                        cursor_row = min(cursor_row + (n or 1), _MAX_ROW)
-                        _ensure_row(cursor_row)
-                    elif letter == 'A':  # CUU -- move up n rows
-                        cursor_row = max(0, cursor_row - (n or 1))
-                    elif letter in ('H', 'f'):  # CUP -- absolute row;col (1-indexed)
-                        row_n = parts[0] if len(parts) > 0 else 1
-                        col_n = parts[1] if len(parts) > 1 else 1
-                        cursor_row = min(max(0, row_n - 1), _MAX_ROW)
-                        _ensure_row(cursor_row)
-                        cursor_col = min(max(0, col_n - 1), _MAX_COL)
-                    elif letter == 'K':  # EL -- erase in line
-                        mode = n or 0
-                        row = rows[cursor_row]
-                        if mode == 0:
-                            del row[cursor_col:]
-                        elif mode == 1:
-                            for i in range(min(cursor_col, len(row))):
-                                row[i] = " "
-                        elif mode == 2:
-                            rows[cursor_row] = []
-                    elif letter == 'J':  # ED -- erase in display
-                        mode = n or 0
-                        if mode == 0:
-                            del rows[cursor_row][cursor_col:]
-                            del rows[cursor_row + 1:]
-                        elif mode == 1:
-                            for i in range(min(cursor_col, len(rows[cursor_row]))):
-                                rows[cursor_row][i] = " "
-                            for r in range(cursor_row):
-                                rows[r] = []
-                        else:
-                            rows = [[]]
-                            cursor_row = 0
-                    # Any other CSI is rare enough here to ignore outright,
-                    # same as the old blanket strip.
-                    continue
-                if ch == '\r':
-                    cursor_col = 0
-                elif ch == '\n':
-                    _end_row()
-                else:
-                    # Auto-wrap: a real terminal moves to a new row once
-                    # writing would overflow the pane's fixed width
-                    # (TMUX_PANE_WIDTH, set at session creation -- see
-                    # launch_pipeline.py) instead of extending the row
-                    # forever. Without this, a long wrapped paragraph (no
-                    # explicit \n or CSI B between its visual rows, just
-                    # the terminal's own implicit wrap) stays one enormous
-                    # row, and CSI G/C column jumps meant for a SHORT
-                    # wrapped row get misapplied against that whole thing.
-                    if cursor_col >= TMUX_PANE_WIDTH:
-                        _end_row()
-                    row = rows[cursor_row]
-                    while len(row) <= cursor_col:
-                        row.append(" ")
-                    row[cursor_col] = pending_sgr + ch
-                    pending_sgr = ""
-                    cursor_col += 1
-
-            if pending_sgr:
-                rows[cursor_row].append(pending_sgr)
-
-            collapsed = ["".join(row).rstrip() for row in rows]
+            # cursor-movement CSI sequence as if it had no effect -- see
+            # reconstruct_terminal_rows's own docstring for the full
+            # rationale (observed-live examples of what naive stripping
+            # does to real transcripts) and exactly what it does and does
+            # not handle. Shared with tools/tmux-viewer's own raw-
+            # transcript reconstruction; keep the two in sync by editing
+            # that one function, not by hand-copying changes here.
+            rows = reconstruct_terminal_rows(text, TMUX_PANE_WIDTH)
+            collapsed = [row.rstrip() for row in rows]
             text = "\n".join(collapsed)
             # Horizontal separator lines pi draws between message blocks
             # (each char individually SGR-wrapped). Same pattern as the

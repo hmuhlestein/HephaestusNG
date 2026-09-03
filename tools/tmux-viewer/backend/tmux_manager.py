@@ -2,12 +2,27 @@
 
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import libtmux
 
 logger = logging.getLogger(__name__)
+
+# The row/cursor CSI-parsing engine used to be hand-duplicated here and in
+# src/agents/output_capture.py -- both docstrings said "keep in sync,"
+# which in practice meant every bug fix (a CSI handler, a safety clamp)
+# had to be applied twice by hand, and drifted more than once. Extracted
+# to src/shared/terminal_reconstruction.py (stdlib-only, no other src/
+# dependency, so importing it doesn't drag in this project's DB/ORM
+# stack). This tool otherwise has no dependency on the main app's src/
+# package by design -- it can be pointed at any tmux session, not just
+# Hephaestus agents -- so this is the one deliberate, narrow exception:
+# a checkout of just this tools/tmux-viewer/ directory, without the rest
+# of the HephaestusNG repo, would need that one file alongside it too.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from src.shared.terminal_reconstruction import reconstruct_terminal_rows  # noqa: E402
 
 # How many ancestor directories of the pane's cwd to check for a
 # Hephaestus .hephaestus/tmux/ dir -- an agent's pane can `cd` anywhere
@@ -23,28 +38,20 @@ _HEPHAESTUS_TMUX_SEARCH_DEPTH = 6
 # it must stay in sync with the real value if that ever changes.
 _HEPHAESTUS_PANE_WIDTH = 150
 
-_RAW_TRANSCRIPT_TOKEN_RE = re.compile(r'\x1b\[([0-9;?]*)([A-Za-z])|([^\x1b])', re.DOTALL)
-
 
 def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_WIDTH) -> str:
     """Reconstruct readable rows from a raw pipe-pane transcript the way a
-    real terminal would, instead of naively treating \\n as the only row
-    boundary. TUI apps (Claude Code, pi) redraw in place using CSI
-    G/C/D/B/A/H/f (cursor move) and K/J (erase), not just \\r/\\n --
-    deleting those (as pipe-pane's own perl filter used to, and as a
-    plain ANSI-strip would) throws away the position information they
-    carry, concatenating text written before and after one as if always
-    adjacent.
+    real terminal would -- see reconstruct_terminal_rows's own docstring
+    (src/shared/terminal_reconstruction.py) for the row/cursor state
+    machine itself and why naive \\n-splitting or a plain ANSI-strip both
+    lose real content.
 
-    This is a simplified sibling of
-    src/agents/output_capture.py::AgentOutputCapture._read_transcript_log
-    -- same cursor/row reconstruction core and same blank-run collapsing
-    (see the pass at the end of this function), without that function's
-    Claude-Code/pi-specific chrome and progressive-redraw deduplication
-    passes (this tool views arbitrary tmux sessions, not just Hephaestus
-    agents, so baking in that much CLI-specific noise-filtering isn't
-    appropriate here). Keep the two in sync if the reconstruction core
-    itself changes.
+    This function is the OSC/charset stripping around that shared engine,
+    plus a blank-run collapsing pass that's deliberately simpler than
+    src/agents/output_capture.py::AgentOutputCapture._read_transcript_log's
+    -- this tool views arbitrary tmux sessions, not just Hephaestus
+    agents, so that function's Claude-Code/pi-specific chrome and
+    progressive-redraw deduplication passes don't belong here.
 
     SGR color codes are tracked as a "pending" prefix attached to the
     next character written rather than occupying a column of their own --
@@ -62,96 +69,7 @@ def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_
     text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)  # Charset selection
     text = re.sub(r'\x1b(?!\[)[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC (not CSI)
 
-    # Safety clamp against a corrupted/truncated escape sequence (e.g. a
-    # partial write split mid-parameter) whose numeric parameter comes
-    # out absurdly large -- without this, a single \x1b[999999999G would
-    # try to pad one row to a billion elements. Generous relative to any
-    # real terminal (width) or realistic session length (rows).
-    _MAX_COL = 100_000
-    _MAX_ROW = 100_000
-    rows: List[List[str]] = [[]]
-    cursor_row = 0
-    cursor_col = 0
-    pending_sgr = ""
-
-    def _ensure_row(r: int) -> None:
-        while len(rows) <= r:
-            rows.append([])
-
-    def _end_row() -> None:
-        nonlocal pending_sgr, cursor_row, cursor_col
-        if pending_sgr:
-            rows[cursor_row].append(pending_sgr)
-            pending_sgr = ""
-        cursor_row += 1
-        _ensure_row(cursor_row)
-        cursor_col = 0
-
-    for m in _RAW_TRANSCRIPT_TOKEN_RE.finditer(text):
-        params, letter, ch = m.group(1), m.group(2), m.group(3)
-        if letter is not None:
-            if letter == 'm':
-                pending_sgr += m.group(0)
-                continue
-            parts = [int(p) for p in params.split(';') if p.isdigit()] if params else []
-            n = parts[0] if parts else None
-            if letter == 'G':
-                cursor_col = min(max(0, (n or 1) - 1), _MAX_COL)
-            elif letter == 'C':
-                cursor_col = min(cursor_col + (n or 1), _MAX_COL)
-            elif letter == 'D':
-                cursor_col = max(0, cursor_col - (n or 1))
-            elif letter == 'B':
-                cursor_row = min(cursor_row + (n or 1), _MAX_ROW)
-                _ensure_row(cursor_row)
-            elif letter == 'A':
-                cursor_row = max(0, cursor_row - (n or 1))
-            elif letter in ('H', 'f'):
-                row_n = parts[0] if len(parts) > 0 else 1
-                col_n = parts[1] if len(parts) > 1 else 1
-                cursor_row = min(max(0, row_n - 1), _MAX_ROW)
-                _ensure_row(cursor_row)
-                cursor_col = min(max(0, col_n - 1), _MAX_COL)
-            elif letter == 'K':
-                mode = n or 0
-                row = rows[cursor_row]
-                if mode == 0:
-                    del row[cursor_col:]
-                elif mode == 1:
-                    for i in range(min(cursor_col, len(row))):
-                        row[i] = " "
-                elif mode == 2:
-                    rows[cursor_row] = []
-            elif letter == 'J':
-                mode = n or 0
-                if mode == 0:
-                    del rows[cursor_row][cursor_col:]
-                    del rows[cursor_row + 1:]
-                elif mode == 1:
-                    for i in range(min(cursor_col, len(rows[cursor_row]))):
-                        rows[cursor_row][i] = " "
-                    for r in range(cursor_row):
-                        rows[r] = []
-                else:
-                    rows = [[]]
-                    cursor_row = 0
-            continue
-        if ch == '\r':
-            cursor_col = 0
-        elif ch == '\n':
-            _end_row()
-        else:
-            if cursor_col >= width:
-                _end_row()
-            row = rows[cursor_row]
-            while len(row) <= cursor_col:
-                row.append(" ")
-            row[cursor_col] = pending_sgr + ch
-            pending_sgr = ""
-            cursor_col += 1
-
-    if pending_sgr:
-        rows[cursor_row].append(pending_sgr)
+    rows = reconstruct_terminal_rows(text, width)
 
     # Collapse runs of blank rows to a single blank line. A tall pane
     # (e.g. Hephaestus's TMUX_PANE_HEIGHT) can leave thousands of
@@ -171,7 +89,7 @@ def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_
     prev_blank = True  # also drops leading blanks
     carried = ""
     for row in rows:
-        raw_line = "".join(row).rstrip()
+        raw_line = row.rstrip()
         blank = not sgr_re.sub("", raw_line).strip()
         if blank:
             carried += raw_line
