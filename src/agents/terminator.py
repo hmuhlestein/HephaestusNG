@@ -524,27 +524,13 @@ class Terminator:
                     except Exception as e:
                         logger.warning(f"Failed to SIGKILL pane pid {pane_pid}: {e}")
 
-            # Collect cost data before clearing agent references.
-            # Once current_task_id and assigned_agent_id are cleared,
-            # collect_task_cost can no longer discover the agent/session.
-            if agent.current_task_id:
-                try:
-                    from src.services.cost_collection_service import collect_task_cost
-                    collect_task_cost(agent.current_task_id)
-                except Exception as e:
-                    # Logged at warning, not debug (invisible at production
-                    # log levels) -- billing/cost data for this agent's run
-                    # is silently lost otherwise, with no visible sign it
-                    # happened.
-                    logger.warning(f"[COST-COLLECT] Failed on terminate for agent {agent_id[:8]}: {e}")
-
-            # The DB half of termination -- the three-field invariant and
-            # the release of any Task still pointing at this agent -- is
-            # owned by engine_client.terminate_agent, so there is exactly
-            # one implementation of it (Phase 2 §4.2). This method remains
-            # the kill_tmux=True half: WIP commit, transcript capture,
-            # SIGINT/SIGKILL, and the cost collection above, which must run
-            # before the primitive clears current_task_id.
+            # The DB half of termination -- the three-field invariant, the
+            # cost-on-termination checkpoint (using current_task_id before
+            # it's cleared), and the release of any Task still pointing at
+            # this agent -- is owned by engine_client.terminate_agent, so
+            # there is exactly one implementation of each (Phase 2 §4.2).
+            # This method remains the kill_tmux=True half: WIP commit,
+            # transcript capture, SIGINT/SIGKILL.
             #
             # The task release matters even though well-behaved callers
             # already reset their own task first: it only fires for a
