@@ -401,6 +401,40 @@ class LaunchPipeline:
                 return AgentInfo(agent_id_to_return)
         return None
 
+    async def _graceful_interrupt_before_kill(self, tmux_session, session_name: str) -> None:
+        """Give a CLI process one chance to exit on its own terms (Ctrl-C)
+        before this launch-failure cleanup hard-kills its tmux session.
+
+        Observed live chasing a "claude CLI failed to start" incident: the
+        same task retried against the SAME resumed session id 6 times in
+        a row over ~4.5 minutes, each attempt failing the identical way,
+        each one's own launch-failure cleanup calling tmux_session.
+        kill_session() directly with no grace period at all -- unlike
+        Terminator._terminate_agent_sync's normal termination path, which
+        deliberately sends SIGINT and waits before SIGKILL specifically so
+        the CLI can flush/release its own state first. A hard kill with
+        zero warning gives claude no chance to release whatever session-
+        level lock or lease `--resume` checks, plausibly explaining why
+        the very next resume attempt against that same id, moments later,
+        kept failing the same way. This mirrors messenger.py's own
+        pane.send_keys("C-c", ...) idiom for the same reason (a real
+        keystroke into the terminal, not a Unix-signal kill(2) call, since
+        this is a shell pane, not a process this code holds a pid for).
+
+        Best-effort: any failure here (pane already gone, tmux error) is
+        swallowed -- this must never block the actual cleanup/fallback
+        that follows it.
+        """
+        try:
+            pane = tmux_session.attached_window.attached_pane
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, functools.partial(pane.send_keys, "C-c", enter=False)
+            )
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.debug(f"Graceful interrupt before killing tmux session {session_name} skipped: {e}")
+
     def _detect_launch_failure(self, pane, cli_agent, cli_type: str, session_name: str) -> None:
         """Detect whether the CLI's launch command was rejected by the
         shell or by the CLI itself, leaving a dead pane.  Uses
@@ -433,6 +467,22 @@ class LaunchPipeline:
         to contain the phrase) from one that's actually dead and back at a
         bare shell prompt. See that method's own docstring for why this is
         a materially stronger signal than text-matching alone.
+
+        Logging note: every error/info message below strips ANSI/control
+        codes and logs the FULL matched capture, not a raw tail slice --
+        found live chasing a "claude CLI failed to start" incident where
+        every single occurrence's log line showed an EMPTY or near-empty
+        string after the colon, making the actual rejection text (and
+        thus the real root cause) unrecoverable after the fact. A raw
+        capture-pane line is padded to the full terminal width with SGR
+        codes and trailing spaces (confirmed directly: a single redrawn
+        shell prompt line commonly runs 100-200+ raw characters before any
+        visible content), so a plain `.strip()[-300:]` on un-stripped text
+        can spend its entire budget on the control-code padding of the
+        last line or two and never reach the actual match earlier in the
+        capture -- `.strip()` only trims whitespace at the very ends of
+        the whole string, so ANSI/SGR bytes there are not whitespace and
+        survive untouched, silently consuming the slice.
         """
         import re
 
@@ -442,6 +492,18 @@ class LaunchPipeline:
         except Exception:
             launch_check_text = ""
 
+        # Strip ANSI/CSI escape sequences (colors, cursor moves, SGR resets)
+        # before logging or truncating -- see this method's own docstring
+        # for the incident this closes. Deliberately NOT applied before the
+        # re.search() pattern matching above/below: the rejection patterns
+        # are plain substrings that appear in raw shell output regardless of
+        # surrounding escape codes, and stripping first would risk silently
+        # changing what matches for a CLI whose reported error text itself
+        # happens to embed control codes.
+        _ansi_re = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
+        def _clean(text: str) -> str:
+            return _ansi_re.sub("", text).strip()
+
         patterns = cli_agent.get_launch_rejection_patterns()
         for pattern in patterns:
             if re.search(pattern, launch_check_text, re.IGNORECASE):
@@ -450,7 +512,7 @@ class LaunchPipeline:
                 # pattern (base shell rejections and pi's model-not-found)
                 # raised the generic shell-rejection message.
                 if pattern == self._CLAUDE_CODE_CONFIRMATION_PATTERN:
-                    logger.error(f"{cli_type} launch command is stuck on an unhandled confirmation dialog in tmux session {session_name}: {launch_check_text.strip()[-300:]}")
+                    logger.error(f"{cli_type} launch command is stuck on an unhandled confirmation dialog in tmux session {session_name}: {_clean(launch_check_text)}")
                     raise Exception(f"{cli_type} CLI is stuck on an unhandled first-run confirmation dialog")
                 if not self._pane_has_returned_to_shell(pane):
                     logger.info(
@@ -458,10 +520,10 @@ class LaunchPipeline:
                         f"in tmux session {session_name}, but the pane's foreground "
                         "process is still running (not back at a shell prompt) -- "
                         f"treating as a false positive, not a real launch failure: "
-                        f"{launch_check_text.strip()[-300:]}"
+                        f"{_clean(launch_check_text)}"
                     )
                     continue
-                logger.error(f"{cli_type} launch command failed in tmux session {session_name}: {launch_check_text.strip()[-300:]}")
+                logger.error(f"{cli_type} launch command failed in tmux session {session_name}: {_clean(launch_check_text)}")
                 raise Exception(f"{cli_type} CLI failed to start -- shell reported the launch command was not found")
 
     # Foreground process names that mean "nothing but the login shell is
@@ -2024,6 +2086,7 @@ class LaunchPipeline:
                 try:
                     if "tmux_session" in locals():
                         try:
+                            await self._graceful_interrupt_before_kill(tmux_session, session_name)
                             tmux_session.kill_session()
                         except Exception as e:
                             logger.warning(f"Failed to kill stale tmux session before CLI fallback; it may linger: {e}")
@@ -2067,6 +2130,7 @@ class LaunchPipeline:
 
             try:
                 if "tmux_session" in locals():
+                    await self._graceful_interrupt_before_kill(tmux_session, session_name)
                     tmux_session.kill_session()
                     logger.info(f"Killed tmux session {session_name}")
             except Exception as cleanup_error:
