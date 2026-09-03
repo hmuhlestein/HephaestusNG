@@ -341,28 +341,61 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             # live: 4 open PRs, every one conflicted
             # ("mergeable_state": "dirty"), each swallowed this way.
             merged = False
+            auto_merge_queued = False
             merge_note = None
             pr_url = feature.pr_url or _extract_pr_url(db, wf.id, {})
             if pr_url:
                 import functools
                 import subprocess
                 try:
-                    # Try gh pr merge first -- offloaded, this can take up
-                    # to the full 30s timeout and would otherwise block the
-                    # event loop (every other request this process is
-                    # serving) for that whole window on every approval.
+                    # --auto (external evaluation finding, §3.1): plain
+                    # `--merge` demands an IMMEDIATE merge and fails outright
+                    # if a required status check hasn't finished yet -- not
+                    # just on a real conflict. That failure used to fall
+                    # through to the local-merge-and-push fallback below
+                    # unconditionally, which is exactly the branch-
+                    # protection bypass required checks exist to prevent.
+                    # --auto instead arms GitHub's own auto-merge (still
+                    # merges immediately, synchronously, when checks are
+                    # already green -- the common case is unchanged) and
+                    # returns success once armed, before the actual merge
+                    # necessarily happens.
                     loop = asyncio.get_event_loop()
                     result = await loop.run_in_executor(
                         None,
                         functools.partial(
                             subprocess.run,
-                            ["gh", "pr", "merge", pr_url, "--merge"],
+                            ["gh", "pr", "merge", pr_url, "--merge", "--auto"],
                             capture_output=True, text=True, timeout=30,
                         ),
                     )
                     if result.returncode == 0:
-                        logger.info(f"[REVIEW] Merged PR {pr_url} after approval")
-                        merged = True
+                        # Don't trust `gh pr merge`'s own exit code/stdout
+                        # wording to distinguish "merged just now" from
+                        # "auto-merge armed, still pending checks" -- ask
+                        # GitHub directly, since treating an armed-but-not-
+                        # yet-landed merge as `merged` would run the sync-
+                        # local-main step below (pull+push) against a merge
+                        # that hasn't actually happened, and would skip the
+                        # local-merge fallback for a PR that still needs it
+                        # if checks never pass.
+                        state_result = await loop.run_in_executor(
+                            None,
+                            functools.partial(
+                                subprocess.run,
+                                ["gh", "pr", "view", pr_url, "--json", "state", "-q", ".state"],
+                                capture_output=True, text=True, timeout=15,
+                            ),
+                        )
+                        if state_result.returncode == 0 and state_result.stdout.strip() == "MERGED":
+                            logger.info(f"[REVIEW] Merged PR {pr_url} after approval")
+                            merged = True
+                        else:
+                            auto_merge_queued = True
+                            logger.info(
+                                f"[REVIEW] Auto-merge armed for PR {pr_url} -- "
+                                "will land once required checks pass"
+                            )
                     else:
                         merge_note = (result.stderr or "").strip() or f"gh pr merge exited {result.returncode}"
                         logger.warning(f"[REVIEW] gh pr merge failed: {merge_note}")
@@ -370,7 +403,25 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                     merge_note = str(e)
                     logger.warning(f"[REVIEW] Failed to merge PR: {e}")
 
-            if not merged and wf.working_directory:
+            # Gate the fallback ONLY when gh actively rejected the merge
+            # (pr_url was set and `gh pr merge` failed) -- that's the case
+            # that bypasses the same branch protection --auto above exists
+            # to respect, opt-in via git.allow_local_merge_fallback
+            # (default OFF -- see GitWorktreeConfig). When there was never
+            # a PR to merge at all (git_expert couldn't create one -- gh
+            # not installed/authenticated, no remote configured), gh was
+            # never consulted and there is no check being bypassed, so
+            # that case stays unconditional, unchanged from before.
+            allow_local_fallback = True
+            if pr_url and not merged and not auto_merge_queued:
+                try:
+                    from src.core.simple_config import get_config
+
+                    allow_local_fallback = get_config().git.allow_local_merge_fallback
+                except Exception as e:
+                    logger.warning(f"[REVIEW] Failed to read allow_local_merge_fallback config: {e}")
+
+            if not merged and not auto_merge_queued and wf.working_directory and allow_local_fallback:
                 # Either there was no PR to merge -- git_expert couldn't
                 # create one (gh not installed/authenticated, no remote
                 # configured, etc; see its own "or local merge if gh
@@ -535,21 +586,35 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 db.commit()
 
             _invalidate("status")
-            # merged/message distinguish "approved and landed on main" from
-            # "approved, but the merge itself failed" -- collapsing both
-            # into one generic success message is exactly what let the 4
-            # conflicted PRs above go unnoticed; the caller (the review
-            # modal) needs this to warn instead of silently celebrating.
+            # merged/auto_merge_queued/message distinguish "approved and
+            # landed on main", "approved, will land automatically once
+            # required checks pass", and "approved, but the merge itself
+            # failed" -- collapsing all three into one generic success
+            # message is exactly what let 4 conflicted PRs go unnoticed
+            # (see the local-merge-fallback comment above); the caller (the
+            # review modal) needs this to warn instead of silently
+            # celebrating a merge that hasn't happened yet.
             if pr_url or wf.working_directory:
-                message = (
-                    f"Feature {feature.name} approved and merged into main"
-                    if merged
-                    else f"Feature {feature.name} approved, but merging into main FAILED"
-                    + (f": {merge_note}" if merge_note else "") + " — needs manual merge"
-                )
+                if merged:
+                    message = f"Feature {feature.name} approved and merged into main"
+                elif auto_merge_queued:
+                    message = (
+                        f"Feature {feature.name} approved — merge is queued and will "
+                        "land automatically once required checks pass"
+                    )
+                else:
+                    message = (
+                        f"Feature {feature.name} approved, but merging into main FAILED"
+                        + (f": {merge_note}" if merge_note else "") + " — needs manual merge"
+                    )
             else:
                 message = f"Feature {feature.name} approved"
-            return {"success": True, "message": message, "merged": merged}
+            return {
+                "success": True,
+                "message": message,
+                "merged": merged,
+                "auto_merge_queued": auto_merge_queued,
+            }
 
         # request_changes path
         feature.review_feedback = req.feedback

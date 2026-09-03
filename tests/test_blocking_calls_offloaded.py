@@ -224,8 +224,16 @@ async def test_review_feature_offloads_gh_pr_merge(db):
     session.close()
 
     fake_loop = MagicMock()
+    # First offloaded call is `gh pr merge`, second is the follow-up
+    # `gh pr view --json state` this now does to authoritatively confirm
+    # an already-landed merge vs. an armed-but-still-pending --auto one
+    # (see feature_review_routes.py's own comment on why it doesn't trust
+    # `gh pr merge`'s exit code/stdout alone for that distinction).
     fake_loop.run_in_executor = AsyncMock(
-        return_value=MagicMock(returncode=0, stdout="", stderr="")
+        side_effect=[
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="MERGED\n", stderr=""),
+        ]
     )
 
     with (
@@ -243,12 +251,15 @@ async def test_review_feature_offloads_gh_pr_merge(db):
     ):
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest
 
-        await feature_review_routes.review_feature(
+        result = await feature_review_routes.review_feature(
             "feat-1", FeatureReviewRequest(action="approve")
         )
 
-    fake_loop.run_in_executor.assert_called_once()
-    executor_arg, fn_arg = fake_loop.run_in_executor.call_args.args
-    assert executor_arg is None
-    assert fn_arg.func.__name__ == "run"
-    assert fn_arg.args[0][:3] == ["gh", "pr", "merge"]
+    assert fake_loop.run_in_executor.call_count == 2
+    merge_call, view_call = fake_loop.run_in_executor.call_args_list
+    assert merge_call.args[1].func.__name__ == "run"
+    assert merge_call.args[1].args[0][:3] == ["gh", "pr", "merge"]
+    assert "--auto" in merge_call.args[1].args[0]
+    assert view_call.args[1].args[0][:3] == ["gh", "pr", "view"]
+    assert result["merged"] is True
+    assert result["auto_merge_queued"] is False

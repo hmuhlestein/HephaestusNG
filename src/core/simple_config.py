@@ -109,6 +109,16 @@ class GitWorktreeConfig(_ConfigSection):
         )  # Base branch/commit for merging
         self.branch_prefix = git.get("branch_prefix", "agent-")
         self.auto_commit = git.get("auto_commit", True)
+        # Opt-in, default OFF: feature_review_routes.py's review-approval
+        # merge falls back to a LOCAL `git merge` + direct push to main
+        # when `gh pr merge` can't complete it -- which includes a
+        # required status check that hasn't passed yet, not just a real
+        # merge conflict. On a repo whose branch protection has no bypass
+        # actors and where merge-to-main auto-deploys, that fallback is
+        # itself the thing branch protection exists to prevent. Default
+        # False so a fresh install doesn't silently have this until an
+        # operator deliberately turns it on, understanding the tradeoff.
+        self.allow_local_merge_fallback = git.get("allow_local_merge_fallback", False)
 
         self.max_branches = 50
         self.max_tree_depth = 10
