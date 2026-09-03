@@ -252,6 +252,55 @@ class SetupChecker:
             ]
         )
 
+    def check_dependency_resolution(self) -> bool:
+        """Attempt the actual dependency resolution scripts/install.sh's
+        real install step runs (`uv pip install -e .`), rather than only
+        checking whether a handful of packages already import.
+
+        External evaluation finding (§4 table): the import-based checks
+        above only ever report whether an install already succeeded in
+        THIS interpreter -- on a genuinely broken pyproject.toml (two
+        mutually unsatisfiable version constraints was the actual bug
+        found live, see the pyproject.toml fix elsewhere in this
+        project's history), a fresh clone's pre-flight check would show
+        three clean red Xs ("not installed yet") with no way to tell
+        that install.sh is about to fail outright, as opposed to just
+        needing to run. `--dry-run` performs the real resolution without
+        installing anything, so a genuine conflict is caught here, before
+        the user ever runs the installer.
+        """
+        if not shutil.which("uv"):
+            self.results["dependencies"]["dependency resolution (uv --dry-run)"] = False
+            return False
+        try:
+            result = subprocess.run(
+                ["uv", "pip", "install", "-e", ".", "--dry-run"],
+                cwd=self.project_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            resolves = result.returncode == 0
+            self.results["dependencies"]["dependency resolution (uv --dry-run)"] = resolves
+            if not resolves:
+                # The resolver's own explanation (e.g. "because X depends
+                # on Y>=2.0 and Z requires Y<2.0...") is far more
+                # actionable than a bare pass/fail -- surface the tail of
+                # it directly rather than making the user re-run the
+                # command themselves to find out why.
+                detail = (result.stderr or result.stdout or "").strip()
+                if detail:
+                    print(f"{Colors.RED}  Dependency resolution failed:{Colors.END}")
+                    for line in detail.splitlines()[-8:]:
+                        print(f"    {line}")
+            return resolves
+        except subprocess.TimeoutExpired:
+            self.results["dependencies"]["dependency resolution (uv --dry-run)"] = False
+            return False
+        except Exception:
+            self.results["dependencies"]["dependency resolution (uv --dry-run)"] = False
+            return False
+
     def check_frontend_dependencies(self) -> bool:
         """Check if frontend dependencies are installed"""
         frontend_path = self.project_root / "frontend"
@@ -285,6 +334,7 @@ class SetupChecker:
         self.check_command("npm")
         self.check_command("claude", "Claude Code")
         self.check_command("opencode", "OpenCode (optional)")
+        self.check_command("uv")
         python_ok, python_version = self.check_python_version()
 
         # API Keys
@@ -311,6 +361,7 @@ class SetupChecker:
         # Dependencies
         print(f"{Colors.BOLD}Checking Dependencies...{Colors.END}")
         self.check_python_dependencies()
+        self.check_dependency_resolution()
         self.check_frontend_dependencies()
 
     def print_summary(self):
