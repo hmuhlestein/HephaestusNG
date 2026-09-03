@@ -1931,6 +1931,34 @@ class TestProjects:
         resp = client.get("/api/autopilot/projects/nonexistent")
         assert resp.status_code == 404
 
+    def test_get_project_reflects_review_mode(self, project_client):
+        """Regression (external evaluation finding, §4): ProjectItem never
+        included review_mode at all, so every GET (single or list) read it
+        back as the model's default (False) regardless of the real DB
+        value -- a successful PATCH via /review-mode was indistinguishable
+        from a failed one purely by reading the project back."""
+        client, dirs = project_client
+        create = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Test", "base_dir": str(dirs["project_dir"])},
+        )
+        project_id = create.json()["id"]
+        assert create.json()["review_mode"] is False
+
+        patch = client.patch(
+            f"/api/autopilot/projects/{project_id}/review-mode",
+            json={"review_mode": True},
+        )
+        assert patch.status_code == 200
+
+        resp = client.get(f"/api/autopilot/projects/{project_id}")
+        assert resp.status_code == 200
+        assert resp.json()["review_mode"] is True
+
+        listed = client.get("/api/autopilot/projects")
+        assert listed.status_code == 200
+        assert next(p for p in listed.json() if p["id"] == project_id)["review_mode"] is True
+
     def test_update_project_name(self, project_client):
         client, dirs = project_client
         create = client.post(
