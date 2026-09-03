@@ -28,9 +28,11 @@ description: |
     DIFFERENT suffixed file instead of racing yours, and the gate reads
     your own task's suffixed file specifically, not a bare adversarial.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, adversarial.md, to ./.hephaestus/adversarial_review/ —
-    a YAML frontmatter block (blocker_count/warning_count/nit_count, the
-    gate input) followed by the full BLOCKER/WARNING/NIT findings report.
+  - Write ONE file, adversarial-<your Task ID's first 8 hex characters>.md
+    (NOT the bare "adversarial.md" — see above), to
+    ./.hephaestus/adversarial_review/ — a YAML frontmatter block
+    (blocker_count/warning_count/nit_count, the gate input) followed by the
+    full BLOCKER/WARNING/NIT findings report.
   - Use exactly that subdirectory name (./.hephaestus/adversarial_review/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
@@ -69,10 +71,10 @@ additional_notes: |
   ## STEP 0: CHECK FOR PRIOR ADVERSARIAL REVIEW (RETRY AWARENESS)
 
   ```bash
-  cat ./.hephaestus/adversarial_review/adversarial.md 2>/dev/null | head -30 || echo "NO_PRIOR_ADVERSARIAL"
+  ls -t ./.hephaestus/adversarial_review/adversarial-*.md 2>/dev/null | head -1 | xargs -r cat | head -30 || echo "NO_PRIOR_ADVERSARIAL"
   ```
 
-  If adversarial.md exists from a prior run:
+  If a prior adversarial-<task-id>.md exists from an earlier run:
   - Read it fully to understand what was already found.
   - Verify whether each prior BLOCKER/WARNING has been fixed.
   - Focus on finding NEW issues — don't repeat already-fixed findings.
@@ -82,7 +84,8 @@ additional_notes: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root.
   - Read all inputs from ./.hephaestus/ and the .hephaestus/ folder.
-  - Write adversarial.md to the "Artifacts Path" in your task.
+  - Write adversarial-<your Task ID's first 8 hex characters>.md (NOT the
+    bare "adversarial.md") to the "Artifacts Path" in your task.
   - Do NOT edit any source code or tests. Your only output is the report.
     The developer will fix based on your findings.
 
@@ -265,17 +268,20 @@ additional_notes: |
   Add the tag to each finding's title line, e.g. "### [BLOCKER] Logger swallows
   IOError (out-of-scope: not specified in spec.md)".
 
-  ## STEP 14: WRITE adversarial.md
+  ## STEP 14: WRITE adversarial-<your Task ID's first 8 hex characters>.md
 
   ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+  ⚠️  FILENAME: adversarial-<your Task ID's first 8 hex chars>.md — NOT the bare
+      "adversarial.md". A duplicate/concurrent dispatch of this same phase
+      writes to a DIFFERENT suffixed file this way instead of racing yours. ⚠️
 
   Write the report to the Artifacts Path. This is your ONLY output — do NOT edit source.
   The developer reads this report and fixes the code. Make recommended fixes
   specific enough to act on without guessing.
 
-  adversarial.md is ONE file: a YAML frontmatter block followed by the full
-  report. The frontmatter drives the pipeline — without nonzero blocker_count,
-  the pipeline can't tell BLOCKERs were found.
+  adversarial-<task-id>.md is ONE file: a YAML frontmatter block followed by
+  the full report. The frontmatter drives the pipeline — without nonzero
+  blocker_count, the pipeline can't tell BLOCKERs were found.
 
   Write the ENTIRE file at once with frontmatter at the top:
 
