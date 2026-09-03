@@ -202,6 +202,68 @@ class TestRestartTaskEndpointCliModelConcurrency:
         mock_dispatch.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_restarting_a_task_reopens_its_non_in_progress_phase_execution(
+        self, db_manager
+    ):
+        """None of this class's other tests seed a PhaseExecution row at
+        all (_seed_task never creates one), so the reopen branch this
+        endpoint's own comment describes was never actually exercised --
+        including after it was migrated to transition_phase_execution
+        (Step 3 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md,
+        found missing this call site entirely during that step's own
+        follow-up gap-check). started_at must be preserved, not restamped
+        to "now" -- this reopens a task under an execution that may
+        already have been running."""
+        from datetime import datetime, timedelta
+
+        from src.core.database import Phase, PhaseExecution
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
+
+        original_started_at = datetime.utcnow() - timedelta(hours=1)
+        session = db_manager.get_session()
+        try:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="development",
+                description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-1", phase_id="phase-1", status="failed",
+                started_at=original_started_at,
+            ))
+            session.add(Task(
+                id="task-1", raw_description="r", done_definition="d",
+                status="failed", workflow_id="wf-1", phase_id="phase-1",
+            ))
+            session.commit()
+        finally:
+            session.close()
+
+        qs = _make_queue_service(db_manager)
+        server_state = _make_server_state(db_manager, qs)
+        dispatched_agent = Mock(id="new-agent")
+
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
+                 new=AsyncMock(return_value={"phase_cli_tool": None, "phase_cli_model": None}),
+             ), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+                 new=AsyncMock(return_value=dispatched_agent),
+             ), \
+             patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
+            await restart_task_endpoint(task_id="task-1", x_agent_id="system")
+
+        session = db_manager.get_session()
+        try:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at == original_started_at
+        finally:
+            session.close()
+
+    @pytest.mark.asyncio
     async def test_restarting_a_blocked_task_clears_the_full_pause_triad(self, db_manager):
         """Regression found during Phase 2 §4.8's re-audit (not one of the
         four historically-fixed sites): a task can be "blocked" -- exactly

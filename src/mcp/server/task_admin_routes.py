@@ -723,16 +723,31 @@ async def restart_task_endpoint(
                 if task.phase_id:
                     execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()
                     if execution and execution.status != "in_progress":
-                        from src.autopilot.orchestrator.phase_transitions import reopen_phase_execution
+                        # transition_phase_execution's atomic UPDATE
+                        # replaces reopen_phase_execution's plain mutation
+                        # here (Step 3 of docs/designs/
+                        # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) --
+                        # missed in that step's own sweep, which only
+                        # grepped phase_transitions.py itself rather than
+                        # the whole repo. started_at preserved explicitly
+                        # via extra_fields: this reopens a task under an
+                        # execution that may already have been running (a
+                        # broader guard than _start_next_phase's -- this
+                        # also reopens "skipped"/"failed" executions, not
+                        # just "pending"/"completed" ones), so resetting
+                        # it could understate how long the phase has
+                        # actually been open. Deferred import: see
+                        # phase_manager._close_execution's own note on
+                        # why other Step 3 sites use one.
+                        from src.autopilot.orchestrator.phase_transitions import (
+                            transition_phase_execution,
+                        )
 
-                        # started_at left alone: this reopens a task under
-                        # an execution that may already have been running
-                        # (a broader guard than _start_next_phase's --
-                        # this also reopens "skipped"/"failed" executions,
-                        # not just "pending"/"completed" ones), so
-                        # resetting it could understate how long the
-                        # phase has actually been open.
-                        reopen_phase_execution(execution, status="in_progress", started_at="leave")
+                        transition_phase_execution(
+                            session, task.phase_id, "in_progress",
+                            reason="restart_task_endpoint",
+                            extra_fields={"started_at": execution.started_at},
+                        )
 
             session.commit()
 
