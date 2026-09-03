@@ -353,25 +353,38 @@ def _print_pipeline_status(data):
 
 
 def show_queue(args):
-    queue_dir = Path(args.project_path) / DESIGN_CONTEXT_SUBDIR
-    if not queue_dir.exists():
-        print(f"Queue directory not found: {queue_dir}")
-        return 0
+    """Show the design queue, via the backend's DB-authoritative /queue
+    endpoint -- matching add_to_queue's own pattern of calling the backend
+    API rather than globbing the filesystem directly. A plain filesystem
+    glob here would disagree with what /designs/add actually recorded: a
+    design's file_path can point anywhere on disk, not just inside
+    .hephaestus/specs/.
+    """
+    import requests
 
-    designs = []
-    for ext in ("*.md", "*.txt"):
-        for f in sorted(queue_dir.glob(ext)):
-            designs.append(
-                {
-                    "name": f.stem,
-                    "file": f.name,
-                    "size": f.stat().st_size,
-                    "modified": f.stat().st_mtime,
-                }
-            )
+    project_id = _resolve_project_id_by_path(args.project_path, args.api_base)
+    if not project_id:
+        print(f"Error: No registered project found for path: {args.project_path}")
+        return 1
 
-    output(args, designs, _print_queue)
-    return 0
+    try:
+        resp = requests.get(
+            f"{args.api_base}/api/autopilot/queue",
+            params={"project_id": project_id},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            output(args, resp.json(), _print_queue)
+            return 0
+        else:
+            print(f"Error: {resp.status_code} - {resp.text}")
+            return 1
+    except requests.exceptions.ConnectionError:
+        print("Error: Backend not running. Start it with: heph start")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
 
 
 def _print_queue(designs):
@@ -381,7 +394,7 @@ def _print_queue(designs):
         return
     print(f"Design queue ({len(designs)} items):")
     for d in designs:
-        print(f"  {d['name']:40s}  ({d['size']} bytes)")
+        print(f"  {d['name']:40s}  ({d['size_bytes']} bytes)")
 
 
 def add_to_queue(args):
