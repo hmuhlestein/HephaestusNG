@@ -246,15 +246,21 @@ def _has_resumable_active_design(project_id: Optional[str]) -> bool:
 
     Used by run_continuous_pipeline's "workflow still active" gate to decide
     whether an unrelated design's still-running workflow should actually
-    block picking up new work. It should only block a FRESH design's Phase 0
-    -- run_single_workflow's default pause_existing=True terminates every
-    other active workflow's agents project-wide (see its docstring), which
-    is destructive if another design's agents are still genuinely working.
-    Resuming an already-active design never reaches that path: run_phase0
-    skips straight past Phase 0 when Feature rows already exist (Tier 1,
-    see its docstring), and the feature dispatch that follows always passes
-    pause_existing=False. So a design in this state is always safe to
-    resume regardless of what else is active in the project.
+    block picking up new work -- resuming an already-active design's
+    resumable features is preferred over sitting idle behind an unrelated
+    design's own in-progress chain (see that gate's own comment for the
+    full scheduling reasoning; this function only answers "is there
+    resumable work elsewhere," not "is it safe to dispatch"). Both
+    run_phase0's feature_architect launch and the feature dispatch that
+    follows it now always pass pause_existing=False (run_single_workflow's
+    dangerous default -- terminating every OTHER active workflow's agents
+    project-wide, see its docstring -- used to make a FRESH design's Phase 0
+    genuinely destructive to unrelated in-progress work; fixed after it
+    paused a live agent on feature backend-api-contract mid-flight), so
+    dispatch itself is no longer the safety concern this function was
+    originally written to route around. It still matters purely for
+    scheduling: preferring ready work on an already-active design over
+    idling.
     """
     try:
         from src.core.database import AutopilotDesign, Feature, get_db

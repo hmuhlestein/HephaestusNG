@@ -3238,13 +3238,17 @@ def run_continuous_pipeline(args) -> None:
                     # any failure inside it (a transient DB error, not just
                     # one specific check) was logged as a mere warning and
                     # fell straight through to pick_next_design below with
-                    # every protection bypassed. run_single_workflow's
-                    # default pause_existing=True terminates every other
-                    # active workflow's agents project-wide, so dispatching
-                    # a new design here on an UNVERIFIED "nothing else is
-                    # active" could kill a genuinely in-progress design's
-                    # agents mid-work. Treat "couldn't verify" as "not safe
-                    # to proceed yet" instead -- skip this scan cycle and
+                    # every protection bypassed. run_phase0's own launch now
+                    # always passes pause_existing=False (fixed after it
+                    # paused a live agent on feature backend-api-contract
+                    # mid-flight, see that call site's own comment), so
+                    # dispatching on unverified state no longer risks
+                    # run_single_workflow's dangerous default terminating an
+                    # unrelated design's agents project-wide the way it once
+                    # did -- but "couldn't verify the gating checks even
+                    # ran" is still reason enough on its own to not proceed.
+                    # Treat "couldn't verify" as "not safe to proceed yet"
+                    # instead -- skip this scan cycle and
                     # let the gate re-run cleanly next time, matching the
                     # "wait and retry" pattern already used for the
                     # confirmed-active-workflow case above.
