@@ -873,7 +873,57 @@ In order of how cleanly each one maps onto the table above, not by risk:
      but nothing ever *ran* the evaluation that would have advanced it
      (a backend restart racing `fire_spec_gate_if_ready`) — centralizing
      who writes `.status` doesn't make an evaluation run that never
-     started.
+     started. Checked directly: this one doesn't write `PhaseExecution.status`
+     itself at all -- it delegates to the already-migrated
+     `reset_failed_phase_executions` -- so it needs no separate migration
+     work, only this confirmation.
+6. **`mark_skipped_over_phases`** (writer #5 in the original catalog
+   above) — found unmigrated during a full adversarial re-comparison of
+   this document against the shipped code, after Step 3 items 1-5 were
+   all believed complete. It fell through the cracks between the
+   original "roughly ten places" catalog and the Step 3 migration list,
+   which enumerates every *other* writer from that catalog but never
+   names this one. It was still doing the exact naive
+   read-then-check-then-mutate pattern this whole document exists to
+   eliminate:
+   ```python
+   sp_execution = db.query(PhaseExecution).filter_by(phase_id=sp.id).first()
+   if sp_execution and sp_execution.status == "pending":
+       sp_execution.status = "skipped"
+       sp_execution.completed_at = utc_now()
+   ```
+   Two concurrent callers could both read `"pending"` and both write; worse,
+   a concurrent dispatch that had just moved this same phase to
+   `"in_progress"` between this function's read and write would get
+   silently overwritten back to `"skipped"` -- the same *shape* of bug as
+   incident #1 in this document's own Goal section. Migrated using the
+   same batch pattern as `reset_stale_executions_on_goto` (Step 3 item 3):
+   the qualification loop (which phases are in the strict order range,
+   and genuinely `"pending"`) stays untouched, only the write moved to a
+   per-row `transition_phase_execution` call. No `extra_fields` needed --
+   `_FIELD_RESETS[(pending, skipped)]` already sets `completed_at="now"`,
+   exactly matching the old direct mutation.
+
+   Had zero test coverage anywhere in the codebase before this fix,
+   despite carrying a real, documented "observed live" incident
+   (workflow `c1f0839c`'s `design_review` stuck `"pending"` for weeks) --
+   six new tests added from scratch covering the happy path, the
+   must-not-touch-completed guarantee the function's own docstring
+   states as its core purpose, order-range boundaries, multi-row batch
+   behavior, a phase with no `PhaseExecution` row at all, and a
+   currently-`"in_progress"` phase surviving untouched.
+
+   Also found and fixed in the same pass: two stale comments elsewhere
+   describing migration state that was no longer true --
+   `transition_phase_execution`'s own docstring still said "additive and
+   not yet wired into any existing call site" (true during Step 2, false
+   since Step 3.1), and a `_FIELD_RESETS` comment still described
+   `_escalate_unresolvable_goto`'s `reopen_phase_execution` call as
+   "still-unmigrated" (migrated in Step 3.5). Neither was a functional
+   bug, both were exactly the kind of claim this document has now been
+   burned by twice (see the "two wrong claims" note above) -- a comment
+   asserting something is unmigrated/uncovered is itself a claim that
+   needs re-checking, not a fact that ages safely.
 
 **Sequencing between transitions is a separate concern this doesn't
 solve, and callers still own it.** Centralizing *who writes* a transition
