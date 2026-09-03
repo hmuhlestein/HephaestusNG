@@ -749,6 +749,37 @@ async def restart_task_endpoint(
                             extra_fields={"started_at": execution.started_at},
                         )
 
+                        # Restarting an ARBITRATION task specifically means
+                        # the arbitration is still "in flight" from
+                        # _maybe_resolve_arbitration's own point of view --
+                        # but the transition above just cleared task_
+                        # creation_claimed_at as part of its generic (X,
+                        # in_progress) field reset (_FIELD_RESETS,
+                        # phase_transitions.py), correct for a normal phase
+                        # task (a fresh dispatch cycle has no stale claim to
+                        # keep) but wrong here: _maybe_resolve_arbitration's
+                        # own query only ever considers phases whose
+                        # PhaseExecution has this claim SET, so a restarted
+                        # arbitration task becomes permanently invisible to
+                        # it -- not eventually, structurally: nothing else
+                        # in the normal sweep cycle ever re-sets this claim
+                        # without a fresh _trigger_arbitration call, which
+                        # a restart doesn't make. Observed live (task
+                        # b938bee7): the arbitration completed and resolved
+                        # correctly moments after this exact restart, but
+                        # sat invisible to every subsequent sweep tick
+                        # until this claim was manually restored.
+                        from src.autopilot.orchestrator.arbitration import (
+                            ARBITRATION_CREATED_BY,
+                        )
+
+                        if task.created_by_agent_id == ARBITRATION_CREATED_BY:
+                            from src.autopilot.orchestrator.phase_transitions import (
+                                _claim_phase_task_creation,
+                            )
+
+                            _claim_phase_task_creation(session, task.phase_id)
+
             session.commit()
 
         finally:
