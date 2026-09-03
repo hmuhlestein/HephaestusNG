@@ -802,31 +802,41 @@ In order of how cleanly each one maps onto the table above, not by risk:
      construction. Once the invariant holds by construction, these have
      nothing left to repair.
 
-     **Deleted, on an explicit call to accept the risk rather than a real
-     monitoring window.** The available evidence didn't actually settle
-     this either way: both self-heals' own `[PHASE-ADVANCE] ... stuck
-     'pending'` log lines showed zero occurrences across 8+ days of
-     rotated logs, including days before Steps 1-4 existed — meaning
-     they were already rarely triggering in this deployment's usage
-     pattern, so their silence isn't evidence the refactor fixed
-     anything; it was already quiet. Step 1's own drift detector
-     (`find_phase_execution_drift`) similarly showed nothing, but only
-     across a few hours of cumulative uptime that day, nowhere near a
-     real production monitoring window. Flagged this clearly and asked
-     before deleting; the explicit answer was to delete now anyway and
-     accept that a genuine window hasn't elapsed. Removed both call
-     sites in `_advance_phases` and both function bodies, with a comment
-     left in their place explaining why and pointing at Step 1's
-     drift detector as the safety net that now covers the same class of
-     bug independently. Updated every comment elsewhere that referenced
-     either function by name (`feature_review_routes.py`,
-     `test_pause_workflow_primitive.py`,
-     `test_phase_execution_drift_detection.py`,
-     `test_advance_phases.py`) so none point at deleted code, and
-     removed both functions' dedicated test classes
-     (`TestReleasePendingPhasesWithDoneTasks`,
-     `TestReleasePendingPhasesWithOrphanedTask`, ~420 lines in
-     `test_advance_phases.py`) rather than leaving them broken.
+     **Initially deleted, then `_release_pending_phases_with_done_tasks`
+     was restored after its deletion turned out to be based on a wrong
+     claim.** The two functions were NOT actually equivalent, and
+     conflating them was this document's second mistake about this exact
+     pair (the first being the original "one category" framing this
+     bullet already corrects). Deleted both on an explicit call to
+     accept the risk rather than a real monitoring window — the
+     available evidence didn't settle it either way: both self-heals'
+     own `[PHASE-ADVANCE] ... stuck 'pending'` log lines showed zero
+     occurrences across 8+ days of rotated logs, including days before
+     Steps 1-4 existed, and Step 1's own drift detector similarly showed
+     nothing, but only across a few hours of cumulative uptime — neither
+     observation was a real monitoring window.
+
+     The deletion PR claimed Step 1's `find_phase_execution_drift`
+     "already detects independently" the same class of bug both
+     functions repaired. True for `_release_pending_phases_with_orphaned_task`
+     (its non-terminal task statuses — pending/assigned/in_progress/queued
+     — are all inside `LIVE_TASK_STATUSES`) but FALSE for
+     `_release_pending_phases_with_done_tasks`: `LIVE_TASK_STATUSES`
+     deliberately excludes `"done"` (see
+     `test_a_done_task_is_not_drift_here_even_if_execution_mismatched`,
+     whose own docstring says a done task's mismatched execution is
+     `find_stuck_active_workflows`'s territory "or another self-heal's"
+     — that other self-heal WAS this one), and
+     `find_stuck_active_workflows` only ever matches `status="failed"`,
+     never `"pending"`. The result: deleting it left the exact scenario
+     its own docstring documents as a real, "observed live" incident
+     (two workflows' phases stuck "pending" with a done task for days)
+     with zero detection or repair. Caught during a follow-up gap-check,
+     flagged immediately, and restored on request — function body, its
+     call site in `_advance_phases`, and its dedicated test class
+     (`TestReleasePendingPhasesWithDoneTasks`, ~260 lines) all put back
+     verbatim from git history. `_release_pending_phases_with_orphaned_task`
+     stays deleted; that one's claim was actually verified correct.
 
      **Found while investigating this item, unrelated to the deletion
      itself:** a repo-wide (not just `phase_transitions.py`-scoped) grep
@@ -838,6 +848,16 @@ In order of how cleanly each one maps onto the table above, not by risk:
      unused. Migrated both (see Step 3.5's revision note above) before
      touching this item, since leaving a "fully unused" claim wrong is
      worse than the extra work of finishing it.
+
+     **Two wrong claims in one item is worth naming as a pattern, not
+     just fixing:** both this document's own "already covered by the
+     detector" reasoning and Step 3.5's "already fully unused" claim
+     turned out false on the first real check, in the same work session,
+     for the same category of item (self-heal/legacy-code disposal
+     decisions). Verify the SPECIFIC claim being relied on — re-read the
+     detector's actual filter, re-run the actual grep — before treating
+     "this looks redundant" as settled, especially right before a
+     deletion.
    - **Recovery policy — keep regardless of centralization:**
      `_retry_exhausted_failed_workflows`. This does not exist because a
      writer forgot a case — it exists because a phase *genuinely*
