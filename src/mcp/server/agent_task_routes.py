@@ -10,6 +10,7 @@ import uuid
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Header,
     HTTPException,
 )
@@ -206,6 +207,7 @@ async def validate_agent_id(agent_id: str):
 async def _update_task_status_once(
     request: UpdateTaskStatusRequest,
     agent_id: str,
+    background_tasks: BackgroundTasks,
 ):
     """Update task status when complete or failed."""
     from src.core.log_context import set_log_context
@@ -298,7 +300,7 @@ async def _update_task_status_once(
             await _spawn_validation_for_task(session, task, agent_id, request)
             validation_spawned = True
         else:
-            output_lost_rejection = await _complete_task_normally(session, agent_id, task, request, phase)
+            output_lost_rejection = await _complete_task_normally(session, agent_id, task, request, phase, background_tasks)
 
         await _maybe_fire_spec_gate(session, task, request, output_lost_rejection)
 
@@ -370,11 +372,12 @@ _LOCK_RETRY_BASE_DELAY_SECONDS = 0.3
 @router.post("/update_task_status", response_model=UpdateTaskStatusResponse)
 async def update_task_status(
     request: UpdateTaskStatusRequest,
+    background_tasks: BackgroundTasks,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     for attempt in range(_LOCK_RETRY_ATTEMPTS):
         try:
-            return await _update_task_status_once(request, agent_id)
+            return await _update_task_status_once(request, agent_id, background_tasks)
         except OperationalError as e:
             is_lock_error = "database is locked" in str(e).lower()
             if not is_lock_error or attempt == _LOCK_RETRY_ATTEMPTS - 1:

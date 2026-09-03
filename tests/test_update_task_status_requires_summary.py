@@ -12,6 +12,7 @@ provide a real summary at the point it already has the content in hand.
 import os
 import tempfile
 import uuid
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +40,11 @@ def test_client(test_db, monkeypatch):
 
     monkeypatch.setattr(server_module.server_state, "db_manager", test_db)
     monkeypatch.setattr(server_module.server_state, "initialized", True, raising=False)
+    monkeypatch.setattr(
+        server_module.server_state,
+        "agent_manager",
+        MagicMock(terminate_agent=AsyncMock(return_value=None)),
+    )
     return TestClient(app)
 
 

@@ -21,6 +21,7 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 
 from src.core.database import Task, Workflow
 from src.mcp.server._shared import UpdateTaskStatusRequest
@@ -69,7 +70,7 @@ async def test_collect_cost_on_completion_runs_off_the_event_loop_thread(
             "src.services.task_completion_service.TaskCompletionService.collect_cost_on_completion",
             side_effect=_fake_collect_cost_on_completion,
         ):
-            await _complete_task_normally(session, "agent-1", task, request, phase=None)
+            await _complete_task_normally(session, "agent-1", task, request, phase=None, background_tasks=BackgroundTasks())
 
     assert call_thread_id.get("id") is not None, "collect_cost_on_completion was never called"
     assert call_thread_id["id"] != main_thread_id, (

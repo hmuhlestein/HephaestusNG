@@ -41,6 +41,7 @@ def test_client(test_db, monkeypatch):
     mock_send = AsyncMock()
     mock_agent_manager = Mock()
     mock_agent_manager.send_message_to_agent = mock_send
+    mock_agent_manager.terminate_agent = AsyncMock(return_value=None)
     monkeypatch.setattr(server_module.server_state, "agent_manager", mock_agent_manager)
     client = TestClient(app)
     client._mock_send_message = mock_send
