@@ -381,9 +381,13 @@ class ServerState:
                 # function's own docstring -- every current caller
                 # swallows that per-call ValueError).
                 validate_embedding_dimension_compatibility(self.vector_store, self.embedding_service.get_dim())
-                # Share the same embedding provider instance with TicketSearchService
-                # instead of letting it create its own separate model load.
+                # Share the same embedding provider AND vector store instances
+                # with TicketSearchService instead of letting it lazily create
+                # its own -- an unseeded _vector_store previously caused a
+                # second, independent TurboVecStore to be constructed on first
+                # ticket search (duplicate native index load per collection).
                 TicketSearchService._embedding_provider = self.embedding_service
+                TicketSearchService._vector_store = self.vector_store
                 self.task_similarity_service = TaskSimilarityService(self.db_manager, self.embedding_service)
                 logger.info("Task deduplication service initialized (embedding via configurable provider)")
             except Exception as e:

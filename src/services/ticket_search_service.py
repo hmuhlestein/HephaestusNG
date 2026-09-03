@@ -63,8 +63,22 @@ class TicketSearchService:
 
     @classmethod
     def _get_vector_store(cls):
-        """Get or create the configurable vector store (turbovec by default)."""
+        """Get or create the configurable vector store (turbovec by default).
+
+        Normally seeded by ServerState.initialize() from server_state.vector_store
+        (mirroring how _embedding_provider is shared) so the whole process uses
+        one store instance. This lazy fallback only fires if that seeding never
+        happened -- e.g. a script or test driving TicketSearchService directly
+        without going through server startup -- and logs loudly because it means
+        a second, independent TurboVecStore (duplicate native index load per
+        collection) was just constructed.
+        """
         if cls._vector_store is None:
+            logger.warning(
+                "TicketSearchService._vector_store was never seeded from "
+                "server_state.vector_store -- constructing an independent "
+                "TurboVecStore instance now (duplicate native index load)."
+            )
             cls._vector_store = create_vector_store()
         return cls._vector_store
 

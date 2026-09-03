@@ -120,10 +120,22 @@ async def get_pipeline_status(
     # scoped per-project (unlike when this check was first written).
     if project_id and not running:
         try:
-            from src.core.database import Agent, Task, Workflow, get_db
+            from src.core.database import Agent, AutopilotProject, Task, Workflow, get_db
 
             def _check_project_running_sync():
                 with get_db() as db:
+                    # A project excluded from the active rotation (is_active=False)
+                    # cannot be running no matter what stale Workflow/Agent state
+                    # exists -- the phase-advancement sweep and dispatch loop both
+                    # scope to active projects only (see the concurrent-active-
+                    # projects invariant), so a leftover status="active" workflow
+                    # row from before deactivation will never be touched again.
+                    # Without this, the UI showed "Running" for a project that had
+                    # been deactivated for weeks, purely because of that stale row.
+                    project = db.query(AutopilotProject).filter_by(id=project_id).first()
+                    if project is not None and not project.is_active:
+                        return False
+
                     has_active = db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status == "active").first()
                     if has_active:
                         return True
