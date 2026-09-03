@@ -82,6 +82,7 @@ from src.core.database import (
     utc_now,
 )
 from src.core.simple_config import get_config
+from src.interfaces.cli_interface import is_cli_tool_available
 from src.phases import PhaseManager
 
 if TYPE_CHECKING:
@@ -2959,7 +2960,19 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
         # previously threw the reason away entirely, so the retried agent
         # got the same generic phase description and no idea what to fix.
         reset_task_ids = []
+        # Captured from task.failure_reason while it's still intact -- the
+        # loop below clears it (task.failure_reason = None) and commits
+        # before the fallback-CLI dispatch loop further down ever runs, so
+        # a fresh DB read at that point always sees None and could never
+        # detect a session/spend-limit failure. Observed via this
+        # function's own regression test: the fallback dispatch never
+        # fired for ANY session/spend-limit failure, silently retrying on
+        # the same CLI that just hit the limit every time.
+        limit_failure_task_ids = set()
         for task in retryable_tasks:
+            reason_lower = (task.failure_reason or "").lower()
+            if "session limit" in reason_lower or "spend limit" in reason_lower:
+                limit_failure_task_ids.add(task.id)
             # "Orphaned: ..." means no agent ever actually received this
             # task -- a scheduling/claim-race artifact (see
             # _create_phase_task's own orphan-detection), not a real
@@ -3021,8 +3034,7 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
             session_limit_override_cli = None
             session_limit_override_model = None
             with get_db() as check_db:
-                check_task = check_db.query(Task).filter_by(id=task_id).first()
-                if check_task and ("session limit" in (check_task.failure_reason or "").lower() or "spend limit" in (check_task.failure_reason or "").lower()):
+                if task_id in limit_failure_task_ids:
                     if phase.id:
                         _phase = check_db.query(Phase).filter_by(id=phase.id).first()
                         if _phase:
@@ -3033,6 +3045,23 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                         if cfg.agents.default_fallback_cli_tool:
                             session_limit_override_cli = cfg.agents.default_fallback_cli_tool
                             session_limit_override_model = cfg.agents.default_fallback_cli_model
+                    # This override is passed straight through as
+                    # phase_cli_tool below, which short-circuits
+                    # _resolve_phase_config's own derivation-and-validation
+                    # block entirely (it only runs when phase_cli_tool is
+                    # None) -- so an uninstalled fallback here would launch
+                    # straight into a dead pane with none of the validation
+                    # mechanical_recovery.py's identical hard-blocker
+                    # redispatch already has. Same bug, same fix.
+                    if session_limit_override_cli and not is_cli_tool_available(session_limit_override_cli):
+                        logger.warning(
+                            f"[PHASE-ADVANCE] Configured fallback CLI "
+                            f"'{session_limit_override_cli}' for task {task_id[:8]}'s "
+                            "session-limit retry is not installed (not found on PATH) "
+                            "-- retrying on the primary CLI instead of a dead pane"
+                        )
+                        session_limit_override_cli = None
+                        session_limit_override_model = None
                     if session_limit_override_cli:
                         logger.info(
                             f"[PHASE-ADVANCE] Task {task_id[:8]} failed due to session limit -- "

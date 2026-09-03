@@ -1512,6 +1512,104 @@ class TestMaybeRetryFailedTasks:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "active"
 
+    def test_session_limit_failure_dispatches_on_the_configured_fallback_cli(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: the fallback-CLI dispatch for a session/spend-limit
+        failure never actually fired for ANY task, because the check that
+        looks for "session limit"/"spend limit" in failure_reason ran
+        AFTER an earlier loop in this same function already cleared
+        failure_reason to None and committed it -- a fresh DB read always
+        saw None. Confirmed by this test failing to detect the fallback
+        before the fix (session_limit_override_cli stayed None, and
+        create_agent_for_task_direct was called with no override at all)."""
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            phase.fallback_cli_tool = "pi"
+            phase.fallback_cli_model = "fallback-model"
+            session.add(
+                Task(
+                    id="task-session-limit-real-fallback",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="CLI session limit reached",
+                )
+            )
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("session-limit-real-fallback-agent"),
+        ) as mock_create_agent, patch(
+            "src.autopilot.orchestrator.phase_transitions.is_cli_tool_available",
+            return_value=True,
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger)
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        _, call_kwargs = mock_create_agent.call_args
+        assert call_kwargs["phase_cli_tool_override"] == "pi"
+        assert call_kwargs["phase_cli_model_override"] == "fallback-model"
+
+    def test_uninstalled_fallback_cli_is_dropped_not_launched_into(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: the phase_cli_tool_override this function resolves for
+        a session/spend-limit retry is passed straight through as
+        create_agent_for_task_direct's phase_cli_tool_override, which
+        becomes _resolve_phase_config's own phase_cli_tool argument --
+        non-None, so that function's derivation-and-validation block (only
+        runs when phase_cli_tool is None) never executes, and an
+        uninstalled fallback would launch straight into a dead pane with
+        none of the is_cli_tool_available validation mechanical_recovery.
+        py's identical hard-blocker redispatch already has. Same bug class
+        as the §7.1 fix, reached via a different call site that fix never
+        covered."""
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            phase.fallback_cli_tool = "not-a-real-cli-binary"
+            phase.fallback_cli_model = "some-model"
+            session.add(
+                Task(
+                    id="task-session-limit-no-fallback-installed",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="CLI session limit reached",
+                )
+            )
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("session-limit-retry-agent"),
+        ) as mock_create_agent, patch(
+            "src.autopilot.orchestrator.phase_transitions.is_cli_tool_available",
+            return_value=False,
+        ) as mock_is_available:
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger)
+
+        assert result is True
+        mock_is_available.assert_called_once_with("not-a-real-cli-binary")
+        mock_create_agent.assert_called_once()
+        _, call_kwargs = mock_create_agent.call_args
+        assert call_kwargs["phase_cli_tool_override"] is None
+        assert call_kwargs["phase_cli_model_override"] is None
+
     def test_action_target_phase_survives_retry_reset(self, db_manager, sample_workflow):
         """Regression (this function's own inline comment): a failed task
         created by an earlier phase's goto/retry carries action_target_
