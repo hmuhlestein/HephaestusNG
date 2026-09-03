@@ -1223,15 +1223,20 @@ class TestReviewFeatureApproveLocalMergeFallback:
 
         from unittest.mock import MagicMock, patch
 
-        with patch(
-            "subprocess.run",
-            return_value=MagicMock(returncode=0, stdout="", stderr=""),
-        ) as mock_run:
+        def _fake_gh_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return MagicMock(returncode=0, stdout="MERGED\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=_fake_gh_run) as mock_run:
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
         assert result["success"] is True
-        mock_run.assert_called_once()
-        assert mock_run.call_args.args[0][:3] == ["gh", "pr", "merge"]
+        # gh pr merge, then the authoritative gh pr view state check -- no
+        # third call, since the local-merge fallback must not also run.
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0].args[0][:3] == ["gh", "pr", "merge"]
+        assert mock_run.call_args_list[1].args[0][:3] == ["gh", "pr", "view"]
 
         assert not (project_dir / "new_file.txt").exists(), (
             "no local merge should happen when a PR already exists to merge"
@@ -1268,9 +1273,18 @@ class TestReviewFeatureApproveLocalMergeFallback:
 
         from unittest.mock import MagicMock, patch
 
-        with patch(
-            "subprocess.run",
-            return_value=MagicMock(returncode=1, stdout="", stderr="Pull Request is not mergeable: the merge commit cannot be cleanly created."),
+        from src.core.simple_config import get_config
+
+        with (
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(returncode=1, stdout="", stderr="Pull Request is not mergeable: the merge commit cannot be cleanly created."),
+            ),
+            # This test exercises the fallback itself -- opt-in, default
+            # OFF (see GitWorktreeConfig.allow_local_merge_fallback) since
+            # gh actively rejecting the merge is exactly the case that
+            # bypasses branch protection. Reverts automatically on exit.
+            patch.object(get_config().git, "allow_local_merge_fallback", True),
         ):
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
@@ -1315,9 +1329,17 @@ class TestReviewFeatureApproveLocalMergeFallback:
 
         from unittest.mock import MagicMock, patch
 
-        with patch(
-            "subprocess.run",
-            return_value=MagicMock(returncode=1, stdout="", stderr="Pull Request is not mergeable."),
+        from src.core.simple_config import get_config
+
+        with (
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(returncode=1, stdout="", stderr="Pull Request is not mergeable."),
+            ),
+            # Opt in so the local-merge fallback actually runs (and fails,
+            # on the conflict seeded above) -- this test's whole point is
+            # exercising "both paths fail," not "the fallback was skipped."
+            patch.object(get_config().git, "allow_local_merge_fallback", True),
         ):
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
@@ -1325,6 +1347,109 @@ class TestReviewFeatureApproveLocalMergeFallback:
         assert result["success"] is True
         assert result["merged"] is False
         assert "FAILED" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_local_merge_fallback_is_skipped_by_default_when_gh_merge_fails(
+        self, orch_db_env, git_project_with_feature_branch,
+    ):
+        """External evaluation finding (§3.1): the local-merge-and-push
+        fallback used to run unconditionally whenever `gh pr merge` failed
+        -- including when it failed because a required status check
+        hadn't passed yet, not just a genuine conflict. On a repo whose
+        branch protection has no bypass actors and where merge-to-main
+        auto-deploys, that's the fallback routing straight around the
+        thing branch protection exists to enforce. Default (no config
+        override) must now leave the PR alone and report failure instead
+        of silently pushing to main."""
+        project_dir, worktree_dir = git_project_with_feature_branch
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+                pr_url="https://github.com/org/repo/pull/1",
+            ))
+
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "subprocess.run",
+            return_value=MagicMock(returncode=1, stdout="", stderr="required check has not passed"),
+        ):
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+
+        assert result["success"] is True
+        assert result["merged"] is False
+        assert result["auto_merge_queued"] is False
+        assert "FAILED" in result["message"]
+        assert not (project_dir / "new_file.txt").exists(), (
+            "no local merge/push to main should happen by default when gh "
+            "pr merge fails -- that's exactly the branch-protection bypass "
+            "this default is meant to prevent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_merge_armed_is_not_treated_as_merged_or_falls_back_locally(
+        self, orch_db_env, git_project_with_feature_branch,
+    ):
+        """gh pr merge --auto can succeed (exit 0) by arming GitHub's own
+        auto-merge without the PR actually being merged yet -- e.g. a
+        required check is still pending. That must not be reported as
+        `merged`, must not run the local-merge fallback (GitHub will
+        complete the real merge on its own), and must not sync local main
+        (there's nothing to sync yet)."""
+        project_dir, worktree_dir = git_project_with_feature_branch
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+                pr_url="https://github.com/org/repo/pull/1",
+            ))
+
+        from unittest.mock import MagicMock, patch
+
+        from src.core.simple_config import get_config
+
+        def _fake_gh_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "pr", "view"]:
+                # Still OPEN -- --auto armed it, required checks haven't
+                # passed yet, GitHub hasn't actually merged it.
+                return MagicMock(returncode=0, stdout="OPEN\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with (
+            patch("subprocess.run", side_effect=_fake_gh_run),
+            # Even with the fallback opted in, auto_merge_queued must take
+            # priority and skip it -- GitHub is already handling this PR.
+            patch.object(get_config().git, "allow_local_merge_fallback", True),
+        ):
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+
+        assert result["success"] is True
+        assert result["merged"] is False
+        assert result["auto_merge_queued"] is True
+        assert "queued" in result["message"].lower()
+        assert not (project_dir / "new_file.txt").exists(), (
+            "no local merge fallback should run while GitHub's own "
+            "auto-merge is still armed and pending"
+        )
 
 
 class TestReviewFeatureApproveSyncsLocalMainAfterMerge:
@@ -1411,10 +1536,16 @@ class TestReviewFeatureApproveSyncsLocalMainAfterMerge:
         # real gh pr merge.
         assert not (project_dir / "new_file.txt").exists()
 
-        with patch(
-            "subprocess.run",
-            return_value=MagicMock(returncode=0, stdout="", stderr=""),
-        ):
+        def _fake_gh_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "pr", "view"]:
+                # Authoritative post-merge state check (see
+                # feature_review_routes.py's own comment on why it doesn't
+                # trust `gh pr merge`'s exit code alone) -- confirms this
+                # landed rather than just arming --auto.
+                return MagicMock(returncode=0, stdout="MERGED\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=_fake_gh_run):
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
 
