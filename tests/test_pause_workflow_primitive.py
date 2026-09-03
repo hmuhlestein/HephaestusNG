@@ -852,16 +852,13 @@ class TestReviewFeatureReopensCompletedDevelopmentPhase:
     fresh corrective task from scratch (no restartable task existed),
     never reopened the development phase's own PhaseExecution to match --
     unlike _create_phase_task's own task-creation path, which always
-    calls reopen_phase_execution. If development had already run to
-    completion earlier in the workflow (the normal case -- review only
-    happens after everything finished), its PhaseExecution reads
-    "completed", and no dispatch/self-heal case recognizes a "completed"
+    reopens it (see transition_phase_execution). If development had
+    already run to completion earlier in the workflow (the normal case --
+    review only happens after everything finished), its PhaseExecution
+    reads "completed", and no dispatch case recognizes a "completed"
     phase with a live pending task sitting in it: Case 2
     (_case_in_progress_complete) only ever looks at phases already
-    "in_progress", and the two pending-phase self-heals
-    (_release_pending_phases_with_done_tasks /
-    _release_pending_phases_with_orphaned_task) only match "pending",
-    never "completed". The new task sat invisible to every sweep tick.
+    "in_progress". The new task sat invisible to every sweep tick.
 
     Confirmed live: task 146d191d (created by review_feature for "do
     another lint check") sat exactly this way after its first dispatch

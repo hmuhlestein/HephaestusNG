@@ -801,6 +801,43 @@ In order of how cleanly each one maps onto the table above, not by risk:
      already finished — exactly the defect class steps 1-4 close by
      construction. Once the invariant holds by construction, these have
      nothing left to repair.
+
+     **Deleted, on an explicit call to accept the risk rather than a real
+     monitoring window.** The available evidence didn't actually settle
+     this either way: both self-heals' own `[PHASE-ADVANCE] ... stuck
+     'pending'` log lines showed zero occurrences across 8+ days of
+     rotated logs, including days before Steps 1-4 existed — meaning
+     they were already rarely triggering in this deployment's usage
+     pattern, so their silence isn't evidence the refactor fixed
+     anything; it was already quiet. Step 1's own drift detector
+     (`find_phase_execution_drift`) similarly showed nothing, but only
+     across a few hours of cumulative uptime that day, nowhere near a
+     real production monitoring window. Flagged this clearly and asked
+     before deleting; the explicit answer was to delete now anyway and
+     accept that a genuine window hasn't elapsed. Removed both call
+     sites in `_advance_phases` and both function bodies, with a comment
+     left in their place explaining why and pointing at Step 1's
+     drift detector as the safety net that now covers the same class of
+     bug independently. Updated every comment elsewhere that referenced
+     either function by name (`feature_review_routes.py`,
+     `test_pause_workflow_primitive.py`,
+     `test_phase_execution_drift_detection.py`,
+     `test_advance_phases.py`) so none point at deleted code, and
+     removed both functions' dedicated test classes
+     (`TestReleasePendingPhasesWithDoneTasks`,
+     `TestReleasePendingPhasesWithOrphanedTask`, ~420 lines in
+     `test_advance_phases.py`) rather than leaving them broken.
+
+     **Found while investigating this item, unrelated to the deletion
+     itself:** a repo-wide (not just `phase_transitions.py`-scoped) grep
+     for `reopen_phase_execution(` turned up two more real callers Step
+     3.5 missed entirely — `task_admin_routes.py`'s
+     `restart_task_endpoint` and `feature_review_routes.py`'s
+     `review_feature` (request_changes path) — contradicting that step's
+     own commit message, which claimed the function was already fully
+     unused. Migrated both (see Step 3.5's revision note above) before
+     touching this item, since leaving a "fully unused" claim wrong is
+     worse than the extra work of finishing it.
    - **Recovery policy — keep regardless of centralization:**
      `_retry_exhausted_failed_workflows`. This does not exist because a
      writer forgot a case — it exists because a phase *genuinely*
