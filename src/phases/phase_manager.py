@@ -1656,10 +1656,22 @@ class PhaseManager:
         execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
 
         if execution and execution.status == "pending":
-            execution.status = "in_progress"
-            execution.started_at = utc_now()
-            session.commit()
-            logger.info(f"Started phase {phase_id}")
+            # transition_phase_execution's atomic UPDATE replaces the
+            # direct mutation here (Step 3 of docs/designs/
+            # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- found
+            # unmigrated during a follow-up adversarial review; this is
+            # the very first PhaseExecution write in a workflow's life
+            # (start_execution's call to start Phase 1). No extra_fields
+            # needed: _FIELD_RESETS[(pending, in_progress)] already sets
+            # started_at="now" exactly matching this line's own mutation.
+            from src.autopilot.orchestrator.phase_transitions import (
+                transition_phase_execution,
+            )
+
+            if transition_phase_execution(
+                session, phase_id, "in_progress", reason="_start_phase"
+            ) is not None:
+                logger.info(f"Started phase {phase_id}")
 
     def _fail_workflow(self, session, reason: str) -> None:
         """Mark workflow as failed."""

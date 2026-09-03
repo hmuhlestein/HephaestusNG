@@ -925,6 +925,92 @@ In order of how cleanly each one maps onto the table above, not by risk:
    asserting something is unmigrated/uncovered is itself a claim that
    needs re-checking, not a fact that ages safely.
 
+7. **A deep adversarial review** (explicitly requested, separate from and
+   stricter than the "compare against the doc" pass that found item 6)
+   re-grepped the whole repo for `.status = "(pending|in_progress|...)"`
+   assignments against `PhaseExecution`-typed variables, ignoring the
+   doc's own catalog entirely and starting from the raw 111-hit grep.
+   This surfaced six more unmigrated writers, in files this document had
+   never once mentioned (`termination_handler.py`, `arbitration.py`) as
+   well as two within already-covered files. Two were simple enough to
+   fix immediately as "inconsistencies"; four were judged trickier and
+   deferred to their own pass (below).
+
+   - **`_start_phase`** (`phase_manager.py`) — the very first
+     `PhaseExecution` write in a workflow's life (`start_execution`'s
+     call to start Phase 1). Direct `execution.status = "in_progress"`,
+     `execution.started_at = utc_now()`, `session.commit()`, gated only
+     on `status == "pending"`. Migrated to
+     `transition_phase_execution(session, phase_id, "in_progress",
+     reason="_start_phase")` — no `extra_fields` needed, since
+     `_FIELD_RESETS[(pending, in_progress)]` already sets
+     `started_at="now"`, exactly matching the old mutation. Had zero
+     direct test coverage (the one other test referencing it mocks it
+     out entirely); added `TestStartPhase` (3 tests: starts a pending
+     phase, leaves a non-pending phase untouched, no-ops when there's no
+     execution row at all).
+   - **`_release_pending_phases_with_done_tasks`** (`phase_transitions.py`)
+     — this is the exact function Step 3.5's self-heal review wrongly
+     claimed was fully redundant with Step 1's drift detector and
+     deleted, then restored after the claim was checked and found false
+     (see the "two wrong claims" note above). Restoring it left its
+     write un-migrated. Fixed:
+     ```python
+     execution = db.query(PhaseExecution).filter_by(
+         phase_id=most_recent_done_task.phase_id
+     ).populate_existing().first()
+     if not execution or execution.status != "pending":
+         return
+     transition_phase_execution(
+         db, execution.phase_id, "in_progress",
+         reason="_release_pending_phases_with_done_tasks",
+         extra_fields={"started_at": execution.started_at or most_recent_done_task.created_at},
+     )
+     ```
+     `extra_fields` is required here because this call site has its own
+     bespoke `started_at` semantics (preserve if already set, else
+     backfill from the task that unblocked it) that
+     `_FIELD_RESETS[(pending, in_progress)]`'s blanket `"now"` would
+     silently override — the same bug *class* as the original Step 3.1
+     `completed_at` bug, caught this time before shipping rather than
+     after. `.populate_existing()` added to the preceding read for the
+     same stale-identity-map reason as every other `extra_fields`-feeding
+     read in this document. The 7 pre-existing
+     `TestReleasePendingPhasesWithDoneTasks` tests (including the
+     specific `started_at` leave/backfill assertions) pass unmodified.
+
+   Both verified via the full suite (831 passed) and a live `heph
+   restart` with zero errors before commit.
+
+   **Four findings remain, deferred as harder cases needing individual
+   design decisions rather than a mechanical swap:**
+   - `termination_handler.py`'s `_cleanup_workflow_resources` batch-writes
+     `pending → failed` for every still-pending `PhaseExecution` on
+     workflow termination — a transition `_VALID_TRANSITIONS` does not
+     currently allow at all (only `pending → {in_progress, skipped}`).
+     Needs a table extension, not just a call-site swap, plus
+     verification that nothing relies on `pending → failed` staying
+     rejected.
+   - `_phase_case_steps.py`'s `_retry_failed_tasks_with_done` exhaustion
+     branch sets `execution.status = "failed"` and
+     `execution.completed_at = utc_now()` on retry-cap exhaustion (the
+     same function discussed at length above under "Sequencing between
+     transitions"). `_FIELD_RESETS` has no `(in_progress, failed)` entry,
+     so this needs `extra_fields={"completed_at": ...}` — the identical
+     bug shape as the original Step 3.1 bug.
+   - `_create_corrective_task` (`phase_transitions.py`) needs
+     `extra_fields` to explicitly *preserve*
+     `task_creation_claimed_at` rather than let the default table clear
+     it, to avoid reopening the duplicate-task race this field exists to
+     prevent.
+   - `_trigger_arbitration` (`arbitration.py`) writes
+     `execution.status = "in_progress"` completely unconditionally (no
+     status-equality gate at all, just a null check on `execution`) and
+     never touches `started_at`. Needs both a real gate check and
+     `extra_fields` to preserve `started_at` the way
+     `_escalate_unresolvable_goto` does, since the default
+     `(x, in_progress)` table entries all stamp `started_at="now"`.
+
 **Sequencing between transitions is a separate concern this doesn't
 solve, and callers still own it.** Centralizing *who writes* a transition
 doesn't validate the *order* multiple transitions are invoked in.
