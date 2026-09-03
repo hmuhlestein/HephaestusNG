@@ -234,6 +234,7 @@ class RepairService:
                 Phase,
                 PhaseExecution,
                 PhasePromptVersion,
+                PromptProposal,
                 TaskPromptOverride,
                 Ticket,
                 ValidationReview,
@@ -278,8 +279,17 @@ class RepairService:
                     # Delete dependent records (order matters for FK constraints)
                     if task_ids:
                         db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
-                        db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                        # AgentResult before ValidationReview -- agent_results.
+                        # verified_by_validation_id is an enforced FK to
+                        # validation_reviews.id, set by ResultService's normal
+                        # task-validation flow for any validated task. Same
+                        # bug, same fix, as remove_project_design/delete_
+                        # project's identical cascade (design_file_routes.py/
+                        # project_routes.py) -- confirmed there via a real
+                        # FOREIGN KEY error before those fixes, never
+                        # propagated here.
                         db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                        db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
                         db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                         db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
                         # CostEntry.task_id/workflow_id are also enforced FKs -- a
@@ -298,10 +308,28 @@ class RepairService:
 
                     # Delete workflow-level dependents
                     db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                    # workflows.result_id -> workflow_results.id is also an
+                    # enforced FK, and WorkflowResultService sets it to a
+                    # WorkflowResult with the SAME workflow_id (a self-
+                    # reference), common for has-result pipelines (bugfix/
+                    # diagnostic). Null the self-reference before deleting
+                    # WorkflowResult below, or that delete fails -- same bug,
+                    # same fix, as remove_project_design/delete_project's
+                    # identical cascade.
+                    db.query(Workflow).filter(Workflow.id.in_(wf_ids)).update(
+                        {"result_id": None}, synchronize_session=False
+                    )
                     db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                     db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                     db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                     db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                    # prompt_proposals.workflow_id also FKs to workflows.id,
+                    # no ondelete clause -- forensics_analysis (a real phase
+                    # in the standard autopilot workflow) creates these after
+                    # a pipeline run finishes. Same bug, same fix, as
+                    # remove_project_design/delete_project's identical
+                    # cascade.
+                    db.query(PromptProposal).filter(PromptProposal.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                     # Collect worktree info before the Workflow rows are gone.
                     # Without this, _create_integration_worktree's deterministic
@@ -352,8 +380,20 @@ class RepairService:
                     # unrecoverable workflow forever (~3s/cycle, 0 designs
                     # processed), never dispatching anything new -- exactly
                     # what "the Rerun button does nothing" looked like.
-                    if design and design.phase0_workflow_id in wf_ids:
-                        design.phase0_workflow_id = None
+                    # A plain ORM attribute assignment here (design.
+                    # phase0_workflow_id = None) does NOT reach the DB before
+                    # the raw bulk DELETE further down in this same session:
+                    # this project's sessions run autoflush=False (database.
+                    # py), so an in-memory-only attribute change is invisible
+                    # to that DELETE's own FK check -- reproducing the exact
+                    # "Rerun button does nothing" failure this block's own
+                    # comment above describes as already fixed. Use a bulk
+                    # .update() instead, same as remove_project_design/
+                    # delete_project's identical cascade.
+                    if design:
+                        db.query(AutopilotDesign).filter(
+                            AutopilotDesign.id == design.id, AutopilotDesign.phase0_workflow_id.in_(wf_ids)
+                        ).update({"phase0_workflow_id": None}, synchronize_session=False)
 
                     # Delete features before workflows -- features.workflow_id
                     # is also an enforced FK to workflows.id, so deleting
