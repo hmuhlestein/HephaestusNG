@@ -438,6 +438,23 @@ def migrate_speckit_auto_scan_column(engine):
         logger.warning(f"autopilot_projects.speckit_auto_scan_enabled migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_verify_tests_command_column(engine):
+    """Add autopilot_projects.verify_tests_command for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN verify_tests_command VARCHAR"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated autopilot_projects.verify_tests_command column")
+    except Exception as e:
+        logger.warning(f"autopilot_projects.verify_tests_command migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_workflow_paused_by_column(engine):
     """Add workflows.paused_by for existing databases.
 
@@ -1562,6 +1579,7 @@ SCHEMA_MIGRATIONS = [
     ("_drop_speckit_autoscan_enabled_column", drop_speckit_autoscan_enabled_column),
     ("_migrate_design_spec_key", migrate_design_spec_key),
     ("_migrate_phase_execution_phase_id_unique", migrate_phase_execution_phase_id_unique),
+    ("_migrate_verify_tests_command_column", migrate_verify_tests_command_column),
     # Last: repairs damage the rebuild-and-swap migrations above can do, so it
     # always sees their final state within the same startup pass.
     ("_repair_dangling_autopilot_designs_fk", repair_dangling_autopilot_designs_fk),

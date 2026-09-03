@@ -292,7 +292,7 @@ class TestScoreQA:
             "def test_a():\n    assert True\ndef test_b():\n    assert True\n"
         )
 
-        def fake_verification(working_directory, timeout_seconds=300):
+        def fake_verification(working_directory, timeout_seconds=300, verify_tests_command=None):
             return {
                 "failed": 0,
                 "passed": 2,
@@ -327,7 +327,7 @@ class TestScoreQA:
         behavior and must not be disturbed by the total==0 fallback."""
         from src.autopilot import spec as spec_module
 
-        def fake_verification(working_directory, timeout_seconds=300):
+        def fake_verification(working_directory, timeout_seconds=300, verify_tests_command=None):
             return {
                 "failed": 3,
                 "passed": 7,
@@ -368,7 +368,7 @@ class TestScoreQA:
 
         received = {}
 
-        def fake_verification(working_directory, timeout_seconds=300):
+        def fake_verification(working_directory, timeout_seconds=300, verify_tests_command=None):
             received["timeout_seconds"] = timeout_seconds
             return None
 

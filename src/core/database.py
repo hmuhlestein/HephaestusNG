@@ -1199,6 +1199,15 @@ class AutopilotProject(Base):
     # ready (has_plan=True) specs/<NNN>-<name>/ Spec Kit feature directories.
     speckit_auto_scan_enabled = Column(Boolean, default=False, nullable=False)
 
+    # Per-project override for the QA gate's independent test verification
+    # (run_independent_test_verification in src/autopilot/spec.py), which
+    # otherwise hardcodes a pytest invocation -- that only works for Python
+    # projects. None (the default) leaves pytest-based verification
+    # unchanged; a non-Python project (Go, TypeScript, Rust, ...) can set
+    # this to its own real test/verify command (e.g. "go test ./...",
+    # "npm test") to run instead.
+    verify_tests_command = Column(String, nullable=True)
+
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
     repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")
 

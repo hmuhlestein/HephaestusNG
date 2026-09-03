@@ -75,6 +75,30 @@ async def set_speckit_auto_scan(project_id: str, req: SpeckitAutoScanUpdate):
     _invalidate("status")
     return {"speckit_auto_scan_enabled": req.speckit_auto_scan_enabled}
 
+class VerifyTestsCommandUpdate(BaseModel):
+    verify_tests_command: Optional[str] = None
+
+
+@router.patch("/projects/{project_id}/verify-tests-command")
+async def set_verify_tests_command(project_id: str, req: VerifyTestsCommandUpdate):
+    """Set (or clear, with null/empty) this project's independent QA-gate
+    verify command override (AutopilotProject.verify_tests_command, read by
+    run_independent_test_verification in src/autopilot/spec.py). Unset
+    means the QA gate keeps running its hardcoded pytest invocation; a
+    non-Python project can point this at its own real test/verify command
+    (e.g. "go test ./...", "npm test")."""
+    from src.core.database import AutopilotProject, get_db
+
+    command = (req.verify_tests_command or "").strip() or None
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Project not found")
+        proj.verify_tests_command = command
+        db.commit()
+    _invalidate("status")
+    return {"verify_tests_command": command}
+
 async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewRequest):
     """Approve or request changes for a Phase 0 (Feature Architect) decomposition.
 
