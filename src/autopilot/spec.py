@@ -1167,9 +1167,36 @@ def _select_relevant_test_files(working_directory: str) -> Optional[list]:
     return sorted(test_files) if test_files else None
 
 
+def _project_verify_tests_command(workflow_id: Optional[str]) -> Optional[str]:
+    """AutopilotProject.verify_tests_command for the project this workflow
+    belongs to, or None if there is no workflow, no project, or no override
+    configured -- in which case run_independent_test_verification keeps
+    running its hardcoded pytest invocation exactly as before. Fails safe to
+    None (never raises) on any DB error, matching this module's other
+    workflow_id -> DB lookups (e.g. get_max_task_retries above).
+    """
+    if not workflow_id:
+        return None
+
+    try:
+        from src.core.database import AutopilotProject, Workflow, get_db
+
+        with get_db() as session:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf or not wf.project_id:
+                return None
+            proj = session.query(AutopilotProject).filter_by(id=wf.project_id).first()
+            command = proj.verify_tests_command if proj else None
+            return command.strip() if command and command.strip() else None
+    except Exception as e:
+        logger.debug(f"Could not load verify_tests_command for workflow {workflow_id}: {e}")
+        return None
+
+
 def run_independent_test_verification(
     working_directory: str,
     timeout_seconds: int = 300,
+    verify_tests_command: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run this feature's changed test files independently to verify
     agent-reported QA metrics -- not the project's entire suite.
@@ -1189,11 +1216,70 @@ def run_independent_test_verification(
     docstring for why an unscoped run was the real root cause of gate
     stalls, not merely a too-short timeout.
 
+    verify_tests_command: an optional per-project override (see
+    AutopilotProject.verify_tests_command) that replaces the pytest
+    invocation entirely with an arbitrary command -- e.g. "go test ./..."
+    or "npm test" for a non-Python project, where the pytest path below
+    never applies at all. Run via shlex.split (no shell=True), so a
+    command needing shell features (pipes, &&) should instead point at a
+    wrapper script. _select_relevant_test_files' diff-to-test-file mapping
+    is pytest/naming-convention specific to this repo's own layout, so it
+    is not consulted here -- the configured command owns its own scope.
+    Only the exit code is used as the verdict: an arbitrary command's
+    stdout has no pytest-summary equivalent to parse for real per-test
+    counts, so the result is a synthetic single-item pass/fail (`passed`/
+    `failed` = 1, `total` = 1) rather than genuine counts -- still a
+    meaningfully stronger signal than skipping verification altogether for
+    a stack pytest can't run.
+
     Returns:
         Dict with 'failed', 'passed', 'total', 'pass_rate' keys, or None
         if tests couldn't be run (caller should fall back to agent report).
     """
+    import shlex
     import subprocess
+
+    if verify_tests_command:
+        try:
+            args = shlex.split(verify_tests_command)
+        except ValueError as e:
+            logger.warning(
+                f"[INDEPENDENT_TEST] Could not parse verify_tests_command="
+                f"{verify_tests_command!r}: {e}"
+            )
+            return None
+        try:
+            result = subprocess.run(
+                args,
+                cwd=working_directory,
+                capture_output=True,
+                timeout=timeout_seconds,
+                text=True,
+            )
+            passed = result.returncode == 0
+            logger.info(
+                f"[INDEPENDENT_TEST] verify_tests_command={verify_tests_command!r} "
+                f"exit={result.returncode} ({'passed' if passed else 'failed'})"
+            )
+            return {
+                "failed": 0 if passed else 1,
+                "passed": 1 if passed else 0,
+                "total": 1,
+                "pass_rate": 100.0 if passed else 0.0,
+                "source": "independent_verification_custom_command",
+                "exit_code": result.returncode,
+            }
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"[INDEPENDENT_TEST] verify_tests_command timed out after {timeout_seconds}s"
+            )
+        except FileNotFoundError:
+            logger.warning(
+                f"[INDEPENDENT_TEST] verify_tests_command executable not found: {args[0]!r}"
+            )
+        except Exception as e:
+            logger.warning(f"[INDEPENDENT_TEST] Unexpected error running verify_tests_command: {e}")
+        return None
 
     test_files = _select_relevant_test_files(working_directory)
     if not test_files:
@@ -1416,6 +1502,7 @@ def score_qa(
     result: Optional[Dict[str, Any]],
     spec: Dict[str, Any],
     working_directory: Optional[str] = None,
+    verify_tests_command: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score a structured QA result against the spec (hard floors + judgement).
 
@@ -1429,6 +1516,9 @@ def score_qa(
 
     Enhancement 1: If working_directory is provided, runs an independent test
     verification and compares against the agent's self-reported metrics.
+    verify_tests_command (see AutopilotProject.verify_tests_command) is
+    forwarded to run_independent_test_verification unchanged -- None keeps
+    today's hardcoded-pytest behavior.
     """
     if not result:
         return _DEV, {
@@ -1487,6 +1577,7 @@ def score_qa(
         independent_result = run_independent_test_verification(
             working_directory,
             timeout_seconds=get_config().autopilot.independent_test_timeout_seconds,
+            verify_tests_command=verify_tests_command,
         )
         if independent_result:
             independent_verification = independent_result
@@ -2528,7 +2619,10 @@ def build_phase_output(
         result, _ = read_okf_report(working_directory, "qa.md", phase_name=phase_name)
         # Enhancement 1: Pass working_directory for independent test verification
         wd = None if skip_independent_verification else working_directory
-        score, meta = score_qa(result, spec, working_directory=wd)
+        score, meta = score_qa(
+            result, spec, working_directory=wd,
+            verify_tests_command=_project_verify_tests_command(workflow_id),
+        )
     elif phase_name == "feature_review":
         # .hephaestus/feature_review/, not docs/ -- the same convention
         # every other gated phase uses (Phase 2 §4.9 follow-up).
