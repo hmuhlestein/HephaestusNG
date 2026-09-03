@@ -212,8 +212,33 @@ def _retry_failed_tasks_with_done(db, phase, workflow_id, execution, logger,
         # stop) instead of silently continuing.
         logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — marking phase and workflow as failed")
         if execution:
-            execution.status = "failed"
-            execution.completed_at = utc_now()
+            # transition_phase_execution (Step 3 of docs/designs/
+            # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) replaces the direct
+            # mutation here -- found unmigrated during a follow-up
+            # adversarial review. extra_fields carries completed_at because
+            # _FIELD_RESETS has no (in_progress, failed) entry -- the same
+            # gap Step 3.1's _close_execution migration hit first, and
+            # would otherwise silently drop it here too. commit=False:
+            # this function's OWN db.commit() a few lines below (after the
+            # wf.status="failed" write) is what durably persists this
+            # write -- it already committed the phase-status mutation and
+            # the workflow-status mutation together as one transaction
+            # before this migration, and committing here first would split
+            # that into two, opening a window where an exception between
+            # them leaves the phase "failed" but the workflow still
+            # "active". (The CALLER's own separate commit, in its finally
+            # block, only ever covered task_creation_claimed_at -- that was
+            # already a second, later commit before this migration too.)
+            from src.autopilot.orchestrator.phase_transitions import (
+                transition_phase_execution,
+            )
+
+            transition_phase_execution(
+                db, execution.phase_id, "failed",
+                reason="_retry_failed_tasks_with_done_exhausted",
+                extra_fields={"completed_at": utc_now()},
+                commit=False,
+            )
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if wf and wf.status != "failed":
             wf.status = "failed"

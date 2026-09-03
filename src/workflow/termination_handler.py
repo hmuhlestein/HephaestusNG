@@ -317,6 +317,9 @@ class WorkflowTerminationHandler:
                     )
 
             # 2. Update phase executions to completed
+            from src.autopilot.orchestrator.phase_transitions import (
+                transition_phase_execution,
+            )
             from src.core.database import Phase, PhaseExecution
 
             phase_executions = (
@@ -334,6 +337,20 @@ class WorkflowTerminationHandler:
                     # Only mark as completed if the phase actually had work done.
                     # Phases that were pending or never started should be marked as
                     # failed/terminated, not completed.
+                    #
+                    # Status changes route through transition_phase_execution
+                    # (Step 3 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_
+                    # REFACTOR.md, found unmigrated during a follow-up
+                    # adversarial review) with commit=False: terminate_workflow
+                    # owns the transaction and commits once at the end (see its
+                    # own docstring on why a mid-sequence commit here previously
+                    # caused a partial-termination bug). pending -> failed
+                    # required extending _VALID_TRANSITIONS, which didn't allow
+                    # it before -- this is the only real caller of that pair.
+                    # completed_at/completion_summary go through extra_fields
+                    # because _FIELD_RESETS has no (in_progress, completed) or
+                    # (in_progress, failed) entry -- the same gap Step 3.1's
+                    # _close_execution migration hit first.
                     if execution.status == "in_progress":
                         # Check if there are any done tasks for this phase
                         done_tasks = session.query(Task).filter(
@@ -345,22 +362,47 @@ class WorkflowTerminationHandler:
                             Task.phase_id == execution.phase_id,
                             Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"])
                         ).count()
-                        
+
                         if done_tasks > 0 and pending_tasks == 0:
-                            execution.status = "completed"
-                            execution.completion_summary = "Completed due to workflow termination"
+                            transition_phase_execution(
+                                session, execution.phase_id, "completed",
+                                reason="_cleanup_workflow_resources",
+                                extra_fields={
+                                    "completion_summary": "Completed due to workflow termination",
+                                    "completed_at": utc_now(),
+                                },
+                                commit=False,
+                            )
                         elif pending_tasks > 0:
-                            # Keep in_progress so pending tasks can be dispatched
+                            # Keep in_progress so pending tasks can be
+                            # dispatched -- not a status transition (there is
+                            # no (in_progress, in_progress) entry in
+                            # _VALID_TRANSITIONS), so this is a direct
+                            # field-only update, same as before migration.
                             execution.completion_summary = "In-progress at workflow termination (pending tasks remain)"
+                            execution.completed_at = utc_now()
                         else:
-                            execution.status = "failed"
-                            execution.completion_summary = "Failed due to workflow termination (no completed work)"
+                            transition_phase_execution(
+                                session, execution.phase_id, "failed",
+                                reason="_cleanup_workflow_resources",
+                                extra_fields={
+                                    "completion_summary": "Failed due to workflow termination (no completed work)",
+                                    "completed_at": utc_now(),
+                                },
+                                commit=False,
+                            )
                     elif execution.status == "pending":
-                        execution.status = "failed"
-                        execution.completion_summary = "Failed due to workflow termination (never started)"
+                        transition_phase_execution(
+                            session, execution.phase_id, "failed",
+                            reason="_cleanup_workflow_resources",
+                            extra_fields={
+                                "completion_summary": "Failed due to workflow termination (never started)",
+                                "completed_at": utc_now(),
+                            },
+                            commit=False,
+                        )
                     # Already completed executions stay completed
-                    
-                    execution.completed_at = utc_now()
+
                     cleanup_actions.append(
                         {
                             "action": "complete_phase_execution",

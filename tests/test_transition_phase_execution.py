@@ -34,6 +34,7 @@ class TestValidTransitions:
         [
             ("pending", "in_progress"),
             ("pending", "skipped"),
+            ("pending", "failed"),
             ("in_progress", "completed"),
             ("in_progress", "failed"),
             ("in_progress", "pending"),
@@ -57,7 +58,6 @@ class TestInvalidTransitions:
         "from_status,to_status",
         [
             ("pending", "completed"),
-            ("pending", "failed"),
             ("completed", "failed"),
             ("completed", "skipped"),
             ("failed", "completed"),

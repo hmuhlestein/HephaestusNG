@@ -3129,6 +3129,95 @@ class TestCreateCorrectiveTask:
             assert _claim_phase_task_creation(session, "phase-1") is True
 
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_status_transition_does_not_clear_the_held_claim_or_restamp_started_at(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Regression: _create_corrective_task_body's pending->in_progress
+        write was migrated to transition_phase_execution (Step 3 of docs/
+        designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md). Every (x,
+        in_progress) entry in _FIELD_RESETS clears task_creation_claimed_at
+        and stamps started_at="now" -- both wrong here: the wrapper
+        (_create_corrective_task) holds this phase's claim for the whole
+        call and only releases it in its own finally once the task exists,
+        and the old direct mutation never touched started_at at all. Without
+        extra_fields explicitly overriding both, the migration would
+        silently release the claim mid-body (reopening the exact race the
+        wrapper's claim exists to close, before the new task is even
+        created) and restamp started_at, a real behavior change.
+        Distinguishes "preserved" from "table default of now" by asserting
+        the claim is still held DURING the body (before the wrapper's own
+        finally would clear it anyway) and that started_at keeps its
+        original, distinctive seeded value.
+        """
+        from datetime import datetime
+
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_corrective_task
+        from src.core.database import Agent, PhaseExecution
+
+        self._seed_workflow_and_phase(orch_db_env)
+        original_started_at = datetime(2020, 1, 1)
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi"))
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.started_at = original_started_at
+
+        observed = {}
+
+        def fake_create_agent(*args, **kwargs):
+            with orch_db_env.session_scope() as session:
+                execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+                observed["claim_during_body"] = execution.task_creation_claimed_at
+            return {"agent_id": "new-agent"}
+
+        mock_create_agent.side_effect = fake_create_agent
+
+        _create_corrective_task(
+            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert observed["claim_during_body"] is not None
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.started_at == original_started_at
+
+    def test_failure_after_reopening_rolls_back_the_reopen_too(self, orch_db_env, tmp_path):
+        """Regression, caught in a follow-up adversarial review of the fix
+        above: transition_phase_execution's status write must use
+        commit=False here. Before this migration, the phase/workflow reopen
+        and the new task's creation committed together as one transaction --
+        an exception anywhere in between rolled EVERYTHING back via get_db's
+        own except-clause. Leaving the default commit=True on the status
+        transition would commit the reopen (phase "in_progress", workflow
+        "active", claim held) immediately, before the task is created --
+        an exception right after (as simulated here) would then leave that
+        reopen permanently stuck with no task and no agent ever created,
+        instead of rolling back together as it did before this migration."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_corrective_task
+        from src.core.database import PhaseExecution, Task, Workflow
+
+        self._seed_workflow_and_phase(orch_db_env, wf_status="completed", phase_status="completed")
+
+        with patch(
+            "src.autopilot.orchestrator.runtime_registries._get_orchestrator_agent_id",
+            side_effect=RuntimeError("boom"),
+        ):
+            with pytest.raises(RuntimeError):
+                _create_corrective_task(
+                    "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+                    OrchestratorLogger(tmp_path),
+                )
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "completed"
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "completed"
+            assert session.query(Task).filter_by(phase_id="phase-1").count() == 0
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_refuses_when_target_phase_is_freshly_claimed_by_another_caller(
         self, mock_create_agent, orch_db_env, tmp_path
     ):

@@ -982,34 +982,151 @@ In order of how cleanly each one maps onto the table above, not by risk:
    Both verified via the full suite (831 passed) and a live `heph
    restart` with zero errors before commit.
 
-   **Four findings remain, deferred as harder cases needing individual
-   design decisions rather than a mechanical swap:**
-   - `termination_handler.py`'s `_cleanup_workflow_resources` batch-writes
+8. **The four remaining adversarial-review findings**, each fixed with its
+   own design decision rather than a mechanical swap:
+
+   - **`termination_handler.py`'s `_cleanup_workflow_resources`** batch-writes
      `pending → failed` for every still-pending `PhaseExecution` on
-     workflow termination — a transition `_VALID_TRANSITIONS` does not
-     currently allow at all (only `pending → {in_progress, skipped}`).
-     Needs a table extension, not just a call-site swap, plus
-     verification that nothing relies on `pending → failed` staying
-     rejected.
-   - `_phase_case_steps.py`'s `_retry_failed_tasks_with_done` exhaustion
-     branch sets `execution.status = "failed"` and
-     `execution.completed_at = utc_now()` on retry-cap exhaustion (the
-     same function discussed at length above under "Sequencing between
-     transitions"). `_FIELD_RESETS` has no `(in_progress, failed)` entry,
-     so this needs `extra_fields={"completed_at": ...}` — the identical
-     bug shape as the original Step 3.1 bug.
-   - `_create_corrective_task` (`phase_transitions.py`) needs
-     `extra_fields` to explicitly *preserve*
-     `task_creation_claimed_at` rather than let the default table clear
-     it, to avoid reopening the duplicate-task race this field exists to
-     prevent.
-   - `_trigger_arbitration` (`arbitration.py`) writes
+     workflow termination — a transition `_VALID_TRANSITIONS` didn't allow
+     at all (only `pending → {in_progress, skipped}`). Fixed by extending
+     `_VALID_TRANSITIONS[pending]` to include `failed` (confirmed via
+     repo-wide grep this is the only caller of that pair, and nothing
+     depends on it staying rejected — `TestInvalidTransitions`'s
+     `("pending", "failed")` case moved to `TestValidTransitions`). The
+     `in_progress → completed` and `in_progress → failed` writes both need
+     `extra_fields` for `completed_at`/`completion_summary` (no
+     `_FIELD_RESETS` entry for either pair, same gap as Step 3.1). All
+     three `transition_phase_execution` calls use `commit=False`:
+     `terminate_workflow`'s own docstring documents that the whole method
+     deliberately runs as one transaction, committed once at the end,
+     specifically because the sub-steps used to commit independently and a
+     failure partway through left earlier steps durably applied while the
+     workflow itself stayed "active." The pre-existing
+     `TestPhaseExecutionOutcomes`/`TestAtomicity` coverage in
+     `test_workflow_termination_handler.py` already exercised every branch
+     and the atomicity guarantee — all 57 tests in that file plus the
+     related termination/race suites passed unmodified.
+
+   - **`_phase_case_steps.py`'s `_retry_failed_tasks_with_done` exhaustion
+     branch** needed `extra_fields={"completed_at": ...}` for the same
+     `(in_progress, failed)` `_FIELD_RESETS` gap. `commit=False` here too —
+     but the reasoning took a wrong turn worth recording: the first-pass
+     comment claimed the *caller's* `finally` block (which clears
+     `task_creation_claimed_at`) was the commit this write rides along
+     with. Re-reading the function fully during the adversarial review
+     below showed that's wrong — this function has its **own**
+     `db.commit()` a few lines later (right after the `wf.status="failed"`
+     write), and that's what already committed the phase-status and
+     workflow-status mutations together, atomically, before this
+     migration. The caller's `finally`-block commit was already a
+     *separate*, *later* commit for `task_creation_claimed_at` alone, both
+     before and after this change. Comment corrected in both the source
+     and the mirroring test comment; the `commit=False` conclusion itself
+     was already right, only its stated reason was wrong. Extended the
+     existing `test_exhausted_retry_cap_fails_the_workflow_instead_of_firing_transition`
+     regression with `completed_at is not None` and
+     `task_creation_claimed_at is None` assertions.
+
+   - **`_create_corrective_task_body`** (`phase_transitions.py`) needed
+     `extra_fields` to explicitly *preserve* both `task_creation_claimed_at`
+     (else the default table clears it mid-body, reopening the duplicate-
+     task race this field exists to prevent) and `started_at` (the old
+     direct mutation never touched it, but every `(x, in_progress)`
+     `_FIELD_RESETS` entry stamps `"now"`). New tests
+     (`test_status_transition_does_not_clear_the_held_claim_or_restamp_started_at`)
+     confirmed both, each shown to fail without its respective
+     `extra_fields` override before being accepted.
+
+   - **`_trigger_arbitration`** (`arbitration.py`) wrote
      `execution.status = "in_progress"` completely unconditionally (no
      status-equality gate at all, just a null check on `execution`) and
-     never touches `started_at`. Needs both a real gate check and
-     `extra_fields` to preserve `started_at` the way
-     `_escalate_unresolvable_goto` does, since the default
-     `(x, in_progress)` table entries all stamp `started_at="now"`.
+     never touched `started_at`. Fixed with a `status != "in_progress"`
+     gate plus `extra_fields={"started_at": execution.started_at}` — the
+     gate turned out to be *required*, not optional: `_VALID_TRANSITIONS`
+     has no `(in_progress, in_progress)` self-loop, and
+     `test_creates_task_and_dispatches_arbitration_agent`'s own fixture
+     calls this function against a phase that's *already* `"in_progress"`
+     (the routine "arbitrate" case — a phase whose task is done but never
+     closed). Without the gate, that ordinary case would hit
+     `transition_phase_execution` and be rejected as an invalid
+     transition every time. `commit=False`: the `wf.status_reason` write
+     immediately below is committed together with this one, same as
+     before this migration. New regression test
+     (`test_reopening_a_completed_execution_preserves_its_original_started_at`)
+     confirmed `started_at` survives a `completed → in_progress` reopen
+     (the real production path, via `_fire_phase_transition`'s "arbitrate"
+     branch after `mark_phase_complete` has already closed the execution).
+
+   All four verified via their own targeted test files plus a combined
+   run (`test_advance_phases.py`, `test_orchestrator_helpers.py`,
+   `test_workflow_termination_handler.py`,
+   `test_transition_phase_execution.py`,
+   `test_termination_invariant_single_writer.py`,
+   `test_termination_race_task_revert.py`,
+   `test_condition_evaluation_fails_loudly.py`, `test_status_derivation.py`,
+   `test_phase_transitions_spec_gate.py` — 623 passed).
+
+9. **A dedicated adversarial review pass on items 7 and 8 themselves**
+   (explicitly requested, separate from and in addition to the "fix
+   carefully" pass above), re-reading every changed call site's full
+   surrounding function and caller chain from scratch rather than
+   re-confirming the reasoning already written down. Found:
+
+   - **A real, shipped bug**: `_create_corrective_task_body`'s
+     `transition_phase_execution` call (item 8 above) was missing
+     `commit=False`. Unlike the other three fixes, this call site has
+     substantial work *after* the status write, still inside the same
+     `with get_db() as db:` block — building the corrective `Task` row and
+     `db.add(task); db.commit()` a few lines later. Before this whole
+     migration, `wf.status="active"`, the reopened `PhaseExecution`, and
+     the new `Task` row all committed together at that one later
+     `db.commit()`; any exception in between rolled everything back via
+     `get_db()`'s own except-clause. Leaving the default `commit=True` on
+     the status transition would have committed the reopen *immediately*
+     — phase `"in_progress"`, workflow `"active"`, claim held — before the
+     task exists. An exception right after (agent creation failing,
+     `_get_orchestrator_agent_id` raising, etc.) would then leave that
+     reopen permanently stuck with no task and no agent ever created,
+     instead of rolling back together as it did before this migration.
+     Fixed by adding `commit=False`. New regression test
+     (`test_failure_after_reopening_rolls_back_the_reopen_too`) patches
+     `_get_orchestrator_agent_id` to raise between the status write and
+     `db.add(task)`, and asserts the workflow/phase/task all end up
+     exactly as if nothing had happened — confirmed to fail without the
+     fix (workflow left `"active"`, execution left `"in_progress"`) before
+     being accepted.
+   - **A latent, currently-harmless gap**: `_start_phase` (item 7,
+     already committed) also used the default `commit=True`, technically
+     violating `start_execution`'s own documented invariant that the
+     *whole* method runs as one transaction, committed once on return — a
+     deliberate fix for a real duplicate-first-task incident (tasks
+     de0c5972/8ac50aa3, see that method's own comment). Harmless *today*
+     only because nothing DB-relevant runs between this call and
+     `start_execution`'s return — but silently splits the documented
+     one-transaction guarantee into two, and would trap the next person
+     who adds code after this call expecting that guarantee to still
+     hold. Fixed defensively with `commit=False`.
+   - Everything else — the `_VALID_TRANSITIONS` extension, the three
+     `_FIELD_RESETS`-gap `extra_fields` overrides, the new
+     `status != "in_progress"` gate in `_trigger_arbitration`, the
+     `.populate_existing()` additions — held up under re-derivation from
+     the actual current source rather than from memory of having already
+     reasoned about it once.
+
+   This is the same lesson the "two wrong claims" note above already
+   drew from Step 3.5, applied to a subtler failure mode: a claim can be
+   *individually* correct (each of the four fixes' `extra_fields`
+   reasoning was right) while still shipping with an *unrelated* mistake
+   (a missing `commit=False`) that only surfaces by re-reading the whole
+   surrounding function's control flow, not by re-checking the specific
+   claim being made. Verified via the same combined suite plus a full
+   `pytest tests/` run; the full run's 61 errors/13-14 failures were
+   confirmed pre-existing test-isolation noise unrelated to this work —
+   every file involved (`test_stable_transcript.py`,
+   `test_termination_race_task_revert.py`, `test_wait_for_cli_ready.py`,
+   `test_worktree_db_reconciliation.py`) passes cleanly (34/34) when run
+   standalone, and the same error set appeared identically across two
+   separate full runs.
 
 **Sequencing between transitions is a separate concern this doesn't
 solve, and callers still own it.** Centralizing *who writes* a transition
