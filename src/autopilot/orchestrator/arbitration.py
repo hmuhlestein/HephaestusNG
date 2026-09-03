@@ -229,6 +229,7 @@ def _trigger_arbitration(
     from src.autopilot.orchestrator.phase_transitions import (
         _claim_phase_task_creation,
         _fire_phase_transition,
+        transition_phase_execution,
     )
 
     with get_db() as db:
@@ -398,8 +399,8 @@ def _trigger_arbitration(
             logger.info(f"[ARBITRATE] {phase_name} already has arbitration in flight -- skipping")
             return False
 
-        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
-        if execution:
+        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
+        if execution and execution.status != "in_progress":
             # Keep the phase alive/visible until arbitration resolves.
             # Deliberately NOT "completed": mark_phase_complete would bail
             # via its idempotency guard when arbitration resolves. And NOT
@@ -410,7 +411,38 @@ def _trigger_arbitration(
             # ordering logic. "in_progress" (with the arbitration task
             # that already exists) reads as a normal active phase to every
             # other advancement case.
-            execution.status = "in_progress"
+            #
+            # transition_phase_execution (Step 3 of docs/designs/
+            # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) replaces the direct,
+            # unconditional mutation here -- found unmigrated during a
+            # follow-up adversarial review. The status != "in_progress" gate
+            # is new: _VALID_TRANSITIONS has no (in_progress, in_progress)
+            # entry (no FSM self-loop), and this call site is regularly hit
+            # while already "in_progress" (e.g. an "arbitrate" decision on a
+            # phase whose task is done but never closed) -- routing that
+            # case through transition_phase_execution would have it rejected
+            # as an invalid transition every time. Every OTHER predecessor
+            # status this call site can see (pending/completed/failed/
+            # skipped, depending which caller fired -- one reopens a phase
+            # mark_phase_complete just closed to "completed", the other can
+            # fire against a "pending" retry/goto target) has a valid ->
+            # in_progress edge in _VALID_TRANSITIONS already. started_at is
+            # preserved at its CURRENT value via extra_fields, same
+            # reasoning as _escalate_unresolvable_goto's identical override:
+            # the old direct mutation never touched it, and every (x,
+            # in_progress) _FIELD_RESETS entry stamps "now" by default --
+            # restamping here would be a real behavior change. commit=False:
+            # the wf.status_reason write below is committed together with
+            # this one, same single transaction as before this migration --
+            # committing here first would split them, opening a window
+            # where an exception before that commit leaves the phase
+            # reopened but status_reason stale.
+            transition_phase_execution(
+                db, phase_id, "in_progress",
+                reason="_trigger_arbitration",
+                extra_fields={"started_at": execution.started_at},
+                commit=False,
+            )
 
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         working_directory = wf.working_directory if wf else None

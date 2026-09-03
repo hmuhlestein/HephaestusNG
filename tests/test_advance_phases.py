@@ -2338,6 +2338,15 @@ class TestCaseInProgressComplete:
             assert "requirements" in wf.status_reason  # phase-1's name, from sample_workflow
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.status == "failed"
+            # transition_phase_execution's extra_fields must carry completed_at
+            # explicitly -- _FIELD_RESETS has no (in_progress, failed) entry, so
+            # this would silently stay None without it (the same gap Step 3.1's
+            # _close_execution migration hit first).
+            assert execution.completed_at is not None
+            # The claim taken by _claim_phase_task_creation for this same call
+            # must still get cleared -- the caller's finally block clears it
+            # (a separate, later commit, same as before this migration).
+            assert execution.task_creation_claimed_at is None
 
     @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
     def test_exhausted_retry_cap_clears_a_stale_review_pause(
@@ -4869,6 +4878,43 @@ class TestTriggerArbitration:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert "requirements" in wf.status_reason
             assert "exhausted 5 attempts" in wf.status_reason
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_reopening_a_completed_execution_preserves_its_original_started_at(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: the PhaseExecution status write was migrated to
+        transition_phase_execution (Step 3 of docs/designs/
+        PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- found unmigrated
+        during a follow-up adversarial review. The real production case
+        this covers is _fire_phase_transition's "arbitrate" path, which
+        calls _trigger_arbitration only after mark_phase_complete has
+        already closed the execution to "completed". Every (x, in_progress)
+        _FIELD_RESETS entry stamps started_at="now" by default -- correct
+        for a genuinely fresh dispatch cycle, but wrong here: this is the
+        SAME cycle's execution being kept alive pending arbitration, not a
+        new one starting, so its original started_at must survive."""
+        from datetime import datetime
+
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
+
+        original_started_at = datetime(2020, 1, 1)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "completed"
+            execution.started_at = original_started_at
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted 5 attempts", MagicMock()
+        )
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at == original_started_at
 
     @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_creates_its_own_sentinel_agent_if_missing(

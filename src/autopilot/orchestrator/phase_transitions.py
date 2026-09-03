@@ -1625,7 +1625,12 @@ def check_and_log_stuck_active_workflows(db, logger: "OrchestratorLogger") -> No
 
 
 _VALID_TRANSITIONS: Dict[str, set] = {
-    PhaseExecutionStatus.PENDING: {PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.SKIPPED},
+    # FAILED added here for termination_handler.py's _cleanup_workflow_resources:
+    # a workflow terminated while a phase never started must be able to mark
+    # that phase "failed" rather than leaving it stuck "pending" forever.
+    # Confirmed via repo-wide grep this is the only call site that needs
+    # pending -> failed, and nothing else depends on the pair staying rejected.
+    PhaseExecutionStatus.PENDING: {PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.SKIPPED, PhaseExecutionStatus.FAILED},
     PhaseExecutionStatus.IN_PROGRESS: {PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.FAILED, PhaseExecutionStatus.PENDING},  # pending: goto rewind
     PhaseExecutionStatus.COMPLETED: {PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.PENDING},  # goto re-entry redo
     PhaseExecutionStatus.FAILED: {PhaseExecutionStatus.IN_PROGRESS, PhaseExecutionStatus.PENDING},  # retry or un-fail
@@ -3960,17 +3965,52 @@ def _create_corrective_task_body(
             for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
                 feat.status = "active"
 
-        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
         if execution and execution.status != "in_progress":
-            execution.status = "in_progress"
-            # NOT clearing task_creation_claimed_at here -- the wrapper
-            # (_create_corrective_task) now holds this phase's claim for
-            # this whole call and releases it itself once the task exists
-            # (or creation fails). Clearing it here, mid-body, would open
-            # exactly the race the wrapper's claim exists to close: a
-            # concurrent self-heal caller could claim the "now unclaimed"
-            # phase and create a sibling task before db.add(task) below
-            # even commits.
+            # transition_phase_execution (Step 3 of docs/designs/
+            # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) replaces the direct
+            # mutation here -- found unmigrated during a follow-up
+            # adversarial review. Both extra_fields overrides are required,
+            # not optional: every (x, in_progress) row in _FIELD_RESETS
+            # clears task_creation_claimed_at and stamps started_at="now",
+            # and both defaults are wrong for this specific call site.
+            #
+            # task_creation_claimed_at must be explicitly preserved at its
+            # CURRENT value -- the wrapper (_create_corrective_task) holds
+            # this phase's claim for the whole call and releases it itself
+            # once the task exists (or creation fails). Letting the default
+            # table clear it here, mid-body, would open exactly the race
+            # the wrapper's claim exists to close: a concurrent self-heal
+            # caller could claim the "now unclaimed" phase and create a
+            # sibling task before db.add(task) below even commits.
+            #
+            # started_at is preserved at its CURRENT value for the same
+            # reason as _escalate_unresolvable_goto's identical override:
+            # the old direct mutation never touched it at all, and
+            # restamping "now" here would be a real behavior change this
+            # migration must not introduce silently.
+            #
+            # commit=False -- caught in a follow-up adversarial review of
+            # this very migration: the db.commit() a few lines below (after
+            # db.add(task)) is what durably persists this write, together
+            # with the wf.status="active"/feat.status="active" writes above
+            # AND the new task row, exactly as one commit did before this
+            # migration. Leaving the default commit=True here would commit
+            # this phase back to "in_progress" (with the workflow "active"
+            # and the claim held) BEFORE the corrective task exists -- an
+            # exception between here and db.add(task) would then leave a
+            # phase stuck "in_progress" and a workflow stuck "active" with
+            # no task and no agent ever created, instead of the whole
+            # attempt rolling back together as it did before this migration.
+            transition_phase_execution(
+                db, phase_id, "in_progress",
+                reason="_create_corrective_task_body",
+                extra_fields={
+                    "task_creation_claimed_at": execution.task_creation_claimed_at,
+                    "started_at": execution.started_at,
+                },
+                commit=False,
+            )
 
         phase = db.query(Phase).filter_by(id=phase_id).first()
         done_def = " AND ".join(phase.done_definitions) if phase and phase.done_definitions else "Complete phase objectives"

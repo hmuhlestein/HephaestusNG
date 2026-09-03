@@ -1664,12 +1664,26 @@ class PhaseManager:
             # (start_execution's call to start Phase 1). No extra_fields
             # needed: _FIELD_RESETS[(pending, in_progress)] already sets
             # started_at="now" exactly matching this line's own mutation.
+            #
+            # commit=False -- caught in a follow-up adversarial review of
+            # this migration itself: start_execution's own comment (a few
+            # frames up the call stack, around its task_creation_claimed_at
+            # write) documents that the WHOLE method deliberately runs as
+            # one transaction that "only commits on return" -- a fix for a
+            # real duplicate-first-task incident (tasks de0c5972/8ac50aa3).
+            # The default commit=True would silently split that back into
+            # two transactions here. Harmless today (nothing DB-relevant
+            # runs between this call and start_execution's own return), but
+            # leaving the default would trap the next person who adds code
+            # after this call expecting the documented one-transaction
+            # guarantee to still hold.
             from src.autopilot.orchestrator.phase_transitions import (
                 transition_phase_execution,
             )
 
             if transition_phase_execution(
-                session, phase_id, "in_progress", reason="_start_phase"
+                session, phase_id, "in_progress", reason="_start_phase",
+                commit=False,
             ) is not None:
                 logger.info(f"Started phase {phase_id}")
 
