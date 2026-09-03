@@ -140,6 +140,30 @@ def _guard_mock_paths(monkeypatch):
     monkeypatch.setattr(builtins, "open", guarded_open)
 
 
+@pytest.fixture(autouse=True)
+def _restore_global_config_paths():
+    """Restore the process-global config singleton's path fields after each test.
+
+    get_config() returns a module-level singleton, not something pytest
+    resets between tests. Anything that mutates config.git.main_repo_path /
+    config.paths.project_root / config.paths.worktree_base_path directly
+    (e.g. _apply_active_project in project_routes.py) leaves those pointed
+    at a since-deleted tmp_path for the rest of the process, breaking later
+    tests that fall back to reading this singleton (WorktreeManager,
+    validate_file_path's _default_allowed_roots) when run in full-suite
+    order. See docs/PENDING_TEST_FAILURES.md Group A."""
+    from src.core.simple_config import get_config
+
+    config = get_config()
+    main_repo_path = config.git.main_repo_path
+    project_root = config.paths.project_root
+    worktree_base_path = config.paths.worktree_base_path
+    yield
+    config.git.main_repo_path = main_repo_path
+    config.paths.project_root = project_root
+    config.paths.worktree_base_path = worktree_base_path
+
+
 @pytest.fixture
 def mock_heph_config():
     """Return a Mock config with all common fields pre-populated.
