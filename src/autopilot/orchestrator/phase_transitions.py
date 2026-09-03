@@ -343,6 +343,20 @@ def mark_skipped_over_phases(db, workflow_id: str, from_order: int, to_order: in
 
     Only downgrades "pending" -- a genuinely "completed" phase (from an
     earlier pass this jump doesn't need to redo) must not get overwritten.
+
+    Migrated to transition_phase_execution (Step 3 of docs/designs/
+    PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- caught during a
+    follow-up adversarial review as the one writer from that document's
+    own original "roughly ten places" catalog (writer #5) that fell
+    through the cracks of Step 3's actual migration list, still doing
+    the exact naive check-then-act mutation this whole refactor exists
+    to eliminate: two concurrent callers could both read "pending" on
+    the same row and both write, and worse, a concurrent dispatch that
+    had just moved this SAME phase to "in_progress" between this
+    function's read and write would get silently overwritten back to
+    "skipped". No extra_fields needed: _FIELD_RESETS[(pending, skipped)]
+    already sets completed_at="now", exactly matching this loop's own
+    direct mutation.
     """
     skipped_phases = (
         db.query(Phase)
@@ -361,10 +375,7 @@ def mark_skipped_over_phases(db, workflow_id: str, from_order: int, to_order: in
                 f"{from_order} to order {to_order} -- marking its "
                 "PhaseExecution 'skipped' instead of leaving it 'pending' forever"
             )
-            sp_execution.status = "skipped"
-            sp_execution.completed_at = utc_now()
-    if skipped_phases:
-        db.commit()
+            transition_phase_execution(db, sp.id, "skipped", reason="mark_skipped_over_phases")
 
 
 def reopen_phase_execution(
@@ -1628,8 +1639,9 @@ _FIELD_RESETS: Dict[Tuple[str, str], dict] = {
     # either way (each one filters to status='completed'/'failed' first,
     # so a freshly-reopened 'in_progress' row is excluded from all of them
     # regardless). Left unset here to match reality exactly, and to stay
-    # consistent with _escalate_unresolvable_goto's still-unmigrated
-    # direct reopen_phase_execution call, which also leaves it untouched.
+    # consistent with _escalate_unresolvable_goto/_handle_evaluation_
+    # arbitrate's own extra_fields overrides (Step 3.5), which also leave
+    # it untouched for this same (completed, in_progress) pair.
     (PhaseExecutionStatus.COMPLETED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
     (PhaseExecutionStatus.FAILED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
     (PhaseExecutionStatus.SKIPPED, PhaseExecutionStatus.IN_PROGRESS): {"started_at": "now", "task_creation_claimed_at": None},
@@ -1672,12 +1684,14 @@ def transition_phase_execution(
     WHERE status=:from_status clause) is a property of that one SQL
     statement, independent of when the surrounding transaction commits.
 
-    Step 2 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md --
-    additive and not yet wired into any existing call site. See that
-    document for why this must be a single atomic UPDATE (mirroring
-    _claim_phase_task_creation) rather than SELECT-then-mutate: two
-    concurrent callers could otherwise both read the same from_status,
-    both see their transition as valid, and both write.
+    Introduced additive and unwired in Step 2 of docs/designs/
+    PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md; Step 3 has since migrated
+    every real PhaseExecution.status writer in the codebase onto this
+    function. See that document for why this must be a single atomic
+    UPDATE (mirroring _claim_phase_task_creation) rather than
+    SELECT-then-mutate: two concurrent callers could otherwise both read
+    the same from_status, both see their transition as valid, and both
+    write.
     """
     # populate_existing() matters, not just style: this project's sessions
     # run with expire_on_commit=False, and several existing atomic claim/

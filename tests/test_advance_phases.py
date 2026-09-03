@@ -6348,6 +6348,136 @@ class TestRetryFailedTasksWithDone:
             assert task.enriched_description == "Execute phase X: do the thing"
 
 
+class TestMarkSkippedOverPhases:
+    """Tests for mark_skipped_over_phases, migrated to
+    transition_phase_execution (Step 3 of docs/designs/
+    PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- caught with zero
+    pre-existing test coverage anywhere in the codebase during a
+    follow-up adversarial review, despite being writer #5 in that
+    document's own original catalog and carrying a real, documented
+    "observed live" incident (workflow c1f0839c's design_review sat
+    "pending" for weeks after a goto jumped past it)."""
+
+    def _seed(self, db, statuses):
+        """statuses: {order: status} for phases 1..N, all in workflow
+        wf-1. Only phases with a non-None status get a PhaseExecution row."""
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            for order, status in statuses.items():
+                session.add(Phase(
+                    id=f"phase-{order}", workflow_id="wf-1", order=order,
+                    name=f"phase{order}", description="d", done_definitions=["x"],
+                ))
+                if status is not None:
+                    session.add(PhaseExecution(
+                        id=f"exec-{order}", phase_id=f"phase-{order}",
+                        workflow_execution_id="wf-1", status=status,
+                    ))
+
+    def test_downgrades_a_pending_phase_strictly_between_from_and_to_order(self, db_manager):
+        from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+        from src.core.database import PhaseExecution
+
+        self._seed(db_manager, {1: "completed", 2: "pending", 3: "pending"})
+
+        with db_manager.session_scope() as session:
+            mark_skipped_over_phases(session, "wf-1", 1, 3, MagicMock())
+
+        with db_manager.session_scope() as session:
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            assert exec2.status == "skipped"
+            assert exec2.completed_at is not None
+            # order 3 is the target itself (jump lands there), strictly
+            # excluded by the "< to_order" filter -- must stay untouched.
+            exec3 = session.query(PhaseExecution).filter_by(phase_id="phase-3").first()
+            assert exec3.status == "pending"
+
+    def test_does_not_touch_a_completed_phase(self, db_manager):
+        """The core guarantee this function exists for: a genuinely
+        completed phase from an earlier pass must survive a later jump
+        over it untouched, not get silently downgraded to 'skipped'."""
+        from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+        from src.core.database import PhaseExecution
+
+        self._seed(db_manager, {1: "completed", 2: "completed", 3: "pending"})
+
+        with db_manager.session_scope() as session:
+            mark_skipped_over_phases(session, "wf-1", 1, 3, MagicMock())
+
+        with db_manager.session_scope() as session:
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            assert exec2.status == "completed"
+            assert exec2.completed_at is None  # untouched, not restamped
+
+    def test_does_not_touch_phases_outside_the_order_range(self, db_manager):
+        from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+        from src.core.database import PhaseExecution
+
+        self._seed(db_manager, {1: "completed", 2: "pending", 3: "pending", 4: "pending"})
+
+        with db_manager.session_scope() as session:
+            mark_skipped_over_phases(session, "wf-1", 2, 3, MagicMock())
+
+        with db_manager.session_scope() as session:
+            # Strictly between 2 and 3 is empty -- nothing should change.
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            exec3 = session.query(PhaseExecution).filter_by(phase_id="phase-3").first()
+            exec4 = session.query(PhaseExecution).filter_by(phase_id="phase-4").first()
+            assert exec2.status == "pending"
+            assert exec3.status == "pending"
+            assert exec4.status == "pending"
+
+    def test_skips_multiple_pending_phases_in_one_call(self, db_manager):
+        """Batch behavior, mirroring reset_stale_executions_on_goto's own
+        multi-row coverage -- this function iterates a whole range, not
+        just one phase."""
+        from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+        from src.core.database import PhaseExecution
+
+        self._seed(db_manager, {1: "completed", 2: "pending", 3: "pending", 4: "pending", 5: "pending"})
+
+        with db_manager.session_scope() as session:
+            mark_skipped_over_phases(session, "wf-1", 1, 5, MagicMock())
+
+        with db_manager.session_scope() as session:
+            for order in (2, 3, 4):
+                execution = session.query(PhaseExecution).filter_by(phase_id=f"phase-{order}").first()
+                assert execution.status == "skipped", f"phase-{order} should be skipped"
+
+    def test_a_phase_with_no_phase_execution_row_is_a_noop(self, db_manager):
+        """A Phase that was never dispatched (no PhaseExecution row at
+        all) must not raise -- there's nothing to downgrade."""
+        from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+
+        self._seed(db_manager, {1: "completed", 2: None, 3: "pending"})
+
+        with db_manager.session_scope() as session:
+            mark_skipped_over_phases(session, "wf-1", 1, 3, MagicMock())  # must not raise
+
+    def test_does_not_touch_an_in_progress_phase(self, db_manager):
+        """A phase actually running right now must never be silently
+        downgraded to 'skipped' -- the exact race this migration closes:
+        the old direct-mutation code gated on a plain read of 'pending',
+        so a phase that became in_progress between that read and a
+        concurrent dispatch elsewhere had no protection here. In a
+        single-threaded test this exercises the gate at the current,
+        real status rather than a raced one, but the same atomic check
+        is what would protect a genuinely concurrent case too."""
+        from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+        from src.core.database import PhaseExecution
+
+        self._seed(db_manager, {1: "completed", 2: "in_progress", 3: "pending"})
+
+        with db_manager.session_scope() as session:
+            mark_skipped_over_phases(session, "wf-1", 1, 3, MagicMock())
+
+        with db_manager.session_scope() as session:
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            assert exec2.status == "in_progress"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
