@@ -137,7 +137,7 @@ class TestResyncIncompletePhasePromptsFromYaml:
     already-created workflow. This resync closes that gap on every
     startup, mirroring migrate_is_active_column's own convention."""
 
-    def _seed(self, db, *, execution_status="pending", launch_params=None, definition_id="fake_wf"):
+    def _seed(self, db, *, execution_status="pending", launch_params=None, definition_id="fake_wf", workflow_status="active"):
         session = db.get_session()
         try:
             session.add(
@@ -147,6 +147,7 @@ class TestResyncIncompletePhasePromptsFromYaml:
                     phases_folder_path="/tmp/wf1",
                     definition_id=definition_id,
                     launch_params=launch_params,
+                    status=workflow_status,
                 )
             )
             session.add(
@@ -304,6 +305,26 @@ class TestResyncIncompletePhasePromptsFromYaml:
 
         phase = self._get_phase(db)
         assert phase.description == "NEW description"
+
+    def test_a_completed_workflows_phases_are_never_scanned(self, db, monkeypatch):
+        """The workflow-level status!='completed' filter is a performance
+        optimization (skip querying phases for workflows that can't have
+        anything left to resync), not just a per-phase check -- lock in
+        that it still behaves correctly even in the edge case of a
+        completed workflow with a stray non-terminal PhaseExecution row."""
+        import src.workflow_registry as workflow_registry
+
+        self._seed(db, execution_status="pending", workflow_status="completed")
+        monkeypatch.setattr(
+            workflow_registry,
+            "get_all_workflow_definitions",
+            lambda: [_FakeDefinition("fake_wf", [self._fresh_phase()])],
+        )
+
+        resync_incomplete_phase_prompts_from_yaml(db)
+
+        phase = self._get_phase(db)
+        assert phase.description == "OLD description"
 
     def test_a_definitions_load_failure_is_swallowed_rather_than_raised(self, db, monkeypatch):
         import src.workflow_registry as workflow_registry
