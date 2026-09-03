@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Anti-mid-pipeline-autoupdate `claude` wrapper for CLI agent sessions (any
+# CLIAgentInterface implementation can put this directory first on its
+# launch command's PATH -- see AGENT_SAFE_BIN_DIR in
+# src/interfaces/cli_interface.py for where that's wired for `claude`).
+#
+# Claude Code auto-updates itself in place, replacing its own binary out
+# from under any process still running against the old one. Observed live:
+# it did this mid-run during a long pipeline, and for the few seconds the
+# binary didn't exist, three separate agent-launch attempts in a row hit
+# "claude CLI failed to start -- shell reported the launch command was not
+# found" (_detect_launch_failure, launch_pipeline.py) -- exhausting the
+# retry budget and surfacing only a generic "Retry agent creation failed"
+# after 4.5 hours of otherwise healthy work, with no hint the real cause
+# was a self-inflicted, entirely transient binary swap.
+#
+# DISABLE_AUTOUPDATER=1 turns this off for exactly the processes launched
+# through this wrapper (every agent tmux session Hephaestus spawns) without
+# touching the user's own interactive `claude` sessions elsewhere -- this
+# directory is only ever prepended to PATH for that one launch command, not
+# the user's shell rc files or global PATH.
+
+set -euo pipefail
+
+# Find the real claude binary, skipping past this wrapper's own directory
+# so we don't recurse into ourselves.
+real_claude=""
+IFS=':' read -ra path_dirs <<< "$PATH"
+for dir in "${path_dirs[@]}"; do
+    if [[ "$dir" == "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" ]]; then
+        continue
+    fi
+    if [[ -x "$dir/claude" ]]; then
+        real_claude="$dir/claude"
+        break
+    fi
+done
+if [[ -z "$real_claude" ]]; then
+    real_claude="/usr/local/bin/claude"
+fi
+
+export DISABLE_AUTOUPDATER=1
+exec "$real_claude" "$@"
