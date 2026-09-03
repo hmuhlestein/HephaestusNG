@@ -419,7 +419,22 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) continue;
       filtered.push(line);
     }
-    return filtered.join('\n');
+    // Reset SGR state (color/background) at the end of every kept line,
+    // not just '\n'-join them plain. ansiConverter.toHtml below runs ONCE
+    // over this whole multi-line blob, and ansi-to-html correctly (per
+    // real terminal semantics) carries SGR state across embedded '\n's --
+    // but this isn't one continuous live terminal stream, it's every
+    // historical line of the transcript concatenated. Some CLIs (observed
+    // live: Claude Code's own "Task ID: ..." banner chip) set a
+    // background via \x1b[100m and only reset the FOREGROUND afterward
+    // (\x1b[39m, never \x1b[49m/\x1b[0m) -- on a real terminal that's
+    // invisible because the badge's screen region gets redrawn/overwritten
+    // moments later, but here that unclosed background silently persists
+    // and bleeds into every later line rendered in this same pass,
+    // corrupting colors for the rest of the visible session. \x1b[0m is a
+    // full reset (fg+bg+bold/etc), so this can't leave a HALF-reset state
+    // to leak forward the same way.
+    return filtered.join('\x1b[0m\n');
   }, [processedOutput, searchTerm]);
 
   // Convert ANSI codes to HTML
