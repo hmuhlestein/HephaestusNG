@@ -374,12 +374,19 @@ def mark_skipped_over_phases(db, workflow_id: str, from_order: int, to_order: in
     for sp in skipped_phases:
         sp_execution = db.query(PhaseExecution).filter_by(phase_id=sp.id).first()
         if sp_execution and sp_execution.status == "pending":
-            logger.info(
-                f"[PHASE] {sp.name} skipped over by a jump from order "
-                f"{from_order} to order {to_order} -- marking its "
-                "PhaseExecution 'skipped' instead of leaving it 'pending' forever"
-            )
-            transition_phase_execution(db, sp.id, "skipped", reason="mark_skipped_over_phases")
+            # Logged only on an actual success -- caught during a
+            # follow-up gap-check on this whole migration: this used to
+            # log unconditionally BEFORE the write, claiming the skip
+            # happened even if transition_phase_execution's atomic UPDATE
+            # then lost the race (a concurrent dispatch moved this exact
+            # phase to "in_progress" between the read above and the write
+            # below) and correctly declined to overwrite it.
+            if transition_phase_execution(db, sp.id, "skipped", reason="mark_skipped_over_phases") is not None:
+                logger.info(
+                    f"[PHASE] {sp.name} skipped over by a jump from order "
+                    f"{from_order} to order {to_order} -- marking its "
+                    "PhaseExecution 'skipped' instead of leaving it 'pending' forever"
+                )
 
 
 def reopen_phase_execution(
@@ -1531,13 +1538,6 @@ def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: "Orche
     if not execution or execution.status != "pending":
         return
 
-    phase = db.query(Phase).filter_by(id=execution.phase_id).first()
-    logger.warning(
-        f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
-        f"PhaseExecution stuck 'pending' despite done task "
-        f"{most_recent_done_task.id[:8]} -- flipping to in_progress so "
-        "dispatch can see it"
-    )
     # transition_phase_execution's atomic UPDATE replaces the direct
     # mutation here (Step 3 of docs/designs/
     # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- found unmigrated
@@ -1549,11 +1549,25 @@ def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: "Orche
     # long after that task finished), or _fire_phase_transition's
     # done_count/incomplete queries would wrongly exclude that same task
     # from what they treat as its own cycle.
-    transition_phase_execution(
+    #
+    # Logged only on an actual success -- caught during a follow-up
+    # gap-check on this whole migration: this used to log a WARNING
+    # unconditionally BEFORE the write, claiming the flip happened even
+    # if the atomic UPDATE then lost the race (e.g. a concurrent dispatch
+    # already moved this exact phase on) and correctly declined to
+    # overwrite it.
+    if transition_phase_execution(
         db, execution.phase_id, "in_progress",
         reason="_release_pending_phases_with_done_tasks",
         extra_fields={"started_at": execution.started_at or most_recent_done_task.created_at},
-    )
+    ) is not None:
+        phase = db.query(Phase).filter_by(id=execution.phase_id).first()
+        logger.warning(
+            f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
+            f"PhaseExecution stuck 'pending' despite done task "
+            f"{most_recent_done_task.id[:8]} -- flipping to in_progress so "
+            "dispatch can see it"
+        )
 
 
 # Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md: detect
