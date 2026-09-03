@@ -55,6 +55,19 @@ class AutopilotService:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._stop_event = asyncio.Event()
+        # start()/stop()/pause_for_restart() all follow the same "check
+        # self.running, then mutate _running/_task" shape, but only stop()
+        # and pause_for_restart() have a real yield point (their own
+        # `await asyncio.wait_for(self._task, ...)`) between setting
+        # _running = False and finishing cleanup -- start() itself has none,
+        # so two concurrent start() calls can't interleave on their own,
+        # but a start() landing in that stop()/pause_for_restart() window
+        # would see running=False, fully re-initialize (including creating
+        # a brand new _task), and race the in-flight stop/pause's own read
+        # of self._task -- which could then wait on/cancel the WRONG task.
+        # This lock makes "only one of start/stop/pause_for_restart in
+        # flight at a time" explicit instead of accidental.
+        self._lifecycle_lock = asyncio.Lock()
         self._project_path: Optional[str] = None
         self._design_queue: Optional[str] = None
         self._max_iterations: int = 10
@@ -88,67 +101,68 @@ class AutopilotService:
         Raises:
             RuntimeError: If pipeline is already running
         """
-        if self.running:
-            raise RuntimeError("Pipeline is already running")
+        async with self._lifecycle_lock:
+            if self.running:
+                raise RuntimeError("Pipeline is already running")
 
-        project = Path(project_path).resolve()
-        if not project.exists():
-            raise ValueError(f"Project path does not exist: {project_path}")
+            project = Path(project_path).resolve()
+            if not project.exists():
+                raise ValueError(f"Project path does not exist: {project_path}")
 
-        # Activate the matching project so pick_next_design() finds its
-        # designs, auto-creating the AutopilotProject row if none exists,
-        # and resume any workflows the user had explicitly paused for it.
-        # Extracted to _get_or_create_project_id (orchestrator.py) so
-        # callers that need project_id BEFORE starting a pipeline (e.g.
-        # POST /start's concurrency-cap check) share this exact logic
-        # instead of a second, divergent copy. Resolved before the git-repo
-        # check below so a multi-repo project's registered ProjectRepo rows
-        # (see repo_resolution.py) are available to it.
-        try:
-            from src.autopilot.orchestrator.state import _get_or_create_project_id
+            # Activate the matching project so pick_next_design() finds its
+            # designs, auto-creating the AutopilotProject row if none exists,
+            # and resume any workflows the user had explicitly paused for it.
+            # Extracted to _get_or_create_project_id (orchestrator.py) so
+            # callers that need project_id BEFORE starting a pipeline (e.g.
+            # POST /start's concurrency-cap check) share this exact logic
+            # instead of a second, divergent copy. Resolved before the git-repo
+            # check below so a multi-repo project's registered ProjectRepo rows
+            # (see repo_resolution.py) are available to it.
+            try:
+                from src.autopilot.orchestrator.state import _get_or_create_project_id
 
-            self.project_id = _get_or_create_project_id(str(project))
-        except Exception as e:
-            logger.warning(f"Could not activate project: {e}")
+                self.project_id = _get_or_create_project_id(str(project))
+            except Exception as e:
+                logger.warning(f"Could not activate project: {e}")
 
-        # Verify there's a real git repo to work against -- either
-        # project_path itself (the traditional single-repo case), or, for a
-        # multi-repo project, at least one registered ProjectRepo (each
-        # already validated as a real git repo when added via
-        # add_project_repo/_validate_repo_path). A multi-repo workspace
-        # root deliberately need not be a git repo itself -- see
-        # repo_resolution.py's resolve_repo_path/get_project_repos, and
-        # design_file_routes.py's own "base_dir need not itself be a git
-        # repo" note.
-        from src.core.repo_resolution import git_repo_error
+            # Verify there's a real git repo to work against -- either
+            # project_path itself (the traditional single-repo case), or, for a
+            # multi-repo project, at least one registered ProjectRepo (each
+            # already validated as a real git repo when added via
+            # add_project_repo/_validate_repo_path). A multi-repo workspace
+            # root deliberately need not be a git repo itself -- see
+            # repo_resolution.py's resolve_repo_path/get_project_repos, and
+            # design_file_routes.py's own "base_dir need not itself be a git
+            # repo" note.
+            from src.core.repo_resolution import git_repo_error
 
-        repo_problem = git_repo_error(project, project_id=self.project_id)
-        if repo_problem:
-            raise ValueError(repo_problem)
+            repo_problem = git_repo_error(project, project_id=self.project_id)
+            if repo_problem:
+                raise ValueError(repo_problem)
 
-        dq = design_queue or str(project / DESIGN_CONTEXT_SUBDIR)
-        Path(dq).mkdir(parents=True, exist_ok=True)
+            dq = design_queue or str(project / DESIGN_CONTEXT_SUBDIR)
+            Path(dq).mkdir(parents=True, exist_ok=True)
 
-        # Reset state
-        self._stop_event.clear()
-        self._project_path = str(project)
-        self._design_queue = dq
-        self._max_iterations = max_iterations
-        self._start_time = time.time()
-        self._current_design = None
-        self._designs_processed = 0
-        self._designs_succeeded = 0
-        self._designs_failed = 0
-        self._error = None
-        self._running = True
+            # Reset state
+            self._stop_event.clear()
+            self._project_path = str(project)
+            self._design_queue = dq
+            self._max_iterations = max_iterations
+            self._start_time = time.time()
+            self._current_design = None
+            self._designs_processed = 0
+            self._designs_succeeded = 0
+            self._designs_failed = 0
+            self._error = None
+            self._running = True
 
-        # Start the pipeline task
-        self._task = asyncio.create_task(self._run_pipeline())
-        logger.info(f"Autopilot service started for {project}")
+            # Start the pipeline task
+            self._task = asyncio.create_task(self._run_pipeline())
+            logger.info(f"Autopilot service started for {project}")
 
-        self._persist_running_state()
+            self._persist_running_state()
 
-        return {"started": True, "project": str(project)}
+            return {"started": True, "project": str(project)}
 
     def _persist_running_state(self) -> None:
         """Write current run params so a restart can resume this pipeline."""
@@ -266,34 +280,35 @@ class AutopilotService:
         Returns:
             Dict with 'stopped' key and stats
         """
-        if not self.running:
-            return {"stopped": True, "message": "Pipeline was not running"}
+        async with self._lifecycle_lock:
+            if not self.running:
+                return {"stopped": True, "message": "Pipeline was not running"}
 
-        self._stop_event.set()
-        self._running = False
-        self.clear_persisted_state()
+            self._stop_event.set()
+            self._running = False
+            self.clear_persisted_state()
 
-        # Wait for task to finish (with timeout)
-        if self._task:
-            try:
-                await asyncio.wait_for(self._task, timeout=10.0)
-            except asyncio.TimeoutError:
-                self._task.cancel()
+            # Wait for task to finish (with timeout)
+            if self._task:
                 try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
+                    await asyncio.wait_for(self._task, timeout=10.0)
+                except asyncio.TimeoutError:
+                    self._task.cancel()
+                    try:
+                        await self._task
+                    except asyncio.CancelledError:
+                        pass
 
-        elapsed = int(time.time() - self._start_time) if self._start_time else 0
-        logger.info(f"Autopilot service stopped after {elapsed}s")
+            elapsed = int(time.time() - self._start_time) if self._start_time else 0
+            logger.info(f"Autopilot service stopped after {elapsed}s")
 
-        return {
-            "stopped": True,
-            "elapsed_seconds": elapsed,
-            "designs_processed": self._designs_processed,
-            "designs_succeeded": self._designs_succeeded,
-            "designs_failed": self._designs_failed,
-        }
+            return {
+                "stopped": True,
+                "elapsed_seconds": elapsed,
+                "designs_processed": self._designs_processed,
+                "designs_succeeded": self._designs_succeeded,
+                "designs_failed": self._designs_failed,
+            }
 
     async def pause_for_restart(self) -> Dict[str, Any]:
         """Pause the pipeline for a backend restart -- same stop-signal and
@@ -313,33 +328,34 @@ class AutopilotService:
         almost always hitting the cancel fallback instead of the clean
         exit path this exists to give the loop a chance to reach.
         """
-        if not self.running:
-            return {"paused": True, "message": "Pipeline was not running"}
+        async with self._lifecycle_lock:
+            if not self.running:
+                return {"paused": True, "message": "Pipeline was not running"}
 
-        self._stop_event.set()
-        self._running = False
+            self._stop_event.set()
+            self._running = False
 
-        if self._task:
-            try:
-                await asyncio.wait_for(self._task, timeout=45.0)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[PAUSE-FOR-RESTART] Project {self.project_id}: pipeline "
-                    "did not exit cleanly within 45s, cancelling"
-                )
-                self._task.cancel()
+            if self._task:
                 try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
+                    await asyncio.wait_for(self._task, timeout=45.0)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[PAUSE-FOR-RESTART] Project {self.project_id}: pipeline "
+                        "did not exit cleanly within 45s, cancelling"
+                    )
+                    self._task.cancel()
+                    try:
+                        await self._task
+                    except asyncio.CancelledError:
+                        pass
 
-        elapsed = int(time.time() - self._start_time) if self._start_time else 0
-        logger.info(
-            f"[PAUSE-FOR-RESTART] Project {self.project_id}: paused after "
-            f"{elapsed}s, persisted state kept for auto-resume"
-        )
+            elapsed = int(time.time() - self._start_time) if self._start_time else 0
+            logger.info(
+                f"[PAUSE-FOR-RESTART] Project {self.project_id}: paused after "
+                f"{elapsed}s, persisted state kept for auto-resume"
+            )
 
-        return {"paused": True, "elapsed_seconds": elapsed}
+            return {"paused": True, "elapsed_seconds": elapsed}
 
     def status(self) -> Dict[str, Any]:
         """Get current pipeline status.
