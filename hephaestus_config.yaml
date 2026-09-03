@@ -10,6 +10,14 @@ git:
   # main_repo_path: defaults to current working directory
   branch_prefix: agent-
   auto_commit: true
+  # allow_local_merge_fallback: default false. When a review-approved
+  # feature's PR can't be merged via `gh pr merge` (a real conflict, or a
+  # required check that hasn't passed), the approval flow can fall back to
+  # merging locally and pushing directly to main -- which bypasses the
+  # same branch protection a failed required check represents. Leave this
+  # off unless you understand and accept that tradeoff; a stuck PR is left
+  # open for manual handling instead.
+  # allow_local_merge_fallback: false
 llm:
   embedding_model: BAAI/bge-small-en-v1.5
   embedding_provider: fastembed
