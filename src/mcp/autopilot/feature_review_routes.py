@@ -642,21 +642,31 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 # ran to completion earlier in the workflow, same as any
                 # phase that's since moved on. _create_phase_task's own
                 # task-creation path always reopens the PhaseExecution to
-                # match a freshly-created task (see reopen_phase_execution);
-                # this ad-hoc creation path didn't, leaving a "completed"
-                # (or "pending") phase with a live pending task that no
-                # dispatch/self-heal case recognizes -- Case 2 only looks
-                # at phases already "in_progress", and the two pending-
-                # phase self-heals (_release_pending_phases_with_done_
-                # tasks/_release_pending_phases_with_orphaned_task) don't
-                # match "completed" at all. Confirmed live: task 146d191d
-                # sat here, its own phase reading "completed", invisible
-                # to every sweep tick.
-                from src.autopilot.orchestrator.phase_transitions import reopen_phase_execution
+                # match a freshly-created task (see
+                # transition_phase_execution); this ad-hoc creation path
+                # didn't, leaving a "completed" (or "pending") phase with
+                # a live pending task that no dispatch case recognizes --
+                # Case 2 only looks at phases already "in_progress".
+                # Confirmed live: task 146d191d sat here, its own phase
+                # reading "completed", invisible to every sweep tick.
+                #
+                # transition_phase_execution's atomic UPDATE replaces
+                # reopen_phase_execution's plain mutation here (Step 3 of
+                # docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md)
+                # -- missed in that step's own sweep, which only grepped
+                # phase_transitions.py itself rather than the whole repo.
+                # No extra_fields needed: _FIELD_RESETS's started_at="now"
+                # default matches this site's real behavior exactly.
+                from src.autopilot.orchestrator.phase_transitions import (
+                    transition_phase_execution,
+                )
                 from src.core.database import PhaseExecution
                 dev_execution = db.query(PhaseExecution).filter_by(phase_id=dev_phase.id).first()
                 if dev_execution and dev_execution.status != "in_progress":
-                    reopen_phase_execution(dev_execution, status="in_progress", started_at="now")
+                    transition_phase_execution(
+                        db, dev_phase.id, "in_progress",
+                        reason="feature_review_routes.restart_with_feedback",
+                    )
 
                 db.flush()
                 restartable.append(new_task)
