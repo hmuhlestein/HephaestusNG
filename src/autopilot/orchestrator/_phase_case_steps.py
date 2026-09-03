@@ -140,12 +140,19 @@ def _retry_failed_tasks_with_done(db, phase, workflow_id, execution, logger,
         )
         .all()
     )
-    # Filter to retryable tasks (orphaned, session limits, and stuck tasks are always retryable)
+    # Filter to retryable tasks (orphaned, session/spend/usage limits, and
+    # stuck tasks are always retryable)
     # Read max_task_retries from workflow config, default to 5
 
     max_retry_count = get_max_task_retries(phase.workflow_id)
+    # "usage limit" must be checked alongside "session limit"/"spend limit"
+    # -- see phase_transitions.py's identical copy of this classifier for
+    # why (mechanical_recovery.py's _check_spend_or_session_limit produces
+    # that third wording too, and missing it here left it wrongly subject
+    # to the plain retry cap instead of always-retryable).
     def _limit_failure(r):
-        return "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+        r = (r or "").lower()
+        return "session limit" in r or "spend limit" in r or "usage limit" in r
     def _stuck_failure(r):
         return "task stuck" in (r or "").lower()
     retryable_tasks = [

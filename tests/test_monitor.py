@@ -3089,7 +3089,7 @@ class TestSessionLimitPause:
         mock_agent_manager.terminate_agent.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_usage_limit_banner_dispatches_fallback_when_configured(
+    async def test_usage_limit_banner_leaves_agent_running_not_hard_blocked(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
         """Claude Code's rolling-usage-window banner ("Usage limit reached
@@ -3097,15 +3097,57 @@ class TestSessionLimitPause:
         worded differently from both _SESSION_LIMIT_RE and _SPEND_LIMIT_RE,
         so neither one caught it -- and because the pane keeps re-rendering
         this exact line, the frozen-output detector never catches it
-        either. Confirmed live: agent 5718f663 sat well past its own
-        stated reset time with no recovery attempted. Same hard-blocker
-        handling as spend/session limit: terminate immediately and
-        redispatch on the configured fallback rather than waiting out the
-        reset window."""
+        either. Confirmed live (agent 5718f663): once caught, this used to
+        get the SAME hard-blocker handling as spend/session limit --
+        terminate immediately and redispatch. That policy itself turned
+        out wrong: the banner says it resolves on its own, a fresh process
+        gets no new allowance, and killing the session just retries the
+        same wall. Confirmed live a second time (task 8c3ba0f8): 31
+        retries over ~15 hours, discarding an agent that had already
+        finished its real work, before the retry cap paused the whole
+        workflow. Correct handling is now to leave the agent running and
+        let Claude Code's own auto-resume do its job -- nothing should be
+        terminated, no task/workflow state touched."""
         agent = Agent(id="a1", cli_type="claude")
         banner = "Usage limit reached · continuing automatically at 3:10pm · esc or type to cancel"
         mock_agent_manager.get_agent_output.return_value = banner
         self._wire_tmux_pane_output(mock_agent_manager, mock_db, "a1", banner)
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        mock_agent_manager.create_agent_for_task = AsyncMock()
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
+        )
+        phase = Mock(fallback_cli_tool="pi", fallback_cli_model=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        mock_agent_manager.create_agent_for_task.assert_not_called()
+        mock_agent_manager.terminate_agent.assert_not_called()
+        assert task.status == "in_progress"
+        assert workflow.status == "active"
+        assert workflow.paused_by is None
+
+    @pytest.mark.asyncio
+    async def test_usage_limit_banner_combined_with_session_limit_text_still_hard_blocks(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """The usage-limit banner is only left alone when it's the ONLY
+        thing matched -- if session-limit-shaped text (e.g. a "rate limit"
+        mention) also appears in the same pane, that's still a genuine
+        hard blocker and must terminate + redispatch as before."""
+        agent = Agent(id="a1", cli_type="claude")
+        pane_text = (
+            "Usage limit reached · continuing automatically at 3:10pm · esc or type to cancel\n"
+            "rate limit exceeded, please retry later"
+        )
+        mock_agent_manager.get_agent_output.return_value = pane_text
+        self._wire_tmux_pane_output(mock_agent_manager, mock_db, "a1", pane_text)
         mock_agent_manager.terminate_agent = AsyncMock()
         mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
         new_agent = Mock(id="a2")
