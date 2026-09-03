@@ -107,7 +107,8 @@ additional_notes: |
   layout — directory names, module conventions, and tech stack vary per project.
   Do not assume any particular structure before reading those files.
 
-  1. Read AGENTS.md for repository guidelines:
+  1. Read AGENTS.md for repository guidelines (if this project has no
+     AGENTS.md, read CLAUDE.md instead — same authority, different name):
      - Project structure and module organization
      - Coding style and naming conventions
      - Build, test, and development commands

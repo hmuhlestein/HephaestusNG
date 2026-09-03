@@ -95,6 +95,7 @@ additional_notes: |
 
   Also read:
   - AGENTS.md - Repository guidelines, coding conventions, project structure
+    (or CLAUDE.md if this project has no AGENTS.md — same authority, different name)
   - requirements.md (what was extracted — contains REQ-XX requirement IDs)
   - architecture.md (how it was designed — compare against design for scope drift)
   - qa.md (what was tested)
