@@ -2,6 +2,7 @@
 """Integration tests for LLM interface operations."""
 
 import asyncio
+import logging
 import os
 import sys
 
@@ -47,13 +48,16 @@ def test_openrouter_validate():
         assert config.validate() is True
 
 
-def test_openrouter_validate_missing_key():
-    """Config.validate() should raise when openrouter key is missing."""
+def test_openrouter_validate_missing_key(caplog):
+    """Config.validate() should not raise when openrouter key is missing --
+    it logs and falls back to the configured CLI tool instead (see
+    LLMConfig.validate in src/core/simple_config.py)."""
     config = Config()
     config.llm.llm_provider = "openrouter"
     config.llm.openrouter_api_key = None
-    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
-        config.validate()
+    with caplog.at_level(logging.INFO):
+        assert config.validate() is True
+    assert "OPENROUTER_API_KEY not set" in caplog.text
 
 
 def _has_openai_key():

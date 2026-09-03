@@ -25,9 +25,9 @@ def test_backfills_one_primary_repo_per_existing_project(db_manager):
         conn.execute(
             sqlalchemy.text(
                 "INSERT INTO autopilot_projects (id, name, base_dir, is_default, is_active, "
-                "created_at, updated_at, cost_total_usd, review_mode) "
+                "created_at, updated_at, cost_total_usd, review_mode, speckit_auto_scan_enabled) "
                 "VALUES ('proj-legacy', 'legacy', '/repos/legacy', 0, 0, "
-                "'2026-01-01T00:00:00', '2026-01-01T00:00:00', 0.0, 0)"
+                "'2026-01-01T00:00:00', '2026-01-01T00:00:00', 0.0, 0, 0)"
             )
         )
         conn.commit()
@@ -49,9 +49,9 @@ def test_running_migration_twice_is_a_noop(db_manager):
         conn.execute(
             sqlalchemy.text(
                 "INSERT INTO autopilot_projects (id, name, base_dir, is_default, is_active, "
-                "created_at, updated_at, cost_total_usd, review_mode) "
+                "created_at, updated_at, cost_total_usd, review_mode, speckit_auto_scan_enabled) "
                 "VALUES ('proj-legacy2', 'legacy2', '/repos/legacy2', 0, 0, "
-                "'2026-01-01T00:00:00', '2026-01-01T00:00:00', 0.0, 0)"
+                "'2026-01-01T00:00:00', '2026-01-01T00:00:00', 0.0, 0, 0)"
             )
         )
         conn.commit()
@@ -133,9 +133,9 @@ def test_concurrent_backfill_for_same_project_only_creates_one_primary_row(db_ma
         conn.execute(
             sqlalchemy.text(
                 "INSERT INTO autopilot_projects (id, name, base_dir, is_default, is_active, "
-                "created_at, updated_at, cost_total_usd, review_mode) "
+                "created_at, updated_at, cost_total_usd, review_mode, speckit_auto_scan_enabled) "
                 "VALUES ('proj-concurrent', 'concurrent', '/repos/concurrent', 0, 0, "
-                "'2026-01-01T00:00:00', '2026-01-01T00:00:00', 0.0, 0)"
+                "'2026-01-01T00:00:00', '2026-01-01T00:00:00', 0.0, 0, 0)"
             )
         )
         conn.commit()
