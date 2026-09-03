@@ -30,7 +30,8 @@ description: |
     DIFFERENT suffixed file instead of racing yours, and the gate reads
     your own task's suffixed file specifically, not a bare challenge.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, challenge.md, to ./.hephaestus/design_review/ —
+  - Write ONE file, challenge-<your Task ID's first 8 hex characters>.md
+    (NOT the bare "challenge.md" — see above), to ./.hephaestus/design_review/ —
     a YAML frontmatter block (blocker_count/warning_count/nit_count, the
     gate input) followed by the full BLOCKER/WARNING/NIT findings report.
   - Use exactly that subdirectory name (./.hephaestus/design_review/) —
@@ -73,10 +74,10 @@ additional_notes: |
   ## STEP 0: CHECK FOR PRIOR CHALLENGE (RETRY AWARENESS)
 
   ```bash
-  cat ./.hephaestus/design_review/challenge.md 2>/dev/null | head -30 || echo "NO_PRIOR_CHALLENGE"
+  ls -t ./.hephaestus/design_review/challenge-*.md 2>/dev/null | head -1 | xargs -r cat | head -30 || echo "NO_PRIOR_CHALLENGE"
   ```
 
-  If challenge.md exists from a prior run:
+  If a prior challenge-<task-id>.md exists from an earlier run:
   - Read it fully to understand what was already found.
   - Read the CURRENT architecture.md and verify whether each prior
     BLOCKER/WARNING was actually addressed (not just version-bumped).
@@ -218,12 +219,15 @@ additional_notes: |
      you're about to flag.
   4. If you cannot state a concrete failure scenario, downgrade to WARNING or NIT.
 
-  ## STEP 11: WRITE challenge.md
+  ## STEP 11: WRITE challenge-<your Task ID's first 8 hex characters>.md
 
   ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+  ⚠️  FILENAME: challenge-<your Task ID's first 8 hex chars>.md — NOT the bare
+      "challenge.md". A duplicate/concurrent dispatch of this same phase
+      writes to a DIFFERENT suffixed file this way instead of racing yours. ⚠️
 
-  challenge.md is ONE file: a YAML frontmatter block followed by the full
-  report. The frontmatter drives the pipeline — without nonzero
+  challenge-<task-id>.md is ONE file: a YAML frontmatter block followed by
+  the full report. The frontmatter drives the pipeline — without nonzero
   blocker_count, the pipeline can't tell BLOCKERs were found.
 
   ```

@@ -29,7 +29,8 @@ description: |
     DIFFERENT suffixed file instead of racing yours, and the gate reads
     your own task's suffixed file specifically, not a bare review.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, review.md, to ./.hephaestus/architectural_review/ —
+  - Write ONE file, review-<your Task ID's first 8 hex characters>.md (NOT
+    the bare "review.md" — see above), to ./.hephaestus/architectural_review/ —
     a YAML frontmatter block (blocker_count/fix_count/defer_count, the gate
     input) followed by the full BLOCKER/FIX/DEFER findings report.
   - Use exactly that subdirectory name (./.hephaestus/architectural_review/) — the
@@ -334,7 +335,8 @@ additional_notes: |
 
   ## STEP 14: WRITE THE REPORT
 
-  Write review.md to the Artifacts Path. This is your ONLY output.
+  Write review-<your Task ID's first 8 hex characters>.md (NOT the bare
+  "review.md") to the Artifacts Path. This is your ONLY output.
   Do NOT edit any source files or tests.
 
   # Architectural Review Report
@@ -407,11 +409,14 @@ additional_notes: |
   - Design invariant violations
   - Common deviation patterns to watch for
 
-  ## STEP 16: WRITE review.md WITH FRONTMATTER (NOT OPTIONAL)
+  ## STEP 16: WRITE review-<your Task ID's first 8 hex characters>.md WITH FRONTMATTER (NOT OPTIONAL)
 
   ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+  ⚠️  FILENAME: review-<your Task ID's first 8 hex chars>.md — NOT the bare
+      "review.md". A duplicate/concurrent dispatch of this same phase writes
+      to a DIFFERENT suffixed file this way instead of racing yours. ⚠️
 
-  review.md is ONE file: a YAML frontmatter block
+  review-<task-id>.md is ONE file: a YAML frontmatter block
   followed by the full report above. The frontmatter is what drives the
   pipeline: if BLOCKERs are found, the pipeline sends the FULL report
   straight to the developer agent as its next task -- without a nonzero

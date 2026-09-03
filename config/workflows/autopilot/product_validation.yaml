@@ -27,9 +27,11 @@ description: |
     DIFFERENT suffixed file instead of racing yours, and the gate reads
     your own task's suffixed file specifically, not a bare validation.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, validation.md, to ./.hephaestus/product_validation/ — a
-    YAML frontmatter block (structured verdict + unmet_requirements, the
-    gate input) followed by the full narrative report, in a single file.
+  - Write ONE file, validation-<your Task ID's first 8 hex characters>.md
+    (NOT the bare "validation.md" — see above), to
+    ./.hephaestus/product_validation/ — a YAML frontmatter block (structured
+    verdict + unmet_requirements, the gate input) followed by the full
+    narrative report, in a single file.
   - Use exactly that subdirectory name (./.hephaestus/product_validation/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
@@ -203,8 +205,9 @@ additional_notes: |
   If ANY of these checks fail, mark as UNMET and include in report.
   
   ## STEP 7: CREATE VALIDATION REPORT
-  
-  Write validation.md:
+
+  Write validation-<your Task ID's first 8 hex characters>.md (NOT the bare
+  "validation.md"):
   
   # Product Validation Report
   
@@ -249,11 +252,14 @@ additional_notes: |
   or
   [NEEDS_WORK: [specific issues that need addressing]]
   
-  ## STEP 8: WRITE validation.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
+  ## STEP 8: WRITE validation-<your Task ID's first 8 hex characters>.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
 
   ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+  ⚠️  FILENAME: validation-<your Task ID's first 8 hex chars>.md — NOT the bare
+      "validation.md". A duplicate/concurrent dispatch of this same phase
+      writes to a DIFFERENT suffixed file this way instead of racing yours. ⚠️
 
-  validation.md is ONE file: a YAML frontmatter block (machine-
+  validation-<task-id>.md is ONE file: a YAML frontmatter block (machine-
   readable, scored to decide whether to ship, return to development, or
   return to architecture) followed immediately by the full narrative
   report from the steps above.

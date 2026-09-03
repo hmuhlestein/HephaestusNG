@@ -111,12 +111,14 @@ additional_notes: |
 
   ## STEP 4: WRITE THE REPORT
 
-  Write feature_review.md to ./.hephaestus/feature_review/ (create that
-  subdirectory if missing) — NOT ./docs/, NOT flat ./.hephaestus/. Every
-  other gated phase in this pipeline writes its report to its own
-  ./.hephaestus/<phase_name>/ subdirectory; this phase follows the same
-  convention now, and feature_review.md is a distinct filename from
-  architectural_review's review.md so the two are never ambiguous. This
+  Write feature_review-<your Task ID's first 8 hex characters>.md (NOT the
+  bare "feature_review.md" — see above) to ./.hephaestus/feature_review/
+  (create that subdirectory if missing) — NOT ./docs/, NOT flat
+  ./.hephaestus/. Every other gated phase in this pipeline writes its
+  report to its own ./.hephaestus/<phase_name>/ subdirectory; this phase
+  follows the same convention now, and feature_review.md is a distinct
+  filename from architectural_review's review.md so the two are never
+  ambiguous. This
   report is internal orchestration input for the Feature Architect's next
   attempt, not a project deliverable, so it belongs alongside Feature
   Architect's own outputs, not in the project's docs/. This is your ONLY
@@ -167,11 +169,17 @@ additional_notes: |
   ## Positive Observations
   [What the decomposition got right]
 
-  ## STEP 5: PREPEND STRUCTURED RESULT TO feature_review.md (NOT OPTIONAL)
+  ## STEP 5: PREPEND STRUCTURED RESULT TO feature_review-<your Task ID's first 8 hex characters>.md (NOT OPTIONAL)
 
-  feature_review.md is ONE file: a YAML frontmatter block followed
-  by the full report above, written to ./.hephaestus/feature_review/feature_review.md
-  — NOT ./docs/, same reason as Step 4. The frontmatter is what drives the
+  ⚠️  FILENAME: feature_review-<your Task ID's first 8 hex chars>.md — NOT
+      the bare "feature_review.md". A duplicate/concurrent dispatch of this
+      same phase writes to a DIFFERENT suffixed file this way instead of
+      racing yours. ⚠️
+
+  feature_review-<task-id>.md is ONE file: a YAML frontmatter block followed
+  by the full report above, written to
+  ./.hephaestus/feature_review/feature_review-<your Task ID's first 8 hex
+  characters>.md — NOT ./docs/, same reason as Step 4. The frontmatter is what drives the
   pipeline: if ANY BLOCKER or FIX is found, the pipeline sends the FULL
   report straight back to the Feature Architect as its next task — without
   a nonzero blocker_count or fix_count here, the pipeline can't tell any

@@ -221,8 +221,12 @@ additional_notes: |
   
   ## STEP 9: CREATE SECURITY REPORT
 
-  Write security.md with the frontmatter block from the top of these notes
-  first, then:
+  ⚠️  FILENAME: security-<your Task ID's first 8 hex chars>.md — NOT the bare
+      "security.md". A duplicate/concurrent dispatch of this same phase
+      writes to a DIFFERENT suffixed file this way instead of racing yours. ⚠️
+
+  Write security-<your Task ID's first 8 hex characters>.md with the
+  frontmatter block from the top of these notes first, then:
 
   # Security Review Report
 

@@ -25,7 +25,8 @@ description: |
     suffixed file instead of racing yours, and the gate reads your own
     task's suffixed file specifically, not a bare scope.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, scope.md, to ./.hephaestus/scope_review/ — a
+  - Write ONE file, scope-<your Task ID's first 8 hex characters>.md (NOT
+    the bare "scope.md" — see above), to ./.hephaestus/scope_review/ — a
     YAML frontmatter block (structured verdict + out-of-scope/missing
     items, the gate input) followed by a short narrative summary.
   - Use exactly that subdirectory name (./.hephaestus/scope_review/) — the
@@ -164,15 +165,19 @@ additional_notes: |
   - OUT-OF-SCOPE: Added by the requirements agent, not in spec.md
   - MISSING: In spec.md but absent from requirements.md
 
-  ## STEP 3: WRITE scope.md
+  ## STEP 3: WRITE scope-<your Task ID's first 8 hex characters>.md
 
-  scope.md is ONE file: a YAML frontmatter block (machine-
+  ⚠️  FILENAME: scope-<your Task ID's first 8 hex chars>.md — NOT the bare
+      "scope.md". A duplicate/concurrent dispatch of this same phase writes
+      to a DIFFERENT suffixed file this way instead of racing yours. ⚠️
+
+  scope-<task-id>.md is ONE file: a YAML frontmatter block (machine-
   readable, "verdict" MUST be at the frontmatter's top level, no nesting)
   followed by a short narrative summary.
 
-  Write ./.hephaestus/scope_review/scope.md with EXACTLY this
-  schema (type first, then a closing `---`, then a short summary
-  immediately after):
+  Write ./.hephaestus/scope_review/scope-<your Task ID's first 8 hex
+  characters>.md with EXACTLY this schema (type first, then a closing
+  `---`, then a short summary immediately after):
 
   ```
   ---

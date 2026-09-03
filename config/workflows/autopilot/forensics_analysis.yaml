@@ -257,9 +257,14 @@ additional_notes: |
   
   ## STEP 8: WRITE FORENSICS REPORT
 
-  Write forensics.md to ./.hephaestus/forensics.md. ONE file, one location —
-  the feature record is assembled from this directory after the pipeline
-  finishes, so a second copy is not yours to make.
+  ⚠️  FILENAME: forensics-<your Task ID's first 8 hex chars>.md — NOT the bare
+      "forensics.md". A duplicate/concurrent dispatch of this same phase
+      writes to a DIFFERENT suffixed file this way instead of racing yours. ⚠️
+
+  Write to ./.hephaestus/forensics-<your Task ID's first 8 hex
+  characters>.md. ONE file, one location — the feature record is assembled
+  from this directory after the pipeline finishes, so a second copy is not
+  yours to make.
   
   Structure the report around what you ACTUALLY found, not a rigid template.
   Use this structure but fill sections proportionally to findings:

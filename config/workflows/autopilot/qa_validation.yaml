@@ -26,7 +26,8 @@ description: |
     instead of racing yours, and the gate reads your own task's suffixed
     file specifically, not a bare qa.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, qa.md, to ./.hephaestus/qa_validation/ — a YAML
+  - Write ONE file, qa-<your Task ID's first 8 hex characters>.md (NOT the
+    bare "qa.md" — see above), to ./.hephaestus/qa_validation/ — a YAML
     frontmatter block (structured pass/fail counts, the gate input) followed
     by the full narrative report, in a single file. See STEP 11 below for
     the exact frontmatter schema.
@@ -387,8 +388,9 @@ additional_notes: |
   ```
   
   ## STEP 10: CREATE QA REPORT
-  
-  Write qa.md with:
+
+  Write qa-<your Task ID's first 8 hex characters>.md (NOT the bare
+  "qa.md") with:
   
   # QA Report: [Project Name]
   
@@ -458,11 +460,14 @@ additional_notes: |
   1. [Problem 1]
   2. [Problem 2]
   
-  ## STEP 11: WRITE qa.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
+  ## STEP 11: WRITE qa-<your Task ID's first 8 hex characters>.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
 
   ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+  ⚠️  FILENAME: qa-<your Task ID's first 8 hex chars>.md — NOT the bare "qa.md".
+      A duplicate/concurrent dispatch of this same phase writes to a DIFFERENT
+      suffixed file this way instead of racing yours. ⚠️
 
-  qa.md is ONE file: a YAML frontmatter block (machine-readable,
+  qa-<task-id>.md is ONE file: a YAML frontmatter block (machine-readable,
   scored against the project spec to decide whether to continue, return to
   development, or return to architecture) followed immediately by the full
   narrative report from the steps above. Use REAL numbers from your run.
