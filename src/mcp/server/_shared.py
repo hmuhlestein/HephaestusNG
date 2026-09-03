@@ -32,7 +32,11 @@ from src.mcp.memory_api import (
 )
 from src.mcp.messaging_api import router as messaging_router
 from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
-from src.mcp.server.state_bootstrap import load_active_project, migrate_is_active_column
+from src.mcp.server.state_bootstrap import (
+    load_active_project,
+    migrate_is_active_column,
+    resync_incomplete_phase_prompts_from_yaml,
+)
 
 # Import routers at module level for test compatibility
 from src.mcp.tickets_api import router as tickets_router
@@ -329,6 +333,11 @@ class ServerState:
 
         # Migrate: add is_active column to existing autopilot_projects table
         migrate_is_active_column(self.db_manager)
+
+        # Keep already-created workflows' not-yet-completed phase prompts in
+        # sync with the current YAML on disk -- otherwise a prompt fix never
+        # reaches any in-flight workflow (see the function's own docstring).
+        resync_incomplete_phase_prompts_from_yaml(self.db_manager)
 
         # Load active project from DB and apply to config BEFORE creating managers
         load_active_project(self.db_manager, config)
