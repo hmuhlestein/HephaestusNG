@@ -547,6 +547,43 @@ class TestReadTranscriptLogReal:
             f"background color never reset before real content resumed: {prefix!r}"
         )
 
+    def test_background_color_reset_on_a_chrome_line_survives(self, tmp_path):
+        """Sibling regression to the huge-blank-gap case above, for
+        'chrome' instead of 'blank': the classification loop had no
+        'chrome' branch at all, so a chrome-classified line's raw bytes
+        -- including a trailing SGR reset it carried -- were silently
+        discarded in full, not just its visible text. Confirmed live:
+        adding claude's own status-bar patterns to chrome_re (this file)
+        turned every claude agent's transcript view white-on-white from
+        the first status-bar re-render onward, since the reset that used
+        to survive (the line was 'content' before those patterns existed)
+        now got dropped along with the rest of the now-'chrome' line.
+
+        Modeled on the huge-blank-gap test above: an earlier, separate
+        banner line sets a background color and never closes it itself;
+        a LATER chrome line (claude's own status bar) is what actually
+        carries the closing reset. The reset must survive even though
+        the chrome text around it doesn't."""
+        content = (
+            "before\n"
+            "\x1b[100mBanner text\x1b[39m\n"
+            "globalVersion: 2.1.238 \xb7 latestVersion: 2.1.259\x1b[49m\n"
+            "after content\n"
+        )
+        result = self._run(tmp_path, content)
+        assert "before" in result
+        assert "Banner text" in result
+        assert "after content" in result
+        assert "globalVersion" not in result
+        idx_after = result.index("after content")
+        prefix = result[:idx_after]
+        last_set = prefix.rfind("\x1b[100m")
+        last_reset = prefix.rfind("\x1b[49m")
+        assert last_set != -1, "test setup sanity: banner's bg-set should be present"
+        assert last_reset > last_set, (
+            f"chrome line's own reset must survive even though its text doesn't: {prefix!r}"
+        )
+
     def test_separators_become_single_blank_lines(self, tmp_path):
         """Separators mark pi's block boundaries -- each run must become
         exactly ONE blank line (visual spacing), never multiple. A blank

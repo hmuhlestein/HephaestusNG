@@ -682,6 +682,33 @@ class AgentOutputCapture:
                     if j < len(classified) and classified[j][0] == 'content':
                         filtered_lines.append("")
                         clean_lines.append("")
+                elif kind == 'chrome':
+                    # Drop the chrome's visible text, but not any trailing
+                    # SGR reset it was carrying -- same reasoning as the
+                    # 'blank' case above: an embedded reset with no
+                    # visible glyph attached must survive even though the
+                    # chrome around it doesn't, or every real line
+                    # rendered after it inherits whatever SGR state (e.g.
+                    # a background color) the chrome line left active.
+                    # Confirmed live: adding claude's own status-bar
+                    # patterns to chrome_re started dropping its trailing
+                    # reset along with the rest of the line -- there was
+                    # no 'chrome' branch here at all before, so every
+                    # chrome-classified line (pi's too, previously just
+                    # never exercised this way) was silently discarded in
+                    # full -- and every subsequent line rendered with the
+                    # status bar's own background color still active.
+                    end = len(line)
+                    codes = []
+                    while end > 0:
+                        m = sgr_at_end_re.search(line[:end])
+                        if not m:
+                            break
+                        codes.append(m.group(0))
+                        end = m.start()
+                    if codes:
+                        filtered_lines.append(''.join(reversed(codes)))
+                        clean_lines.append("")
 
             # Deduplicate progressive redraws: pi re-renders a line as its
             # arguments stream in ($ cd /, $ cd /Users, ... or
