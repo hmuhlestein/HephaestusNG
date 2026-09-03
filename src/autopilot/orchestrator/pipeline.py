@@ -1298,6 +1298,24 @@ def run_phase0(
             design_id=design_entry.db_id,
             timeout_seconds=_get_phase0_timeout(),
             project_id=project_id,
+            # Same reasoning as run_feature_pipelines' own feature launch
+            # below: this project can have several feature workflows
+            # legitimately active in parallel (MAX_PARALLEL_FEATURES), each
+            # for a design whose Phase 0 already ran. run_single_workflow's
+            # default pause_existing=True terminates every OTHER active
+            # workflow's agents project-wide before launching this one --
+            # a genuinely unsafe default here, since run_phase0 only ever
+            # reaches this call when no Feature rows exist yet for design_
+            # entry (the tiered checks above it skip straight past this
+            # otherwise), so there is no same-design conflict for it to
+            # guard against; the only effect of the default was collateral
+            # damage to unrelated, already-decomposed sibling features'
+            # in-flight pipelines. Confirmed live: task 8c3ba0f8's workflow
+            # (feature backend-api-contract) was paused mid-flight,
+            # terminating its live, legitimately-working agent, by a Phase 0
+            # run for a different design in the same project picking up
+            # this default.
+            pause_existing=False,
         )
 
         if wf_status not in (FeatureRunStatus.COMPLETED, FeatureRunStatus.PAUSED):

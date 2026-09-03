@@ -419,6 +419,43 @@ class TestRunPhase0Tiers:
         wf = session.query(Workflow).filter_by(id=real_workflow_id).first()
         assert wf.workflow_type == "design"
 
+    def test_phase0_does_not_pause_other_active_workflows(self, db_manager, design, tmp_path):
+        """Regression, confirmed live (task 8c3ba0f8, workflow feature
+        backend-api-contract): run_single_workflow's own pause_existing
+        defaults to True, which terminates every OTHER active workflow's
+        agents project-wide before launching this one -- run_phase0 only
+        ever reaches this call when no Feature rows exist yet for this
+        design (the tier-1/tier-2 checks above it skip past this
+        otherwise), so there is no same-design conflict for that default
+        to guard against. Left at its default, a Phase 0 run for design A
+        paused a live, legitimately-working agent on an already-decomposed
+        SIBLING design's feature pipeline mid-flight, purely because both
+        share a project. Must always pass pause_existing=False, same as
+        run_feature_pipelines' own feature launch."""
+        from src.autopilot.orchestrator import run_phase0
+
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = tmp_path / "worktree"
+        (worktree / ".hephaestus" / "features").mkdir(parents=True)
+
+        with patch(
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
+            return_value=FeatureRunStatus.COMPLETED,
+        ) as mock_run, patch(
+            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
+        ):
+            run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+            )
+
+        assert mock_run.call_args.kwargs.get("pause_existing") is False
+
     def test_feature_review_report_copied_to_designs_folder(
         self, db_manager, design, tmp_path
     ):
