@@ -211,6 +211,7 @@ def _trigger_arbitration(
     phase_name: str,
     reason: str,
     logger: "OrchestratorLogger",
+    already_claimed: bool = False,
 ) -> bool:
     """Spawn a one-shot arbitration agent for a stuck phase, unless one is
     already in flight (idempotent via the same task_creation_claimed_at
@@ -225,6 +226,26 @@ def _trigger_arbitration(
     a human" doesn't mean "never terminate": an unbounded loop still
     silently burns cost/tokens forever with nobody aware. Past the cap,
     fail immediately instead of spawning yet another arbitration agent.
+
+    already_claimed: True when phase_id's task_creation_claimed_at claim
+    is already held by an ancestor in the current call stack (e.g.
+    _create_phase_task claims its own target phase_id before reaching its
+    retry/goto-bound check further down, which calls here on that SAME
+    phase_id; _maybe_retry_failed_tasks and _retry_failed_tasks_with_done
+    are likewise always called from within a caller-held claim on this
+    same phase). Without this, the claim attempt below silently fails
+    (task_creation_claimed_at is already non-NULL) and this function
+    returns False at the "already in flight" branch without ever actually
+    dispatching an arbitration agent -- confirmed live via direct
+    reproduction against _create_phase_task's own retry-bound path before
+    this fix: a phase that exhausted MAX_PHASE_ATTEMPTS created zero
+    arbitration tasks and its claim came back cleared, silently discarding
+    the decision this function exists to make. Callers dispatching
+    arbitration onto a DIFFERENT phase_id than the one they hold (e.g.
+    _fire_phase_transition's arbitrate action, whose target_phase_id is
+    routinely a goto target distinct from the source phase it claimed)
+    correctly leave this False, so this function claims target_phase_id
+    itself as before.
     """
     from src.autopilot.orchestrator.phase_transitions import (
         _claim_phase_task_creation,
@@ -395,7 +416,7 @@ def _trigger_arbitration(
                 completion_summary=f"Forced past unresolved arbitration deadlock: {arbitration_exhausted_reason}",
             )
 
-        if not _claim_phase_task_creation(db, phase_id):
+        if not already_claimed and not _claim_phase_task_creation(db, phase_id):
             logger.info(f"[ARBITRATE] {phase_name} already has arbitration in flight -- skipping")
             return False
 
