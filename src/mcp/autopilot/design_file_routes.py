@@ -736,6 +736,7 @@ async def remove_project_design(
         Phase,
         PhaseExecution,
         PhasePromptVersion,
+        PromptProposal,
         Task,
         TaskPromptOverride,
         Ticket,
@@ -844,8 +845,15 @@ async def remove_project_design(
                 # Delete dependent records (order matters for FK constraints)
                 if task_ids:
                     db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
-                    db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # AgentResult before ValidationReview -- agent_results.
+                    # verified_by_validation_id is an enforced FK to
+                    # validation_reviews.id, set by ResultService's normal
+                    # task-validation flow for any task that got verified.
+                    # Deleting ValidationReview first (as this always did)
+                    # fails with a FOREIGN KEY error for any task that went
+                    # through validation.
                     db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
                     # CostEntry.task_id/workflow_id are also enforced FKs -- a
@@ -856,10 +864,24 @@ async def remove_project_design(
 
                 # Delete workflow-level dependents
                 db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                # workflows.result_id -> workflow_results.id is also an
+                # enforced FK, and WorkflowResultService sets it to a
+                # WorkflowResult whose OWN workflow_id is this same
+                # workflow's id (a has_result workflow pointing at its own
+                # accepted result) -- null the self-reference before
+                # deleting WorkflowResult below, or that delete fails.
+                db.query(Workflow).filter(Workflow.id.in_(wf_ids)).update(
+                    {"result_id": None}, synchronize_session=False
+                )
                 db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                # prompt_proposals.workflow_id also FKs to workflows.id, no
+                # ondelete clause -- forensics_analysis (a real phase in the
+                # standard autopilot workflow) creates these after a
+                # pipeline run finishes.
+                db.query(PromptProposal).filter(PromptProposal.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Collect worktree info before the Workflow rows are gone --
                 # otherwise these directories orphan permanently: they're
@@ -912,6 +934,19 @@ async def remove_project_design(
                 # delete below with the same FOREIGN KEY error Phase did
                 # above, just one table further out.
                 db.query(Feature).filter_by(design_id=d.id).delete(synchronize_session=False)
+
+                # autopilot_designs.phase0_workflow_id also FKs to
+                # workflows.id -- d itself still exists here (deleted
+                # below, after Workflow) and can point at one of these
+                # workflows via its own Phase 0 run. Same fix already
+                # applied in delete_project (project_routes.py); never
+                # propagated here. A bulk UPDATE, not `d.phase0_workflow_id
+                # = None` -- this session is autoflush=False, so a plain
+                # ORM attribute mutation on `d` would never reach the DB
+                # before the DELETE FROM workflows statement below.
+                db.query(AutopilotDesign).filter(
+                    AutopilotDesign.id == d.id, AutopilotDesign.phase0_workflow_id.in_(wf_ids)
+                ).update({"phase0_workflow_id": None}, synchronize_session=False)
 
                 # Delete workflows
                 db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
