@@ -22,6 +22,194 @@ class TestPipelineStatus:
         assert data["running"] is False
 
 
+class TestPipelineStatusRunningRespectsProjectActive:
+    """Regression: get_pipeline_status's belt-and-suspenders fallback (when
+    AutopilotService.status() itself reports not-running) promoted `running`
+    to True purely off a stale Workflow.status=='active' row, without ever
+    checking AutopilotProject.is_active. A project deactivated weeks ago
+    (excluded from the phase-advancement sweep/dispatch entirely, per the
+    concurrent-active-projects invariant) could still show "Running" in the
+    UI forever off that leftover row -- confirmed live for a real project
+    stuck this way. is_active must gate the whole fallback: an inactive
+    project cannot be running no matter what stale DB state exists."""
+
+    async def test_inactive_project_with_a_stale_active_workflow_reports_not_running(
+        self, db_manager
+    ):
+        from src.core.database import AutopilotProject, Workflow
+        from src.mcp.autopilot.control_routes import get_pipeline_status
+
+        session = db_manager.get_session()
+        try:
+            session.add(
+                AutopilotProject(
+                    id="proj-inactive-stale-wf",
+                    name="Inactive Stale Workflow Test",
+                    base_dir="/tmp/inactive-stale-wf",
+                    is_active=False,
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-inactive-stale",
+                    name="Stale Workflow",
+                    phases_folder_path="/tmp/inactive-stale-wf/phases",
+                    status="active",
+                    project_id="proj-inactive-stale-wf",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        status = await get_pipeline_status(project_id="proj-inactive-stale-wf")
+        assert status.running is False
+
+    async def test_active_project_with_an_active_workflow_still_reports_running(
+        self, db_manager
+    ):
+        """Positive control: the fallback's original behavior (promote off
+        a genuinely active project's active workflow) must be unchanged."""
+        from src.core.database import AutopilotProject, Workflow
+        from src.mcp.autopilot.control_routes import get_pipeline_status
+
+        session = db_manager.get_session()
+        try:
+            session.add(
+                AutopilotProject(
+                    id="proj-active-stale-wf",
+                    name="Active Workflow Test",
+                    base_dir="/tmp/active-stale-wf",
+                    is_active=True,
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-active-stale",
+                    name="Active Workflow",
+                    phases_folder_path="/tmp/active-stale-wf/phases",
+                    status="active",
+                    project_id="proj-active-stale-wf",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        status = await get_pipeline_status(project_id="proj-active-stale-wf")
+        assert status.running is True
+
+    async def test_inactive_project_with_a_live_agent_still_reports_not_running(
+        self, db_manager
+    ):
+        """The is_active gate sits above BOTH sub-checks in
+        _check_project_running_sync (the has_active-workflow short-circuit
+        AND the live-agent fallback below it) -- exercise the agent branch
+        specifically: no Workflow with status=='active' (so the first
+        sub-check can't trip), but a genuinely 'working' Agent on a
+        non-paused Workflow (so the pre-fix code would have reported
+        running=True via the second sub-check)."""
+        from src.core.database import Agent, AutopilotProject, Task, Workflow
+        from src.mcp.autopilot.control_routes import get_pipeline_status
+
+        session = db_manager.get_session()
+        try:
+            session.add(
+                AutopilotProject(
+                    id="proj-inactive-live-agent",
+                    name="Inactive Live Agent Test",
+                    base_dir="/tmp/inactive-live-agent",
+                    is_active=False,
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-inactive-live-agent",
+                    name="Failed Workflow",
+                    phases_folder_path="/tmp/inactive-live-agent/phases",
+                    status="failed",
+                    project_id="proj-inactive-live-agent",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-inactive-live-agent",
+                    raw_description="test task",
+                    done_definition="test done",
+                    status="in_progress",
+                    workflow_id="wf-inactive-live-agent",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-inactive-live-agent",
+                    system_prompt="test",
+                    status="working",
+                    cli_type="claude",
+                    current_task_id="task-inactive-live-agent",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        status = await get_pipeline_status(project_id="proj-inactive-live-agent")
+        assert status.running is False
+
+    async def test_active_project_with_a_live_agent_still_reports_running(
+        self, db_manager
+    ):
+        """Positive control for the agent-branch test above: the same
+        setup on an ACTIVE project must still report running=True,
+        confirming the fix didn't touch this sub-check's own logic."""
+        from src.core.database import Agent, AutopilotProject, Task, Workflow
+        from src.mcp.autopilot.control_routes import get_pipeline_status
+
+        session = db_manager.get_session()
+        try:
+            session.add(
+                AutopilotProject(
+                    id="proj-active-live-agent",
+                    name="Active Live Agent Test",
+                    base_dir="/tmp/active-live-agent",
+                    is_active=True,
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-active-live-agent",
+                    name="Failed Workflow",
+                    phases_folder_path="/tmp/active-live-agent/phases",
+                    status="failed",
+                    project_id="proj-active-live-agent",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-active-live-agent",
+                    raw_description="test task",
+                    done_definition="test done",
+                    status="in_progress",
+                    workflow_id="wf-active-live-agent",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-active-live-agent",
+                    system_prompt="test",
+                    status="working",
+                    cli_type="claude",
+                    current_task_id="task-active-live-agent",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        status = await get_pipeline_status(project_id="proj-active-live-agent")
+        assert status.running is True
+
+
 # ── Design Queue ──────────────────────────────────────────────────
 
 

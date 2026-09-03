@@ -211,6 +211,54 @@ class TestTicketSearchService:
         pytest.skip("Integration test - requires Qdrant and test data")
 
 
+class TestGetVectorStoreDedup:
+    """ServerState.initialize() seeds TicketSearchService._vector_store from
+    server_state.vector_store (mirroring _embedding_provider) so the whole
+    process shares one TurboVecStore. _get_vector_store()'s lazy-construct
+    fallback should only fire -- and log loudly -- when that seeding never
+    happened."""
+
+    def teardown_method(self):
+        from src.services.ticket_search_service import TicketSearchService
+
+        TicketSearchService._vector_store = None
+
+    def test_uses_the_pre_seeded_store_without_constructing_a_duplicate(self):
+        from unittest.mock import patch
+
+        from src.services.ticket_search_service import TicketSearchService
+
+        sentinel_store = object()
+        TicketSearchService._vector_store = sentinel_store
+
+        with patch(
+            "src.services.ticket_search_service.create_vector_store"
+        ) as mock_create:
+            assert TicketSearchService._get_vector_store() is sentinel_store
+            mock_create.assert_not_called()
+
+    def test_logs_a_warning_and_constructs_one_when_never_seeded(self, caplog):
+        from unittest.mock import patch
+
+        from src.services.ticket_search_service import TicketSearchService
+
+        TicketSearchService._vector_store = None
+        sentinel_store = object()
+
+        with patch(
+            "src.services.ticket_search_service.create_vector_store",
+            return_value=sentinel_store,
+        ) as mock_create:
+            with caplog.at_level("WARNING"):
+                result = TicketSearchService._get_vector_store()
+
+        assert result is sentinel_store
+        mock_create.assert_called_once()
+        assert any(
+            "never seeded" in record.message for record in caplog.records
+        )
+
+
 class TestTicketServiceIntegration:
     """Test TicketService integration with embeddings."""
 
