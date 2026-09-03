@@ -46,11 +46,14 @@ class SetupChecker:
         return exists
 
     def check_python_version(self) -> Tuple[bool, str]:
-        """Check Python version is 3.10+"""
+        """Check Python version is 3.11+ -- matches pyproject.toml's
+        `python = "^3.11"` and install.sh's PYTHON_MIN_VERSION, the
+        actual enforced floor. Previously said 3.10+ here despite
+        neither of those actually accepting anything below 3.11."""
         version = sys.version_info
         version_str = f"{version.major}.{version.minor}.{version.micro}"
-        is_valid = version.major == 3 and version.minor >= 10
-        self.results["cli_tools"]["Python 3.10+"] = is_valid
+        is_valid = version.major == 3 and version.minor >= 11
+        self.results["cli_tools"]["Python 3.11+"] = is_valid
         return is_valid, version_str
 
     def check_docker_running(self) -> bool:

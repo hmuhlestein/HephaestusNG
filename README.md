@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/python-3.12%2B-blue)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green)
 ![Status](https://img.shields.io/badge/status-active--development-orange)
 
@@ -91,7 +91,7 @@ For the full story of how the original framework's self-organizing branching wor
 
 ### Prerequisites
 
-- **Python 3.12+**
+- **Python 3.11+**
 - **tmux** - Terminal multiplexer for agent isolation
 - **Git** - Your project must be a git repository
 - **Node.js & npm** - For the frontend UI
