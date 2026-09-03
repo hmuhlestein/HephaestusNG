@@ -662,6 +662,26 @@ def verify_development_produced_a_commit(session, task, phase=None) -> Optional[
     agent that made its own intermediate commit mid-task, with nothing
     left dirty by the time it calls done, must not be penalized for that
     -- any commit landed after this task started counts.
+
+    `since` is pinned to task.created_at, not task.started_at -- the
+    latter is reset fresh on every RETRY of this same task row (see
+    _maybe_retry_failed_tasks), while created_at is set once and never
+    touched again. A retry whose actual code work was already fully
+    committed in an EARLIER attempt (interrupted before it could report
+    done by something unrelated to the work itself, e.g. a CLI usage-
+    limit hit) has nothing new to commit and correctly has nothing left
+    to do -- demanding a fresh commit strictly after THIS retry's own
+    started_at punished exactly that legitimate case. Confirmed live:
+    task 8c3ba0f8's commits 849f005/e4d93c1 (verified present on the
+    branch, working tree clean) landed in an earlier attempt; the retry
+    that finally reported done found nothing left to change and was
+    rejected by started_at-scoped history, even though task.created_at
+    -- fixed since this task's very first attempt -- would have found
+    both commits comfortably inside the window. A genuine goto rewind
+    back to development still gets a fresh Task row with its own fresh
+    created_at (see _create_phase_task), so the original failure mode
+    this floor exists for -- a truly new development cycle that did
+    nothing -- is unaffected.
     """
     from pathlib import Path
 
@@ -687,7 +707,7 @@ def verify_development_produced_a_commit(session, task, phase=None) -> Optional[
     if not Path(wf.working_directory).is_dir():
         return None
 
-    since = task.started_at or task.created_at
+    since = task.created_at or task.started_at
     if not since:
         return None
 

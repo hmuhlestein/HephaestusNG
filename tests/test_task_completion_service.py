@@ -1360,6 +1360,45 @@ class TestVerifyDevelopmentProducedACommit:
         )
         assert result is None
 
+    def test_passes_on_retry_when_the_commit_predates_this_attempts_started_at(self, tmp_path):
+        """Regression, confirmed live (task 8c3ba0f8): a RETRY of the same
+        task row gets a fresh started_at (see _maybe_retry_failed_tasks),
+        but created_at is set once and never touched again. If the real
+        commit already landed in an EARLIER attempt -- e.g. interrupted
+        before it could report done by something unrelated to the work
+        itself, like a CLI usage-limit hit -- a retry that finds nothing
+        left to change must not be rejected just because that commit
+        predates THIS retry's own started_at; created_at, fixed since the
+        task's first attempt, still finds it."""
+        from datetime import datetime, timedelta
+
+        repo = self._init_repo(tmp_path)
+        (tmp_path / "feature.py").write_text("def handler(): pass\n")
+        repo.index.add(["feature.py"])
+        repo.index.commit("phase(development): implement handler")
+
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id=None, status="done",
+            # created_at predates the commit above (task's real first
+            # attempt); started_at was reset forward past it by this
+            # retry's own fresh dispatch.
+            created_at=datetime.utcnow() - timedelta(hours=2),
+            started_at=datetime.utcnow() + timedelta(minutes=1),
+        )
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_development_produced_a_commit(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+        assert task.status == "done"  # untouched
+
     def test_fails_open_when_worktree_is_not_a_git_repo(self, tmp_path):
         """A git error here (e.g. an invalid/non-repo path) must not block
         a real completion -- return None rather than raising or rejecting."""
