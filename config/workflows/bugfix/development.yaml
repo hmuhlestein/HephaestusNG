@@ -61,6 +61,8 @@ additional_notes: |
   ARCHITECTURE MAP: Read AGENTS.md and architecture.md for this project's
   specific layout — directory names, module boundaries, and naming conventions
   vary per project. Do not assume any particular structure before reading them.
+  If this project has no AGENTS.md, read CLAUDE.md instead everywhere below
+  that says AGENTS.md — same authority, different name.
 
   CODE STYLE: Read AGENTS.md for this project's formatter, linter, naming
   conventions, and type-checking requirements — follow them exactly. Do not
