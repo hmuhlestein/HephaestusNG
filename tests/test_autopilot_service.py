@@ -349,6 +349,92 @@ class TestAutopilotService:
             assert matches[0].id == "proj-existing123"
             assert matches[0].is_active is True
 
+    @pytest.mark.asyncio
+    async def test_concurrent_start_cannot_interleave_with_an_in_flight_stop(
+        self, service, tmp_path
+    ):
+        """Regression: stop() (and pause_for_restart()) sets self._running =
+        False, then has a real yield point -- its own `await asyncio.
+        wait_for(self._task, ...)` -- before finishing cleanup. start() has
+        no yield point of its own, so a concurrent start() call landing in
+        that window would see running=False, run to completion synchronously
+        (including overwriting self._task with a brand-new task), and race
+        the in-flight stop()'s own read of self._task -- which could then
+        wait on/cancel the WRONG task. _lifecycle_lock makes this
+        impossible: start() must wait for stop() to fully release the lock
+        before it can even check self.running.
+
+        Proven via an execution-order list, not timing: the slow pipeline
+        sleeps well past everything else in this test, so the only way
+        "start recorded" can appear AFTER "stop finished" is if the lock
+        actually serialized them."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".git").mkdir()
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
+
+        order = []
+
+        async def slow_pipeline():
+            await asyncio.sleep(100)
+
+        with patch.object(service, "_run_pipeline", side_effect=slow_pipeline):
+            await service.start(str(project))
+            first_task = service._task
+
+            async def do_stop():
+                await service.stop()
+                order.append("stop finished")
+
+            async def do_start():
+                # Give do_stop a chance to acquire the lock and reach its
+                # own await point first.
+                await asyncio.sleep(0.01)
+                await service.start(str(project))
+                order.append("start recorded")
+
+            await asyncio.gather(do_stop(), do_start())
+
+        assert order == ["stop finished", "start recorded"], (
+            "start() ran before the in-flight stop() released the lock -- "
+            "the two interleaved instead of being serialized"
+        )
+        # The second start's task must be a genuinely new one, not left
+        # pointing at (or corrupting) the first, already-stopped task.
+        assert service._task is not None
+        assert service._task is not first_task
+        assert service.running is True
+
+    @pytest.mark.asyncio
+    async def test_concurrent_start_calls_reject_the_second_as_already_running(
+        self, service, tmp_path
+    ):
+        """The ordinary case start() already handled correctly (no await
+        of its own, so two concurrent calls can't interleave even without
+        the lock) -- confirms the lock doesn't change this existing,
+        correct behavior."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".git").mkdir()
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
+
+        async def slow_pipeline():
+            await asyncio.sleep(100)
+
+        with patch.object(service, "_run_pipeline", side_effect=slow_pipeline):
+            results = await asyncio.gather(
+                service.start(str(project)),
+                service.start(str(project)),
+                return_exceptions=True,
+            )
+
+        successes = [r for r in results if not isinstance(r, Exception)]
+        failures = [r for r in results if isinstance(r, Exception)]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert isinstance(failures[0], RuntimeError)
+        assert "already running" in str(failures[0])
+
 
 class TestGetAutopilotService:
     """get_autopilot_service() used to be a single-instance global
