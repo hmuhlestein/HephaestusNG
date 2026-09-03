@@ -2015,7 +2015,22 @@ def _run_one_feature(
     # feature actually had a dependency.
     from src.core.database import Feature
 
-    # Check if all dependencies are completed before starting
+    # Check if all dependencies are completed before starting. "active"
+    # used to also count here, contradicting this comment's own stated
+    # intent -- a dependency merely "active" (DB status, independent of
+    # run_feature_pipelines' own per-walk resolved-set tracking) can be
+    # stalled, mid-retry with no live agent, or simply not yet through
+    # review/QA, not "done" in any sense a dependent should build on top
+    # of. Confirmed live: design des-72760406f416's tech-debt feature
+    # (depends on five others, including backend-api-contract) was
+    # dispatched while backend-api-contract's DB status was "active" but
+    # genuinely idle -- no live agent, ~29 hours before it actually
+    # finished -- purely because "active" satisfied this check. A
+    # dependency that isn't ready yet still resolves safely: SKIPPED is
+    # retried on this design's next walk, same as before this fix (see
+    # run_feature_pipelines' own "a failed dependency no longer auto-
+    # skips its dependents" comment -- SKIPPED here is exactly that same
+    # non-permanent outcome, just for "not ready" instead of "failed").
     depends_on = feature.get("depends_on", [])
     if depends_on:
         with get_db() as db:
@@ -2031,7 +2046,7 @@ def _run_one_feature(
                 if not dep_feature:
                     logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which doesn't exist — skipping")
                     return FeatureRunStatus.SKIPPED
-                if dep_feature.status not in ("completed", "active"):
+                if dep_feature.status != "completed":
                     logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which is {dep_feature.status} — skipping")
                     return FeatureRunStatus.SKIPPED
 

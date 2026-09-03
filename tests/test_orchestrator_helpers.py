@@ -4851,6 +4851,57 @@ class TestRunOneFeatureWithDependencies:
 
         assert status == FeatureRunStatus.SKIPPED
 
+    def test_feature_with_merely_active_dependency_is_skipped_not_dispatched(
+        self, orch_db_env, tmp_path
+    ):
+        """Regression, confirmed live (design des-72760406f416): "active"
+        used to satisfy this check alongside "completed", contradicting
+        its own "Check if all dependencies are completed" comment. A
+        dependency merely "active" in the DB can be stalled, mid-retry
+        with no live agent, or simply not yet through review/QA -- not
+        "done" in any sense a dependent should build on top of. tech-debt
+        (depends on five others, including backend-api-contract) was
+        dispatched while backend-api-contract's DB status was "active"
+        but genuinely idle, ~29 hours before it actually finished, purely
+        because "active" satisfied this check."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        design_id = "design-3"
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-3", name="p", base_dir="/tmp/proj-3"))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-3", filename="d.md", name="D")
+            )
+            session.add(
+                Feature(
+                    id="feature-dep-3",
+                    design_id=design_id,
+                    feature_key="dep-feature",
+                    name="Dependency Feature",
+                    scope="s",
+                    status="active",
+                )
+            )
+
+        design_entry = self._make_design_entry(tmp_path, design_id)
+        feature = {"id": "feat-c", "name": "Feature C", "depends_on": ["dep-feature"]}
+        designs_folder = tmp_path / "designs"
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+
+        status = _run_one_feature(
+            sdk=MagicMock(),
+            design_entry=design_entry,
+            feature=feature,
+            designs_folder=designs_folder,
+            project_path=project_path,
+            logger=OrchestratorLogger(tmp_path),
+            state=None,
+        )
+
+        assert status == FeatureRunStatus.SKIPPED
+
 
 class TestRunOneFeatureThreadsProjectId:
     """Regression: run_single_workflow's project_path parameter is actually
