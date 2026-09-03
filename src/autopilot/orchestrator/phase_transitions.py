@@ -1311,6 +1311,25 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: "Orchestr
     every real pause site set paused_by to something non-None (user,
     budget, review, or system) -- so its "is not None" form made this
     entire self-heal a no-op for every actual pause, not just this one.
+
+    The per-phase loop below only catches a phase STILL "in_progress"
+    with a done task sitting in it. It misses the case where that
+    in-flight attempt's own SPEC-GATE evaluation runs before this sweep
+    does and drives the phase all the way to "completed" on its own --
+    nothing is left "in_progress" anywhere for the loop to find, even
+    though the pause is exactly as stale. Observed live a second time,
+    workflow 9bd4a66f: a mechanical-recovery hard-block paused it for
+    "CLI usage limit ... no fallback configured" while security_review's
+    task was mid-retry; that retry went on to succeed regardless (the
+    pause only affects the DB-level workflow row, not an already-running
+    CLI session -- see terminate_agent's own "DB invariant only" scoping),
+    its SPEC-GATE fired and flipped the phase straight to "completed", and
+    _start_next_phase's very next advance attempt hit workflow.paused_by
+    still set and refused -- with qa_validation never started and nothing
+    left "in_progress" for this function to notice. The broader check
+    below covers it: any task finishing anywhere in this workflow AFTER
+    the pause took effect is proof of real forward progress despite it,
+    regardless of which PhaseExecution status that progress left behind.
     """
     if wf.paused_by not in (None, "system"):
         return  # Respect any deliberate pause ("user", "budget", "review")
@@ -1334,7 +1353,27 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: "Orchestr
                 # call correct even if the check above is ever loosened.
                 resume_workflow(workflow_id, session=db)
                 db.commit()
-                break
+                return
+
+    if wf.paused_at:
+        recent_done_task = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status == "done",
+                Task.completed_at > wf.paused_at,
+            )
+            .first()
+        )
+        if recent_done_task:
+            logger.info(
+                f"[PHASE-ADVANCE] Auto-resuming paused workflow — task "
+                f"{recent_done_task.id[:8]} completed after the pause"
+            )
+            from src.autopilot.orchestrator.engine_client import resume_workflow
+
+            resume_workflow(workflow_id, session=db)
+            db.commit()
 
 
 def _release_stale_task_creation_claims(db, workflow_id: str, logger: "OrchestratorLogger") -> None:
