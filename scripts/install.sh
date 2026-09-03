@@ -97,7 +97,23 @@ MISSING=0
 
 # Python
 find_python() {
-    for cmd in python3.12 python3.11 python3 python; do
+    # External evaluation finding (§4): the old candidate list tried
+    # literal python3.12/python3.11 names BEFORE python3 itself -- so on
+    # a host whose `python3` correctly resolves to a valid newer
+    # interpreter (3.13, 3.14, ...) via pyenv/homebrew/a venv shim, but
+    # which has no binary literally named "python3.12" or "python3.11" on
+    # PATH, this loop tried two nonexistent names first and could still
+    # end up on an unrelated, too-old system `python3`/`python` -- or, if
+    # every literal name past python3 also failed the version check, fail
+    # to find Python at all despite a perfectly good one being right
+    # there. `python3` is what virtually every real setup (pyenv,
+    # homebrew, a venv, uv itself) actually exposes as the correct
+    # default, so try it FIRST and trust its own reported version -- the
+    # literal-name fallbacks below exist only for hosts where even
+    # `python3` doesn't resolve correctly, with a generous buffer of
+    # future minor versions so this doesn't need editing again the
+    # moment 3.15 ships.
+    for cmd in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python; do
         if command -v "$cmd" >/dev/null 2>&1; then
             ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor:02d}')" 2>/dev/null || echo "0")
             if [ "$ver" -ge "$PYTHON_MIN_VERSION" ]; then
