@@ -264,6 +264,122 @@ class TestRestartTaskEndpointCliModelConcurrency:
             session.close()
 
     @pytest.mark.asyncio
+    async def test_restarting_an_arbitration_task_re_claims_its_phase(self, db_manager):
+        """Regression, observed live (task b938bee7-b327-4e69-9ba6-
+        5ace277c1314): the reopen above (transition_phase_execution to
+        in_progress) unconditionally clears PhaseExecution.task_creation_
+        claimed_at as part of its generic (X, in_progress) field reset --
+        correct for a normal task (a fresh dispatch cycle has no stale
+        claim to keep), but wrong for an ARBITRATION task: _maybe_resolve_
+        arbitration's own query only ever considers phases whose
+        PhaseExecution has this claim SET, so a restarted arbitration task
+        becomes permanently invisible to it, not eventually -- nothing else
+        in the normal sweep cycle ever re-sets this claim without a fresh
+        _trigger_arbitration call, which a restart doesn't make. The
+        arbitration in this incident completed and resolved correctly
+        moments after its own restart, but sat invisible to every
+        subsequent sweep tick until the claim was manually restored."""
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.core.database import Phase, PhaseExecution
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
+
+        session = db_manager.get_session()
+        try:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="design_review",
+                description="d", done_definitions=["x"],
+            ))
+            # Not in_progress at restart time -- exactly the shape that
+            # triggers the reopen branch (a stale arbitration task whose
+            # PhaseExecution had drifted to some other status).
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="pending"))
+            session.add(Agent(id="sentinel-arbitration", system_prompt="p", cli_type="system"))
+            session.add(Task(
+                id="task-1", raw_description="r", done_definition="d",
+                status="failed", workflow_id="wf-1", phase_id="phase-1",
+                created_by_agent_id=ARBITRATION_CREATED_BY,
+            ))
+            session.commit()
+        finally:
+            session.close()
+
+        qs = _make_queue_service(db_manager)
+        server_state = _make_server_state(db_manager, qs)
+        dispatched_agent = Mock(id="new-arb-agent")
+
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
+                 new=AsyncMock(return_value={"phase_cli_tool": None, "phase_cli_model": None}),
+             ), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+                 new=AsyncMock(return_value=dispatched_agent),
+             ), \
+             patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
+            await restart_task_endpoint(task_id="task-1", x_agent_id="system")
+
+        session = db_manager.get_session()
+        try:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.status == "in_progress"
+            assert execution.task_creation_claimed_at is not None, (
+                "restarting an arbitration task must re-claim its phase, or "
+                "_maybe_resolve_arbitration can never find it again"
+            )
+        finally:
+            session.close()
+
+    @pytest.mark.asyncio
+    async def test_restarting_a_normal_task_does_not_leave_a_stray_claim(self, db_manager):
+        """The fix must be scoped to arbitration tasks specifically --
+        a normal task's reopen should behave exactly as before (claim
+        cleared, ready for a genuinely fresh dispatch cycle)."""
+        from src.core.database import Phase, PhaseExecution
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
+
+        session = db_manager.get_session()
+        try:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="development",
+                description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="failed"))
+            session.add(Task(
+                id="task-1", raw_description="r", done_definition="d",
+                status="failed", workflow_id="wf-1", phase_id="phase-1",
+            ))
+            session.commit()
+        finally:
+            session.close()
+
+        qs = _make_queue_service(db_manager)
+        server_state = _make_server_state(db_manager, qs)
+        dispatched_agent = Mock(id="new-agent")
+
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
+                 new=AsyncMock(return_value={"phase_cli_tool": None, "phase_cli_model": None}),
+             ), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+                 new=AsyncMock(return_value=dispatched_agent),
+             ), \
+             patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
+            await restart_task_endpoint(task_id="task-1", x_agent_id="system")
+
+        session = db_manager.get_session()
+        try:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.status == "in_progress"
+            assert execution.task_creation_claimed_at is None
+        finally:
+            session.close()
+
+    @pytest.mark.asyncio
     async def test_restarting_a_blocked_task_clears_the_full_pause_triad(self, db_manager):
         """Regression found during Phase 2 §4.8's re-audit (not one of the
         four historically-fixed sites): a task can be "blocked" -- exactly
