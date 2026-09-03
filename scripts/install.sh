@@ -1156,6 +1156,60 @@ else
     log "Codex CLI not detected — skipping agent installation"
 fi
 
+# ─── Claude Code MCP Configuration ───────────────────────────────
+
+header "Claude Code MCP Configuration"
+
+# Mirrors the Codex MCP block above -- both use their CLI's own native
+# registration (`codex mcp` / `claude mcp`) rather than hand-writing a
+# shared config file, which is what the Pi branch above does (pi has no
+# such native command; --mcp-config there depends on
+# ~/.config/mcp/mcp.json existing).
+#
+# This used to be the actual gap: Claude Code agents got NO MCP
+# registration at all unless pi also happened to be installed, since
+# cli_interface.py's --mcp-config flag construction checks
+# ~/.config/mcp/mcp.json, and only the Pi branch above ever wrote that
+# file. A claude-only install (no pi) launched every agent with zero
+# heph_* tools available -- complete_my_task included -- so no phase
+# could ever finish. `claude mcp add -s user` registers globally (every
+# project/worktree an agent launches claude from), independent of both
+# pi and cli_interface.py's file-existence check.
+CLAUDE_MCP_SCRIPT="$PREFIX/mcp/mcp_client.py"
+CLAUDE_MCP_LOCK_DIR="$HOME/.claude.json.heph-install.lock"
+
+if command -v claude >/dev/null 2>&1; then
+    if ! mkdir "$CLAUDE_MCP_LOCK_DIR" 2>/dev/null; then
+        warn "Another Hephaestus installer is updating Claude Code MCP configuration"
+    elif [ -f "$CLAUDE_MCP_SCRIPT" ] && [ -x "$VENV_DIR/bin/python" ]; then
+        CLAUDE_MCP_CONFIG="$(claude mcp get heph 2>/dev/null || true)"
+        if [ -n "$CLAUDE_MCP_CONFIG" ] && printf '%s\n' "$CLAUDE_MCP_CONFIG" | grep -Fq "Command: $VENV_DIR/bin/python" && printf '%s\n' "$CLAUDE_MCP_CONFIG" | grep -Fq "Args: $CLAUDE_MCP_SCRIPT"; then
+            ok "Claude Code MCP server already configured (heph)"
+        else
+            if [ -n "$CLAUDE_MCP_CONFIG" ]; then
+                log "Updating Claude Code MCP server path..."
+                if ! claude mcp remove heph -s user >/dev/null 2>&1; then
+                    warn "Failed to remove stale Claude Code MCP server configuration"
+                elif claude mcp add -s user heph -- "$VENV_DIR/bin/python" "$CLAUDE_MCP_SCRIPT" >/dev/null 2>&1; then
+                    ok "Updated Hephaestus MCP server for Claude Code"
+                else
+                    warn "Failed to configure Claude Code MCP server after removing the stale configuration"
+                fi
+            elif claude mcp add -s user heph -- "$VENV_DIR/bin/python" "$CLAUDE_MCP_SCRIPT" >/dev/null 2>&1; then
+                ok "Configured Hephaestus MCP server for Claude Code"
+            else
+                warn "Failed to configure Claude Code MCP server"
+            fi
+        fi
+        rmdir "$CLAUDE_MCP_LOCK_DIR"
+    else
+        warn "Claude Code MCP script or virtual environment Python not found — skipping"
+        rmdir "$CLAUDE_MCP_LOCK_DIR"
+    fi
+else
+    log "Claude Code CLI not detected — skipping MCP configuration"
+fi
+
 # ─── Claude Code Agent Installation ───────────────────────────────
 
 header "Claude Code Agents"
