@@ -38,7 +38,8 @@ def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_
 
     This is a simplified sibling of
     src/agents/output_capture.py::AgentOutputCapture._read_transcript_log
-    -- same cursor/row reconstruction core, without that function's
+    -- same cursor/row reconstruction core and same blank-run collapsing
+    (see the pass at the end of this function), without that function's
     Claude-Code/pi-specific chrome and progressive-redraw deduplication
     passes (this tool views arbitrary tmux sessions, not just Hephaestus
     agents, so baking in that much CLI-specific noise-filtering isn't
@@ -49,7 +50,11 @@ def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_
     next character written rather than occupying a column of their own --
     correctly interleaving them with arbitrary overwrites is a full
     terminal emulator's job. A run of SGR codes with nothing following
-    before the row ends is simply dropped (cosmetic only).
+    before the row ends is carried forward to the next surviving line
+    instead of being dropped (see the blank-collapsing pass below) --
+    it's rarely purely cosmetic: a lone SGR reset with no visible
+    character often lands there after a TUI jumps the cursor far down a
+    tall pane to clear color state set by a status banner higher up.
     """
     text = raw_bytes.decode('utf-8', errors='replace')
     text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
@@ -148,7 +153,37 @@ def _reconstruct_raw_transcript(raw_bytes: bytes, width: int = _HEPHAESTUS_PANE_
     if pending_sgr:
         rows[cursor_row].append(pending_sgr)
 
-    return "\n".join("".join(row).rstrip() for row in rows).strip("\n")
+    # Collapse runs of blank rows to a single blank line. A tall pane
+    # (e.g. Hephaestus's TMUX_PANE_HEIGHT) can leave thousands of
+    # genuinely empty rows between real content and a footer/status line
+    # pinned near the pane's bottom -- showing all of them isn't useful.
+    # A blank row's raw content can still carry a real SGR reset with no
+    # visible character attached (e.g. right after a highlighted status
+    # banner sets a background color, before the cursor jumps far down
+    # to reset it) -- that reset is carried forward onto the next
+    # surviving line instead of a dropped row's bytes disappearing
+    # outright and leaking styling into everything that follows. A
+    # blank row's bytes never survive as their own standalone output
+    # line either way, which avoids showing literal escape-code garbage
+    # in this plain-text view.
+    sgr_re = re.compile(r'\x1b\[[0-9;]*m')
+    out_lines: List[str] = []
+    prev_blank = True  # also drops leading blanks
+    carried = ""
+    for row in rows:
+        raw_line = "".join(row).rstrip()
+        blank = not sgr_re.sub("", raw_line).strip()
+        if blank:
+            carried += raw_line
+            if not prev_blank:
+                out_lines.append("")
+            prev_blank = True
+            continue
+        out_lines.append(carried + raw_line)
+        carried = ""
+        prev_blank = False
+
+    return "\n".join(out_lines).strip("\n")
 
 
 class TmuxSessionManager:
