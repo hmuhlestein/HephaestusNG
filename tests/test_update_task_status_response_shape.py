@@ -18,7 +18,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
+from src.core.database import Agent, AutopilotProject, DatabaseManager, Phase, Task, Workflow
 from src.mcp.server import app
 
 
@@ -46,11 +46,25 @@ def test_client(test_db, monkeypatch):
 
 def _seed(test_db, tmp_path, outputs):
     session = test_db.get_session()
+    project_id = f"proj-{uuid.uuid4().hex[:8]}"
     workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
     phase_id = f"phase-{uuid.uuid4().hex[:8]}"
     task_id = f"task-{uuid.uuid4().hex[:8]}"
     agent_id = f"agent-{uuid.uuid4().hex[:8]}"
 
+    # Without a project (and its base_dir), verify_output_artifact's
+    # "check feature folder" fallback resolves against config.paths.
+    # project_root -- this repo's OWN real checkout, which self-hosts
+    # Hephaestus and so has real .hephaestus/features/*/docs/features.json
+    # files sitting there from actual past runs. That fallback then finds
+    # one of those unrelated real files and treats it as this test's own
+    # agent output, silently passing a rejection this test exists to
+    # exercise. Confirmed live via direct reproduction: without this, the
+    # test's own "features.json deliberately not written" setup still
+    # passed verify_output_artifact, only to fail LATER at verify_output_
+    # survived_commit instead (a different rejection path with different
+    # response semantics: termination_scheduled=True, not False).
+    session.add(AutopilotProject(id=project_id, name="t", base_dir=str(tmp_path)))
     session.add(
         Workflow(
             id=workflow_id,
@@ -58,6 +72,7 @@ def _seed(test_db, tmp_path, outputs):
             phases_folder_path="/tmp",
             status="active",
             working_directory=str(tmp_path),
+            project_id=project_id,
         )
     )
     session.add(
