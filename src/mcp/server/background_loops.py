@@ -485,6 +485,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     from src.autopilot.orchestrator.phase_transitions import (
         _maybe_resolve_arbitration,
         _maybe_resolve_human_arbitration_escalations,
+        _resolve_pending_pr_status,
         _retry_exhausted_failed_workflows,
         _retry_exhausted_paused_workflows,
         _retry_failed_tasks,
@@ -686,6 +687,15 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
                 _maybe_resolve_arbitration(wf_id, sweep_logger)
             except Exception as e:
                 logger.error(f"[PHASE-SWEEP] Arbitration resolve error for {wf_id[:8]}: {e}")
+            try:
+                # §3.3: resolve a git_expert task left in_progress awaiting
+                # an open PR's CI/review outcome (verify_git_expert_merged_
+                # and_pushed's pending branch) -- a cheap gh lookup here
+                # instead of spinning up a fresh agent every tick just to
+                # ask "are we done yet".
+                _resolve_pending_pr_status(wf_id, sweep_logger)
+            except Exception as e:
+                logger.error(f"[PHASE-SWEEP] PR-status resolve error for {wf_id[:8]}: {e}")
 
         try:
             # Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md:

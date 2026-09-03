@@ -54,6 +54,9 @@ from src.autopilot.orchestrator.arbitration import (
 from src.autopilot.orchestrator.arbitration import (
     _resolve_arbitration_outcome as _resolve_arbitration_outcome,
 )
+from src.autopilot.orchestrator.pr_resolution import (
+    _resolve_pending_pr_status as _resolve_pending_pr_status,
+)
 from src.autopilot.orchestrator.engine_client import (
     create_agent_for_task_direct,
     get_tasks,
