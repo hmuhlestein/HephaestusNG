@@ -7104,6 +7104,109 @@ class TestAutoResumePausedWorkflow:
             assert wf.status == "paused"
             assert wf.paused_by == "system"
 
+    def test_resumes_when_task_completed_after_the_pause_with_nothing_in_progress(
+        self, orch_db_env
+    ):
+        """Regression, confirmed live (workflow 9bd4a66f): the per-phase
+        loop above only catches a phase STILL "in_progress" with a done
+        task inside it. It misses a still-in-flight attempt whose own
+        SPEC-GATE evaluation runs first and drives the phase all the way
+        to "completed" on its own -- nothing is left "in_progress"
+        anywhere for that loop to find, even though the pause (a
+        mechanical-recovery hard-block, here) is exactly as stale as the
+        case the loop already handles. Any task finishing anywhere in the
+        workflow strictly after wf.paused_at is the broader signal this
+        second check catches instead."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.phase_transitions import _try_auto_resume_paused_workflow
+        from src.core.database import Phase, PhaseExecution, Task, Workflow, utc_now
+
+        paused_at = utc_now()
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="system",
+                    paused_at=paused_at,
+                    status_reason="CLI usage limit (auto-resume window) hit (claude), no fallback configured",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-1", workflow_id="wf-1", name="security_review", order=8,
+                    description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                # Already fully "completed" -- not "in_progress" -- so the
+                # per-phase loop above finds nothing here.
+                PhaseExecution(id="exec-1", phase_id="phase-1", workflow_execution_id="wf-1", status="completed")
+            )
+            session.add(
+                Task(
+                    id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="done",
+                    completed_at=paused_at + timedelta(seconds=30),
+                )
+            )
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            _try_auto_resume_paused_workflow(session, "wf-1", wf, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None
+
+    def test_stays_paused_when_no_task_has_completed_since_the_pause(self, orch_db_env):
+        """Sibling to the above: a done task that finished BEFORE the
+        pause (not after) is not evidence of anything happening despite
+        the pause -- must not trigger a resume."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator.phase_transitions import _try_auto_resume_paused_workflow
+        from src.core.database import Phase, PhaseExecution, Task, Workflow, utc_now
+
+        paused_at = utc_now()
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="feature pipeline", phases_folder_path="/tmp",
+                    status="paused", paused_by="system", paused_at=paused_at,
+                    status_reason="some reason",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-1", workflow_id="wf-1", name="security_review", order=8,
+                    description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(id="exec-1", phase_id="phase-1", workflow_execution_id="wf-1", status="completed")
+            )
+            session.add(
+                Task(
+                    id="task-1", workflow_id="wf-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="done",
+                    completed_at=paused_at - timedelta(seconds=30),
+                )
+            )
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            _try_auto_resume_paused_workflow(session, "wf-1", wf, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "system"
+
 
 class TestWorkflowAppearsAbandoned:
     """_workflow_appears_abandoned: the signal _escalate_stale_active_
