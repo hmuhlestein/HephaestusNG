@@ -24,6 +24,7 @@ no-op past whatever the first pass actually committed.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 from sqlalchemy.exc import OperationalError
 
 from src.mcp.server.agent_task_routes import (
@@ -48,6 +49,7 @@ async def test_retries_and_recovers_from_transient_lock_contention():
     ):
         result = await update_task_status(
             UpdateTaskStatusRequest(task_id="t1", status="done", summary="done"),
+            background_tasks=BackgroundTasks(),
             agent_id="agent-1",
         )
 
@@ -67,6 +69,7 @@ async def test_gives_up_after_exhausting_all_attempts():
         with pytest.raises(OperationalError):
             await update_task_status(
                 UpdateTaskStatusRequest(task_id="t2", status="done", summary="done"),
+                background_tasks=BackgroundTasks(),
                 agent_id="agent-1",
             )
 
@@ -88,6 +91,7 @@ async def test_does_not_retry_a_non_lock_operational_error():
         with pytest.raises(OperationalError):
             await update_task_status(
                 UpdateTaskStatusRequest(task_id="t3", status="done", summary="done"),
+                background_tasks=BackgroundTasks(),
                 agent_id="agent-1",
             )
 
@@ -111,6 +115,7 @@ async def test_does_not_retry_an_http_exception():
         with pytest.raises(HTTPException) as exc_info:
             await update_task_status(
                 UpdateTaskStatusRequest(task_id="t4", status="done", summary=""),
+                background_tasks=BackgroundTasks(),
                 agent_id="agent-1",
             )
 

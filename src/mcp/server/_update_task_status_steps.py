@@ -13,7 +13,7 @@ import functools
 import logging
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from git import Repo
 
 from src.core.database import Agent, AgentLog, Phase, Task, utc_now
@@ -273,13 +273,33 @@ async def _spawn_validation_for_task(session, task: Task, agent_id: str, request
 
 
 async def _complete_task_normally(
-    session, agent_id: str, task: Task, request: UpdateTaskStatusRequest, phase: Optional[Phase]
+    session, agent_id: str, task: Task, request: UpdateTaskStatusRequest, phase: Optional[Phase],
+    background_tasks: BackgroundTasks,
 ) -> Optional[dict]:
     """No validation (or task failed) -- set the terminal status, collect
     cost data, commit in the shared worktree and link the ticket on success,
     re-verify output survived the commit, and schedule agent termination +
     queue processing. Returns the output_lost_rejection dict if the declared
-    output vanished after the commit, else None."""
+    output vanished after the commit, else None.
+
+    Agent termination is scheduled via FastAPI's BackgroundTasks, not the
+    spawn_background_task/asyncio.create_task path used elsewhere in this
+    module -- BackgroundTasks is guaranteed by the ASGI framework to run
+    only after this request's own HTTP response has been sent, whereas
+    create_task starts running concurrently with no such ordering
+    guarantee. Confirmed live: this handler's own remaining synchronous
+    work below (spec-gate evaluation can include an LLM call scoring a
+    large review document) took over a minute in one observed incident,
+    while the fire-and-forget termination killed the calling agent's tmux
+    session -- and with it the MCP client process still waiting on THIS
+    response -- within ~10 seconds. The response was later generated for
+    a process that no longer existed, surfacing to the agent as a
+    permanent "Connection closed" on complete_my_task even though the
+    task had already completed successfully. Deferring termination until
+    after the response is sent lets the agent survive long enough for its
+    own retry logic to hit this endpoint's idempotency short-circuit
+    (task.status already terminal) and receive a fast, real confirmation.
+    """
     from src.services.task_completion_service import TaskCompletionService
 
     task.status = request.status
@@ -373,9 +393,7 @@ async def _complete_task_normally(
         # might not have dispatched yet.
         spawn_background_task(_dispatch_ready_dependents(task.id, task.workflow_id))
 
-    spawn_background_task(
-        terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])
-    )
+    background_tasks.add_task(terminate_agents_and_process_queue, server_state.agent_manager, [agent_id])
 
     return output_lost_rejection
 
