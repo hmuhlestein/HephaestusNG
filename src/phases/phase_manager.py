@@ -1050,16 +1050,24 @@ class PhaseManager:
             transition_phase_execution,
         )
 
-        transition_phase_execution(
+        # Logged only on an actual success -- caught during a follow-up
+        # gap-check on this whole migration: this used to log
+        # unconditionally regardless of whether the reopen actually
+        # landed (e.g. a concurrent write -- a termination, another
+        # evaluation -- already moved this execution off "in_progress"),
+        # claiming a retry that the DB doesn't reflect. The returned dict
+        # is unchanged either way: the caller still needs to know a retry
+        # was decided, and downstream task creation re-validates the
+        # execution's real state independently.
+        if transition_phase_execution(
             session, execution.phase_id, "pending", reason="_handle_evaluation_retry",
             extra_fields={"completed_at": execution.completed_at},
-        )
-
-        logger.info(
-            f"Retrying phase {phase.name} "
-            f"({evaluation.metadata.get('retry_count', 0)}/"
-            f"{evaluation.metadata.get('max_retries', '?')})"
-        )
+        ) is not None:
+            logger.info(
+                f"Retrying phase {phase.name} "
+                f"({evaluation.metadata.get('retry_count', 0)}/"
+                f"{evaluation.metadata.get('max_retries', '?')})"
+            )
         return {
             "action": "retry",
             "target_phase": phase.name,

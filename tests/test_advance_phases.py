@@ -3505,6 +3505,38 @@ class TestReleasePendingPhasesWithDoneTasks:
                 id="task-real"
             ).first().created_at
 
+    def test_does_not_log_success_when_the_transition_loses_the_race(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, caught during a follow-up gap-check across every
+        transition_phase_execution call site (including this one, added
+        in this same refactor): this used to log a WARNING unconditionally
+        BEFORE attempting the write, claiming the flip happened even if
+        the atomic UPDATE then lost the race (e.g. a concurrent dispatch
+        already moved this exact phase on) and correctly declined to
+        overwrite it."""
+        from unittest.mock import patch
+
+        from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
+        from src.core.database import PhaseExecution
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+            execution.started_at = None
+
+        mock_logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.transition_phase_execution",
+            return_value=None,
+        ):
+            with db_manager.session_scope() as session:
+                _release_pending_phases_with_done_tasks(session, "wf-1", mock_logger)
+
+        messages = [str(call.args[0]) for call in mock_logger.warning.call_args_list]
+        assert not any("flipping to in_progress" in m for m in messages)
+
 
 class TestCaseCompletedWithSuccessor:
     """Regression: this case only ever fires when last_completed's
@@ -6931,6 +6963,32 @@ class TestMarkSkippedOverPhases:
         with db_manager.session_scope() as session:
             exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
             assert exec2.status == "in_progress"
+
+    def test_does_not_log_success_when_the_transition_loses_the_race(self, db_manager):
+        """Regression, caught during a follow-up gap-check across every
+        transition_phase_execution call site: this used to log "marking
+        its PhaseExecution 'skipped'" BEFORE attempting the write,
+        unconditionally -- claiming the skip happened even if the atomic
+        UPDATE then lost the race (e.g. a concurrent dispatch moved this
+        exact phase to "in_progress" in the moment between this
+        function's own read and its write) and correctly declined to
+        overwrite it."""
+        from unittest.mock import patch
+
+        from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+
+        self._seed(db_manager, {1: "completed", 2: "pending", 3: "pending"})
+        mock_logger = MagicMock()
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.transition_phase_execution",
+            return_value=None,
+        ):
+            with db_manager.session_scope() as session:
+                mark_skipped_over_phases(session, "wf-1", 1, 3, mock_logger)
+
+        messages = [str(call.args[0]) for call in mock_logger.info.call_args_list]
+        assert not any("skipped over by a jump" in m for m in messages)
 
 
 if __name__ == "__main__":

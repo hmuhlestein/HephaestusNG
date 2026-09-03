@@ -772,6 +772,50 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
             assert execution.status == "pending"
             assert execution.completed_at == stale_completed_at
 
+    def test_does_not_log_retrying_when_the_transition_loses_the_race(self, seeded_workflow):
+        """Regression, caught during a follow-up gap-check across every
+        transition_phase_execution call site: this used to log "Retrying
+        phase X (n/max)" unconditionally regardless of whether the reopen
+        actually landed (e.g. a concurrent write -- a termination,
+        another evaluation -- already moved this execution off
+        "in_progress"), claiming a retry the DB doesn't reflect. The
+        returned dict is unchanged either way: downstream task creation
+        re-validates the execution's real state independently, so the
+        caller still needs "action": "retry" regardless of this specific
+        write's outcome -- only the log was wrong, not the decision."""
+        from datetime import datetime
+        from unittest.mock import patch
+
+        from src.core.database import Phase, PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+        from src.workflow_engine.orchestrator import EvaluationResult, OrchestrationAction
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        with seeded_workflow.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-dev").first()
+            execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
+            execution.status = "in_progress"
+            execution.started_at = datetime.utcnow()
+            session.flush()
+
+            evaluation = EvaluationResult(
+                action=OrchestrationAction.RETRY,
+                reason="score too low",
+                metadata={"retry_count": 1, "max_retries": 2},
+            )
+            with patch(
+                "src.autopilot.orchestrator.phase_transitions.transition_phase_execution",
+                return_value=None,
+            ):
+                with patch("src.phases.phase_manager.logger") as mock_logger:
+                    result = pm._handle_evaluation_retry(session, phase, execution, "summary", evaluation)
+
+        assert result["action"] == "retry"
+        messages = [str(call.args[0]) for call in mock_logger.info.call_args_list]
+        assert not any("Retrying phase" in m for m in messages)
+
     def test_arbitrate_sets_in_progress_and_preserves_started_at(self, seeded_workflow):
         """Must NOT land on "pending" -- _case_completed_with_successor's
         next-pending-by-order picking would skip a phase reopened as
