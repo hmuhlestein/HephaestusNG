@@ -27,7 +27,7 @@ from src.core.constants import HEPHAESTUS_INSTALL_DIR
 load_dotenv()
 
 # Defaults
-DEFAULT_CLI_TOOL = os.getenv("DEFAULT_CLI_TOOL", "pi")
+DEFAULT_CLI_TOOL = os.getenv("DEFAULT_CLI_TOOL", "claude")
 
 
 def _env_bool(name: str) -> Optional[bool]:
