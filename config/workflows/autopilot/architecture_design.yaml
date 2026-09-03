@@ -265,11 +265,13 @@ additional_notes: |
   - Document the conflict as a known issue that needs resolution
   - Flag it as a blocker that must be addressed before implementation
 
-  ## STEP 7: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
-  do not call create_task here, see STEP 12)
+  ## STEP 7: WRITE THE TASK BREAKDOWN INTO architecture-<your Task ID's first
+  8 hex characters>.md (documentation only — do not call create_task here,
+  see STEP 12)
 
   Document a detailed task breakdown for Phase 3 (Development) as TEXT in
-  architecture.md. For EACH component:
+  architecture-<your Task ID's first 8 hex characters>.md (NOT the bare
+  "architecture.md" — see "Output path" below). For EACH component:
   
   ### Task: [Component Name]
   **Ticket ID:** (will be assigned)
