@@ -402,6 +402,41 @@ class TestReadTranscriptLogReal:
         assert "another line" in result
         assert "─" not in result
 
+    def test_filters_claude_codes_own_status_bar_chrome(self, tmp_path):
+        """Regression, confirmed live (task 644d6e0b, agent 53a88e56):
+        chrome_re only recognized pi's status-bar patterns. A claude
+        agent's repeated re-renders of its OWN chrome (spinner+stats,
+        tip line, version banner, permission bar) were classified
+        'content' instead, which defeats the separator-collapse logic
+        the same way leaving pi's own chrome unclassified would -- the
+        separator pair bracketing it no longer has only blank/sep
+        between it and the next real content, so the block-boundary
+        collapse never fires. Net effect: every spinner tick left its
+        own near-duplicate status line with the surrounding whitespace
+        never collapsing down to a single blank line."""
+        sep = "".join("\x1b[38;2;129;162;190m─\x1b[39m" for _ in range(50))
+        content = (
+            "real line one\n"
+            f"{sep}\n"
+            "✶ Choreographing… (1m 14s · ↓ 3.2k tokens)\n"
+            "⎿ Tip: Use /btw to ask a quick side question without interrupting Claude's current work\n"
+            "globalVersion: 2.1.238 · latestVersion: 2.1.259\n"
+            "⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents\n"
+            f"{sep}\n"
+            "real line two\n"
+        )
+        result = self._run(tmp_path, content)
+        assert "real line one" in result
+        assert "real line two" in result
+        assert "Choreographing" not in result
+        assert "Tip: Use /btw" not in result
+        assert "globalVersion" not in result
+        assert "bypass permissions" not in result
+        # The whole chrome block between the two separators must collapse
+        # to a single blank line, not one blank per filtered-out chrome
+        # line (four in this case) -- exactly the "many blank lines" bug.
+        assert "\n\n\n" not in result
+
     def test_dedups_progressive_typing_redraws_across_separators(self, tmp_path):
         """pi re-renders a command line as it streams ($ cd /, $ cd /Users,
         ...), with a separator line between frames. All partial frames must

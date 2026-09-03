@@ -578,6 +578,28 @@ class AgentOutputCapture:
                 r'|MCP:\s'
                 r'|[\u2800-\u28ff]\s'
                 r'|[~/][^\s]*\s+\([^)]+\)$'
+                # claude's own status-bar chrome, absent until now: a
+                # claude agent's repeated re-renders of these lines were
+                # classified 'content' instead of 'chrome', which defeats
+                # the separator-collapse logic below exactly the way the
+                # comment on 'sep' handling already warns pi's own chrome
+                # would if left unclassified -- the separator pair
+                # bracketing it no longer has only blank/sep between it
+                # and the next real content, so the block-boundary
+                # collapse never fires. Every spinner tick then produced
+                # its own near-duplicate status line with the surrounding
+                # whitespace never collapsing. Confirmed live on task
+                # 644d6e0b's transcript (agent 53a88e56).
+                #   "\u2736 Choreographing\u2026 (1m 14s \xb7 \u2193 3.2k tokens)"  spinner+stats
+                #     (glyph rotates -- \u2736/\u273b/\xb7/etc -- anchored on the
+                #     distinctive "(<time> \xb7 \u2193" suffix instead of the glyph)
+                r'|\S\s+\S.*\(\s*\d+m?\s*\d*s?\s*\xb7\s*\u2193'
+                #   "\u23bf Tip: Use /btw to ask a quick side question..."  tip line
+                r'|.{0,3}Tip:\s'
+                #   "globalVersion: 2.1.238 \xb7 latestVersion: ..."  version banner
+                r'|globalVersion:\s*\d'
+                #   "\u23f5\u23f5 bypass permissions on (shift+tab to cycle) ..."  permission bar
+                r'|.{0,3}bypass permissions on \(shift\+tab to cycle\)'
                 r')'
             )
             classified = []  # (kind, line, clean)
