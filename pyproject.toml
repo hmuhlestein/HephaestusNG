@@ -34,6 +34,16 @@ python-dotenv = "^1.0.0"
 python-jose = {extras = ["cryptography"], version = ">=3.3.0"}
 cryptography = ">=50.0.0"
 passlib = {extras = ["bcrypt"], version = ">=1.7.0"}
+# passlib 1.7.4 (last released 2020) reads bcrypt's internal
+# __about__.__version__ attribute to detect its backend -- removed in
+# bcrypt 4.0's restructuring, so an unpinned bcrypt resolves to 5.x and
+# every hash/verify call raises "password cannot be longer than 72 bytes"
+# even for a short password (passlib's own broken-backend fallback path).
+# Confirmed live: this broke all local auth (register/login) the moment
+# an unrelated pyproject.toml fix let bcrypt resolve to 5.0.0 for the
+# first time -- previously masked because the project could never reach
+# a successfully-installed state to run against at all.
+bcrypt = "<4.0.0"
 watchdog = "^3.0.0"
 alembic = "^1.13.0"
 httpx = ">=0.25.0"
