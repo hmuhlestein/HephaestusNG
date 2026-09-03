@@ -1374,6 +1374,18 @@ class TestCreateAgentForTaskFallback:
         # The discarded agent_id must be the failed primary attempt's, not
         # the one that ultimately succeeded and was returned.
         assert discarded_agent_id != agent.id
+        # Regression, observed live: 6 consecutive retries against the
+        # SAME resumed claude session id, ~35s apart, each one's own
+        # launch-failure cleanup hard-killing the failed attempt's tmux
+        # session with zero grace period -- unlike Terminator's own
+        # normal termination path, which deliberately SIGINTs and waits
+        # before SIGKILL so the CLI can release its own state first. The
+        # primary attempt's session must get the same courtesy before
+        # being killed here.
+        mock_session.attached_window.attached_pane.send_keys.assert_any_call(
+            "C-c", enter=False
+        )
+        mock_session.kill_session.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_falls_back_when_cli_rejects_its_own_launch_model(

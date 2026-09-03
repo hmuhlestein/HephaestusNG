@@ -147,6 +147,62 @@ class TestGenericRejectionRequiresPaneCorroboration:
             launch_pipeline._detect_launch_failure(pane, cli_agent, "pi", "session-probe-broken")
 
 
+class TestLaunchFailureLoggingSurvivesAnsiPadding:
+    """Regression, caught chasing a live "claude CLI failed to start"
+    incident: every single occurrence's log line showed an EMPTY or
+    near-empty string after the colon, making the actual rejection text
+    (and thus the real root cause) unrecoverable after the fact. A raw
+    capture-pane line is padded to the full terminal width with SGR
+    escape codes and trailing spaces -- a single redrawn shell prompt
+    line can run 100-200+ raw characters before any visible content. The
+    old `.strip()[-300:]` on un-stripped text could spend its entire
+    budget on the control-code padding of the last line or two and never
+    reach the actual rejection text earlier in the capture, since
+    `.strip()` only trims whitespace at the very ends of the whole
+    string -- ANSI/SGR bytes there are not whitespace and survive
+    untouched, silently consuming the slice."""
+
+    def test_rejection_text_survives_wide_ansi_padded_trailing_lines(self, launch_pipeline):
+        """Construct exactly the shape that hid the real error live: the
+        genuine rejection appears early, followed by several redrawn-
+        prompt lines wide enough (in raw, un-stripped form) to consume a
+        300-character tail slice on their own."""
+        cli_agent = MagicMock()
+        cli_agent.get_launch_rejection_patterns.return_value = [
+            r"command not found",
+            r"No such file or directory",
+        ]
+        padded_blank_prompt = "\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m" + (" " * 150) + "\r"
+        pane = _pane(
+            ["zsh: command not found: claude"] + [padded_blank_prompt] * 6,
+            "zsh",
+        )
+
+        with pytest.raises(Exception, match="shell reported the launch command was not found"):
+            launch_pipeline._detect_launch_failure(pane, cli_agent, "claude", "session-padded")
+
+    def test_logged_message_contains_the_actual_rejection_text(self, launch_pipeline, caplog):
+        """Not just "doesn't crash" -- the logged diagnostic must actually
+        contain the real rejection text, which is the whole point of the
+        fix (the old behavior raised the same exception either way; the
+        bug was entirely in what got logged, silently, alongside it)."""
+        import logging
+
+        cli_agent = MagicMock()
+        cli_agent.get_launch_rejection_patterns.return_value = [r"command not found"]
+        padded_blank_prompt = "\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m" + (" " * 150) + "\r"
+        pane = _pane(
+            ["zsh: command not found: claude"] + [padded_blank_prompt] * 6,
+            "zsh",
+        )
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(Exception):
+                launch_pipeline._detect_launch_failure(pane, cli_agent, "claude", "session-padded")
+
+        assert any("command not found: claude" in r.message for r in caplog.records)
+
+
 class TestPaneHasReturnedToShell:
     """Direct unit tests for the corroboration helper itself."""
 
