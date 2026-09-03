@@ -412,7 +412,13 @@ async def _broadcast_task_completion(
             "type": "task_completed",
             "task_id": request.task_id,
             "agent_id": agent_id,
-            "status": "failed" if output_lost_rejection else request.status,
+            # Every existing rejection dict already carries its own
+            # "status" (all "failed") -- read it instead of assuming, so
+            # §3.3's "pending" outcome (verify_git_expert_merged_and_
+            # pushed, CI still running) broadcasts as pending rather than
+            # a misleading "task failed" notification for a completely
+            # normal wait.
+            "status": output_lost_rejection.get("status", "failed") if output_lost_rejection else request.status,
             "summary": request.summary[:200],
         },
         project_id=bcast_project_id,

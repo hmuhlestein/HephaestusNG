@@ -12,6 +12,9 @@ _maybe_resolve_arbitration -- see _run_phase_advancement_sweep_once.
 import logging
 from typing import TYPE_CHECKING
 
+from sqlalchemy import or_
+
+from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
 from src.core.database import Feature, Phase, PhaseExecution, Task, get_db, utc_now
 
 if TYPE_CHECKING:
@@ -44,9 +47,32 @@ def _resolve_pending_pr_status(workflow_id: str, sweep_logger: "OrchestratorLogg
         if not execution or execution.status != "in_progress":
             return
 
+        # Excludes arbitration tasks -- same exemption verify_git_expert_
+        # merged_and_pushed itself has. Reachable in practice: once this
+        # task's own retries against a real CI/review failure exhaust
+        # task.retry_count, _trigger_arbitration fires and creates a NEW
+        # Task row on this SAME phase_id (also in_progress, also more
+        # recent -- _trigger_arbitration deliberately keeps the
+        # PhaseExecution "in_progress" while an arbitration is pending).
+        # Without this filter, this query would pick up the arbitration
+        # task instead of (or once the original settles into "failed",
+        # exclusively) and try to resolve ITS completion from PR/CI status
+        # -- corrupting the separate arbitration_result.json-driven
+        # resolution _maybe_resolve_arbitration owns.
         task = (
             db.query(Task)
-            .filter_by(phase_id=phase.id, status="in_progress")
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "in_progress",
+                # != is not NULL-safe in SQL (NULL != 'arbitration' is NULL,
+                # not TRUE, so a plain != would also exclude every ordinary
+                # task -- created_by_agent_id is unset/NULL for most of
+                # them). isnot(None) | != covers both.
+                or_(
+                    Task.created_by_agent_id.is_(None),
+                    Task.created_by_agent_id != ARBITRATION_CREATED_BY,
+                ),
+            )
             .order_by(Task.created_at.desc())
             .first()
         )

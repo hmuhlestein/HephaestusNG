@@ -154,6 +154,45 @@ class TestResolvePendingPRStatus:
 
         mock_get.assert_not_called()
 
+    def test_ignores_an_arbitration_task_on_the_same_phase(self, db_manager):
+        """Regression found reviewing this fix: once the original
+        git_expert task's own retries against a real CI/review failure
+        exhaust task.retry_count, _trigger_arbitration fires and creates a
+        NEW Task row on this SAME phase_id (also in_progress, more recent
+        -- _trigger_arbitration deliberately keeps PhaseExecution
+        in_progress while an arbitration is pending). Without excluding
+        arbitration tasks, this function's own "most recent in_progress
+        task" query would pick up the arbitration task and try to resolve
+        ITS completion from PR/CI status instead -- corrupting the
+        separate arbitration_result.json-driven resolution
+        _maybe_resolve_arbitration owns."""
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.pr_resolution import _resolve_pending_pr_status
+
+        _seed(db_manager, task_status="failed")  # original task exhausted, now failed
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="arb-task-1", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="Arbitrate stuck phase: git_expert",
+                done_definition="x", status="in_progress",
+                created_by_agent_id=ARBITRATION_CREATED_BY, action="arbitrate",
+            ))
+
+        fake_status = PRStatus(
+            url="https://github.com/o/r/pull/1", state="OPEN",
+            ci_conclusion="passing", review_decision=None, summary="ok",
+        )
+        with patch("src.services.github_pr_status.get_pr_status", return_value=fake_status) as mock_get:
+            _resolve_pending_pr_status("wf-1", MagicMock())
+
+        # No non-arbitration in_progress task exists (the original is
+        # "failed"), so there's nothing for this function to resolve --
+        # it must not touch the arbitration task at all.
+        mock_get.assert_not_called()
+        with db_manager.session_scope() as session:
+            arb_task = session.query(Task).filter_by(id="arb-task-1").first()
+            assert arb_task.status == "in_progress"
+
     def test_phase_execution_not_in_progress_is_a_noop(self, db_manager):
         """The phase itself already advanced past git_expert (or was never
         the current phase) -- nothing to resolve here regardless of task
