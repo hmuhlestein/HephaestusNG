@@ -156,6 +156,63 @@ def terminate_agent(
         if not agent:
             return False
 
+        # 0. Checkpoint cost for the agent's in-flight task BEFORE anything
+        # below clears current_task_id -- this is the only point every
+        # termination path (orphan reaper, mechanical recovery, auto-restart,
+        # manual API kill, a crash-restart, Terminator's own tmux teardown)
+        # is guaranteed to pass through, so it's the only place a checkpoint
+        # here reliably covers all of them. Safe to call even when the task
+        # just completed normally and collect_cost_on_completion already ran
+        # for it -- see collect_cost_on_termination's docstring for why that
+        # can't double-count. Uses a fresh DB session internally (reads the
+        # last COMMITTED state), so this must run against the value read
+        # here, not after step 2 below clears it.
+        #
+        # Several call sites (feature_routes.py, queue_routes.py,
+        # design_file_routes.py, lifecycle.py, orphan_reaper.py) invoke
+        # terminate_agent() directly and synchronously from inside an async
+        # FastAPI/asyncio handler, with no thread-pool offload -- unlike
+        # collect_cost_on_completion's own callers, which all offload it via
+        # run_in_executor (see _complete_task_normally). Reading a session
+        # transcript file is exactly the blocking I/O CLAUDE.md's "no
+        # synchronous blocking calls in async endpoints" rule exists for, so
+        # this dispatches onto the running loop's executor when one exists
+        # (fire-and-forget -- collect_cost_on_termination already swallows
+        # and logs its own failures, nothing to await) and falls back to a
+        # direct call when there is no running loop in this thread, e.g.
+        # already inside a run_in_executor worker (Terminator, AutoRestart)
+        # or a plain sync script/test.
+        if agent.current_task_id:
+            from src.services.task_completion.cost import collect_cost_on_termination
+
+            # agent.id passed explicitly, not re-derived inside the
+            # checkpoint call -- collect_task_cost's default agent lookup
+            # depends on Task.assigned_agent_id / Agent.current_task_id,
+            # the exact two fields steps 1-2 below clear. Fire-and-forget
+            # dispatch (the loop-running branch just below) means those
+            # steps routinely finish on THIS thread before the executor's
+            # worker thread even starts, so a lookup that re-derives the
+            # agent from those fields would almost always find neither
+            # still set and silently record nothing -- confirmed live via
+            # a real race reproduction, not a hypothetical.
+            #
+            # NOT named agent_id: this closure already reads that name
+            # from terminate_agent's own outer parameter (line ~155's
+            # `filter_by(id=agent_id)` above) -- assigning to it here,
+            # even conditionally, makes Python treat it as local to this
+            # WHOLE nested function, breaking that earlier read with
+            # UnboundLocalError. Confirmed live (every call with this
+            # named the same way raised it immediately).
+            checkpoint_agent_id = agent.id
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                loop.run_in_executor(None, collect_cost_on_termination, agent.current_task_id, checkpoint_agent_id)
+            else:
+                collect_cost_on_termination(agent.current_task_id, checkpoint_agent_id)
+
         # 1. Reset stray tasks FIRST (before flipping agent row). Includes
         # under_review/needs_work, not just assigned/in_progress/pending --
         # a task can be under_review (kept-alive-for-validation) or

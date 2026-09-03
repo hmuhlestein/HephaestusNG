@@ -791,7 +791,7 @@ def _discover_codex_session_file(session_id: str, cwd: str) -> Optional[Path]:
     return None
 
 
-def collect_task_cost(task_id: str) -> None:
+def collect_task_cost(task_id: str, agent_id: Optional[str] = None) -> None:
     """Entry point for cost collection on task completion.
 
     Called from task_completion_service when a task completes.
@@ -800,6 +800,23 @@ def collect_task_cost(task_id: str) -> None:
 
     Args:
         task_id: The completed task's ID
+        agent_id: Optional -- when given, looked up directly instead of
+            derived from task.assigned_agent_id / Agent.current_task_id
+            (see below). Required for a caller that can't guarantee those
+            fields are still set by the time this runs: engine_client.
+            terminate_agent dispatches the termination-time checkpoint
+            (collect_cost_on_termination) via run_in_executor when a
+            caller has a running event loop, fire-and-forget -- so
+            _do_terminate's own subsequent steps (clearing
+            Task.assigned_agent_id and Agent.current_task_id, the same
+            two fields this function's fallback derivation depends on)
+            routinely run to completion on the calling thread before the
+            executor's worker thread even starts, let alone reaches its
+            own query here. Confirmed live: the derivation-based lookup
+            found neither field still set and silently recorded nothing,
+            for every termination whose caller had a running loop --
+            precisely the async API/orphan-reaper/mechanical-recovery
+            callers this checkpoint exists for.
     """
     from src.core.cost_derivation import record_cost
     from src.core.database import Agent, CostEntry, SessionCostCheckpoint, Task, get_db
@@ -814,16 +831,19 @@ def collect_task_cost(task_id: str) -> None:
             logger.debug(f"[COST-COLLECT] Task {task_id[:8]} has no workflow — skipping")
             return
 
-        # Find the agent that was assigned to this task
-        agent = None
-        if task.assigned_agent_id:
-            agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
+        if agent_id:
+            agent = db.query(Agent).filter_by(id=agent_id).first()
+        else:
+            # Find the agent that was assigned to this task
+            agent = None
+            if task.assigned_agent_id:
+                agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
 
-        # Fallback: if assigned_agent_id was cleared (e.g. by terminate_agent
-        # resetting stray tasks), check if any agent still has current_task_id
-        # pointing at this task.
-        if not agent:
-            agent = db.query(Agent).filter_by(current_task_id=task_id).first()
+            # Fallback: if assigned_agent_id was cleared (e.g. by terminate_agent
+            # resetting stray tasks), check if any agent still has current_task_id
+            # pointing at this task.
+            if not agent:
+                agent = db.query(Agent).filter_by(current_task_id=task_id).first()
 
         if not agent:
             logger.debug(f"[COST-COLLECT] Task {task_id[:8]} has no assigned agent — skipping")
