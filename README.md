@@ -97,7 +97,7 @@ For the full story of how the original framework's self-organizing branching wor
 - **Node.js & npm** - For the frontend UI
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** - Python package/venv manager
 - **Claude Code**, **Codex**, **OpenCode**, **Droid**, **pi**, or **Swarm** - CLI AI tool that agents run inside
-- **API Keys**: OpenRouter (default), OpenAI, or Anthropic
+- **API Keys**: none required by default — LLM-backed components (arbitration, guardian, etc.) route through your locally authenticated CLI tool, and embeddings run locally via fastembed. Set an OpenRouter, OpenAI, or Anthropic key only if you want to route through a metered API instead.
 
 Unlike the original, **Docker is not required by default** — the vector store (turbovec) runs local and in-process. Qdrant is available as an opt-in alternative (`--with-docker`) if you'd rather run that instead.
 
