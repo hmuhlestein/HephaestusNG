@@ -85,7 +85,13 @@ def resync_incomplete_phase_prompts_from_yaml(db_manager) -> None:
     updated = 0
     try:
         with db_manager.get_session() as session:
-            workflows = session.query(Workflow).all()
+            # A completed workflow's phases are, by definition, all done --
+            # skip the whole workflow rather than querying its phases only
+            # to filter every one of them out individually below. 'failed'
+            # and 'paused' are deliberately still scanned (both can be
+            # retried/resumed later), matching the per-phase terminal-status
+            # check's own reasoning just below.
+            workflows = session.query(Workflow).filter(Workflow.status != "completed").all()
             for workflow in workflows:
                 defn = definitions_by_id.get(workflow.definition_id)
                 if not defn:
@@ -94,15 +100,24 @@ def resync_incomplete_phase_prompts_from_yaml(db_manager) -> None:
                 launch_params = workflow.launch_params or {}
 
                 phases = session.query(Phase).filter_by(workflow_id=workflow.id).all()
+                if not phases:
+                    continue
+                # One query per workflow, not one per phase (N+1) -- this
+                # function scans every non-completed workflow on every
+                # startup, and a phase-at-a-time PhaseExecution lookup
+                # scales with total phase count across the whole system
+                # rather than workflow count.
+                executions_by_phase_id = {
+                    e.phase_id: e
+                    for e in session.query(PhaseExecution)
+                    .filter(PhaseExecution.phase_id.in_([p.id for p in phases]))
+                    .all()
+                }
                 for phase in phases:
                     fresh = fresh_by_name.get(phase.name)
                     if not fresh:
                         continue
-                    execution = (
-                        session.query(PhaseExecution)
-                        .filter_by(phase_id=phase.id)
-                        .first()
-                    )
+                    execution = executions_by_phase_id.get(phase.id)
                     if execution and execution.status in TERMINAL_STATUSES:
                         continue
 
