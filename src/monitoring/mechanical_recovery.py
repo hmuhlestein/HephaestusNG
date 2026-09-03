@@ -229,11 +229,22 @@ class MechanicalRecoveryDetector:
                 fallback_tool = getattr(phase, "fallback_cli_tool", None)
                 fallback_model = getattr(phase, "fallback_cli_model", None)
 
-        if not fallback_tool:
-            cfg = get_config()
-            if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
+        # The global config is the authority on whether a fallback tool is
+        # allowed at all -- unset must win over a Phase row's own
+        # fallback_cli_tool even when one is already stored there (see
+        # launch_pipeline.py._resolve_phase_config's identical fix for the
+        # live incident this closes: a phase kept falling back to a CLI
+        # tool for hours after it was removed from every config file,
+        # because the Phase column baked it in once at creation time and
+        # was never refreshed against a later policy change).
+        cfg = get_config()
+        if cfg.agents.default_fallback_cli_tool:
+            if not fallback_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
                 fallback_tool = cfg.agents.default_fallback_cli_tool
                 fallback_model = cfg.agents.default_fallback_cli_model
+        else:
+            fallback_tool = None
+            fallback_model = None
 
         if fallback_tool and not is_cli_tool_available(fallback_tool):
             logger.warning(

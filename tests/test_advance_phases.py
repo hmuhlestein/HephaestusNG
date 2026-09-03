@@ -1535,42 +1535,122 @@ class TestMaybeRetryFailedTasks:
         failure_reason to None and committed it -- a fresh DB read always
         saw None. Confirmed by this test failing to detect the fallback
         before the fix (session_limit_override_cli stayed None, and
-        create_agent_for_task_direct was called with no override at all)."""
+        create_agent_for_task_direct was called with no override at all).
+
+        The global config must allow SOME fallback for a phase-level
+        override to get a chance to apply at all (see
+        test_global_fallback_disabled_overrides_a_stale_phase_level_value
+        for the "global unset must win outright" case) -- set here to a
+        different placeholder than the phase's own "pi" specifically to
+        prove the phase-level value is what actually wins."""
+        from src.core.simple_config import get_config
         from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
-        with db_manager.session_scope() as session:
-            phase = session.query(Phase).filter_by(id="phase-1").first()
-            phase.fallback_cli_tool = "pi"
-            phase.fallback_cli_model = "fallback-model"
-            session.add(
-                Task(
-                    id="task-session-limit-real-fallback",
-                    workflow_id="wf-1",
-                    phase_id="phase-1",
-                    raw_description="r",
-                    done_definition="d",
-                    status="failed",
-                    failure_reason="CLI session limit reached",
-                )
-            )
-
-        logger = MagicMock()
-        with patch(
-            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
-            side_effect=_agent_row_side_effect("session-limit-real-fallback-agent"),
-        ) as mock_create_agent, patch(
-            "src.autopilot.orchestrator.phase_transitions.is_cli_tool_available",
-            return_value=True,
-        ):
+        cfg = get_config()
+        original_fallback_tool = cfg.agents.default_fallback_cli_tool
+        original_fallback_model = cfg.agents.default_fallback_cli_model
+        cfg.agents.default_fallback_cli_tool = "some-global-fallback"
+        cfg.agents.default_fallback_cli_model = "some-global-model"
+        try:
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
-                result = _maybe_retry_failed_tasks(session, phase, logger)
+                phase.fallback_cli_tool = "pi"
+                phase.fallback_cli_model = "fallback-model"
+                session.add(
+                    Task(
+                        id="task-session-limit-real-fallback",
+                        workflow_id="wf-1",
+                        phase_id="phase-1",
+                        raw_description="r",
+                        done_definition="d",
+                        status="failed",
+                        failure_reason="CLI session limit reached",
+                    )
+                )
+
+            logger = MagicMock()
+            with patch(
+                "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+                side_effect=_agent_row_side_effect("session-limit-real-fallback-agent"),
+            ) as mock_create_agent, patch(
+                "src.autopilot.orchestrator.phase_transitions.is_cli_tool_available",
+                return_value=True,
+            ):
+                with db_manager.session_scope() as session:
+                    phase = session.query(Phase).filter_by(id="phase-1").first()
+                    result = _maybe_retry_failed_tasks(session, phase, logger)
+        finally:
+            cfg.agents.default_fallback_cli_tool = original_fallback_tool
+            cfg.agents.default_fallback_cli_model = original_fallback_model
 
         assert result is True
         mock_create_agent.assert_called_once()
         _, call_kwargs = mock_create_agent.call_args
         assert call_kwargs["phase_cli_tool_override"] == "pi"
         assert call_kwargs["phase_cli_model_override"] == "fallback-model"
+
+    def test_global_fallback_disabled_overrides_a_stale_phase_level_value(
+        self, db_manager, sample_workflow
+    ):
+        """The live incident this closes: a Phase row's fallback_cli_tool
+        was baked in while a fallback tool was still globally configured,
+        and survives that tool later being removed from config entirely
+        (agents.default_fallback_cli_tool unset) -- Phase.fallback_cli_tool
+        is written once at phase-creation time and never refreshed. Every
+        session/spend-limit retry for that phase kept silently falling
+        back to the removed tool, because the global config was only ever
+        consulted as a gap-filler when the phase had nothing of its own --
+        never as an override. The global config being unset must now win
+        outright, even over an already-stored phase value."""
+        from src.core.simple_config import get_config
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+
+        cfg = get_config()
+        original_fallback_tool = cfg.agents.default_fallback_cli_tool
+        original_fallback_model = cfg.agents.default_fallback_cli_model
+        cfg.agents.default_fallback_cli_tool = None
+        cfg.agents.default_fallback_cli_model = None
+        try:
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                phase.fallback_cli_tool = "pi"
+                phase.fallback_cli_model = "fallback-model"
+                session.add(
+                    Task(
+                        id="task-session-limit-stale-fallback",
+                        workflow_id="wf-1",
+                        phase_id="phase-1",
+                        raw_description="r",
+                        done_definition="d",
+                        status="failed",
+                        failure_reason="CLI session limit reached",
+                    )
+                )
+
+            logger = MagicMock()
+            # is_cli_tool_available says "pi" IS installed -- if it were
+            # still being considered, it would pass validation and be
+            # used. The global kill-switch must disable it before
+            # validation is even reached.
+            with patch(
+                "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+                side_effect=_agent_row_side_effect("session-limit-no-fallback-agent"),
+            ) as mock_create_agent, patch(
+                "src.autopilot.orchestrator.phase_transitions.is_cli_tool_available",
+                return_value=True,
+            ):
+                with db_manager.session_scope() as session:
+                    phase = session.query(Phase).filter_by(id="phase-1").first()
+                    result = _maybe_retry_failed_tasks(session, phase, logger)
+        finally:
+            cfg.agents.default_fallback_cli_tool = original_fallback_tool
+            cfg.agents.default_fallback_cli_model = original_fallback_model
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        _, call_kwargs = mock_create_agent.call_args
+        assert call_kwargs["phase_cli_tool_override"] is None
+        assert call_kwargs["phase_cli_model_override"] is None
 
     def test_uninstalled_fallback_cli_is_dropped_not_launched_into(
         self, db_manager, sample_workflow
@@ -1585,36 +1665,50 @@ class TestMaybeRetryFailedTasks:
         none of the is_cli_tool_available validation mechanical_recovery.
         py's identical hard-blocker redispatch already has. Same bug class
         as the §7.1 fix, reached via a different call site that fix never
-        covered."""
+        covered.
+
+        The global config must allow SOME fallback for a phase-level
+        override to reach the is_cli_tool_available validation at all --
+        set here to a placeholder different from the phase's own value."""
+        from src.core.simple_config import get_config
         from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
-        with db_manager.session_scope() as session:
-            phase = session.query(Phase).filter_by(id="phase-1").first()
-            phase.fallback_cli_tool = "not-a-real-cli-binary"
-            phase.fallback_cli_model = "some-model"
-            session.add(
-                Task(
-                    id="task-session-limit-no-fallback-installed",
-                    workflow_id="wf-1",
-                    phase_id="phase-1",
-                    raw_description="r",
-                    done_definition="d",
-                    status="failed",
-                    failure_reason="CLI session limit reached",
-                )
-            )
-
-        logger = MagicMock()
-        with patch(
-            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
-            side_effect=_agent_row_side_effect("session-limit-retry-agent"),
-        ) as mock_create_agent, patch(
-            "src.autopilot.orchestrator.phase_transitions.is_cli_tool_available",
-            return_value=False,
-        ) as mock_is_available:
+        cfg = get_config()
+        original_fallback_tool = cfg.agents.default_fallback_cli_tool
+        original_fallback_model = cfg.agents.default_fallback_cli_model
+        cfg.agents.default_fallback_cli_tool = "some-global-fallback"
+        cfg.agents.default_fallback_cli_model = "some-global-model"
+        try:
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
-                result = _maybe_retry_failed_tasks(session, phase, logger)
+                phase.fallback_cli_tool = "not-a-real-cli-binary"
+                phase.fallback_cli_model = "some-model"
+                session.add(
+                    Task(
+                        id="task-session-limit-no-fallback-installed",
+                        workflow_id="wf-1",
+                        phase_id="phase-1",
+                        raw_description="r",
+                        done_definition="d",
+                        status="failed",
+                        failure_reason="CLI session limit reached",
+                    )
+                )
+
+            logger = MagicMock()
+            with patch(
+                "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+                side_effect=_agent_row_side_effect("session-limit-retry-agent"),
+            ) as mock_create_agent, patch(
+                "src.autopilot.orchestrator.phase_transitions.is_cli_tool_available",
+                return_value=False,
+            ) as mock_is_available:
+                with db_manager.session_scope() as session:
+                    phase = session.query(Phase).filter_by(id="phase-1").first()
+                    result = _maybe_retry_failed_tasks(session, phase, logger)
+        finally:
+            cfg.agents.default_fallback_cli_tool = original_fallback_tool
+            cfg.agents.default_fallback_cli_model = original_fallback_model
 
         assert result is True
         mock_is_available.assert_called_once_with("not-a-real-cli-binary")

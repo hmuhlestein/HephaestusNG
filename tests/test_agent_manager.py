@@ -1281,6 +1281,12 @@ class TestCreateAgentForTaskFallback:
     async def test_discards_primary_worktree_on_fallback(
         self, mock_agent_manager, db_manager
     ):
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        mock_agent_manager.config.agents.default_fallback_cli_tool = "some-global-fallback"
         with db_manager.session_scope() as session:
             session.add(
                 Workflow(
@@ -1383,6 +1389,12 @@ class TestCreateAgentForTaskFallback:
         the CLI, and nothing ever routed through fallback_cli_tool.
         Observed live: pi's `Error: Model "..." not found. Use
         --list-models to see available models.`"""
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        mock_agent_manager.config.agents.default_fallback_cli_tool = "some-global-fallback"
         with db_manager.session_scope() as session:
             session.add(
                 Workflow(

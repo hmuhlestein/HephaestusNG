@@ -3090,11 +3090,24 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                         if _phase:
                             session_limit_override_cli = getattr(_phase, 'fallback_cli_tool', None)
                             session_limit_override_model = getattr(_phase, 'fallback_cli_model', None)
-                    if not session_limit_override_cli:
-                        cfg = get_config()
-                        if cfg.agents.default_fallback_cli_tool:
+                    # The global config is the authority on whether a
+                    # fallback tool is allowed at all -- unset must win
+                    # over a Phase row's own fallback_cli_tool even when
+                    # one is already stored there (see
+                    # launch_pipeline.py._resolve_phase_config's identical
+                    # fix for the live incident this closes: a phase kept
+                    # falling back to a CLI tool for hours after it was
+                    # removed from every config file, because the Phase
+                    # column baked it in once at creation time and was
+                    # never refreshed against a later policy change).
+                    cfg = get_config()
+                    if cfg.agents.default_fallback_cli_tool:
+                        if not session_limit_override_cli:
                             session_limit_override_cli = cfg.agents.default_fallback_cli_tool
                             session_limit_override_model = cfg.agents.default_fallback_cli_model
+                    else:
+                        session_limit_override_cli = None
+                        session_limit_override_model = None
                     # This override is passed straight through as
                     # phase_cli_tool below, which short-circuits
                     # _resolve_phase_config's own derivation-and-validation

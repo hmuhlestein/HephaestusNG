@@ -627,10 +627,27 @@ class LaunchPipeline:
 
         cli_type = phase_cli_tool or cli_type or self.config.agents.default_cli_tool
 
-        if not fallback_cli_tool and self.config.agents.default_fallback_cli_tool:
-            if self.config.agents.default_fallback_cli_tool != cli_type:
+        # The global config is the authority on whether a fallback tool is
+        # allowed at all -- unset means "no fallback, period," and that
+        # must win over a Phase row's own fallback_cli_tool even when one
+        # is already stored there. Phase rows bake this value in once, at
+        # creation time, and are never refreshed afterward; a phase created
+        # while a fallback tool was globally configured keeps carrying it
+        # forever, silently surviving the tool later being removed from
+        # config entirely. Observed live: a phase kept falling back to a
+        # CLI tool for hours after that tool was removed from every config
+        # file, because nothing here ever re-checked the still-set Phase
+        # column against the now-disabled global policy. Only when the
+        # global config still allows SOME fallback does a phase-level value
+        # get to override which one -- that per-phase customization stays
+        # intact.
+        if self.config.agents.default_fallback_cli_tool:
+            if not fallback_cli_tool and self.config.agents.default_fallback_cli_tool != cli_type:
                 fallback_cli_tool = self.config.agents.default_fallback_cli_tool
                 fallback_cli_model = self.config.agents.default_fallback_cli_model
+        else:
+            fallback_cli_tool = None
+            fallback_cli_model = None
 
         # A fallback (phase-level or global config) that isn't actually
         # installed produces a tmux pane with a bare shell and no CLI

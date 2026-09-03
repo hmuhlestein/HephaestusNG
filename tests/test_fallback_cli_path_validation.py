@@ -92,14 +92,19 @@ class TestResolvePhaseConfigFallbackValidation:
 
     def test_disables_phase_level_fallback_when_not_on_path(self, tmp_path):
         """A Phase row's own fallback_cli_tool (not the global config one)
-        must be validated the same way."""
+        must be validated the same way. Global fallback is enabled here
+        (to a DIFFERENT tool than the phase's own) -- see
+        test_global_config_disabled_overrides_a_stale_phase_level_value
+        for the separate "global unset must win outright" case; a
+        phase-level override only gets a chance to matter at all when the
+        global config allows some fallback in the first place."""
         from src.agents.manager import AgentManager
 
         db_path = tmp_path / "test.db"
         db = DatabaseManager(str(db_path))
         db.create_tables()
         launch_pipeline = AgentManager(db_manager=db, llm_provider=Mock())
-        launch_pipeline.config.agents.default_fallback_cli_tool = None
+        launch_pipeline.config.agents.default_fallback_cli_tool = "some-other-fallback"
         launch_pipeline.config.agents.default_cli_tool = "claude"
 
         with db.session_scope() as session:
@@ -123,6 +128,55 @@ class TestResolvePhaseConfigFallbackValidation:
                     phase_glm_token_env=None, phase_thinking_level=None,
                 )
 
+        assert phase_config.fallback_cli_tool is None
+        assert phase_config.fallback_cli_model is None
+
+    def test_global_config_disabled_overrides_a_stale_phase_level_value(self, tmp_path):
+        """The live incident this closes: a fallback CLI tool was removed
+        from every config file (agents.default_fallback_cli_tool unset),
+        but a Phase row created BEFORE that removal still carried the old
+        value baked in -- Phase.fallback_cli_tool is written once at
+        phase-creation time and never refreshed. Every dispatch for that
+        phase kept silently falling back to the removed tool, because the
+        global config was only ever consulted as a gap-filler when the
+        phase had nothing of its own -- never as an override. The global
+        config being unset must now win outright, even over an
+        already-stored phase value, since "no fallback configured" is a
+        deliberate policy statement, not the absence of one."""
+        from src.agents.manager import AgentManager
+
+        db_path = tmp_path / "test.db"
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        launch_pipeline = AgentManager(db_manager=db, llm_provider=Mock())
+        launch_pipeline.config.agents.default_fallback_cli_tool = None
+        launch_pipeline.config.agents.default_cli_tool = "claude"
+
+        with db.session_scope() as session:
+            session.add(Workflow(id="wf2", name="W", status="active", phases_folder_path="/tmp"))
+            session.add(Phase(
+                id="ph2", workflow_id="wf2", name="dev", order=1,
+                description="d", done_definitions=["d"],
+                cli_tool="claude", fallback_cli_tool="pi", fallback_cli_model="qwen",
+            ))
+            session.add(Task(
+                id="t4", workflow_id="wf2", phase_id="ph2",
+                raw_description="r", enriched_description="r", done_definition="d",
+            ))
+
+        with db.session_scope() as session:
+            task = session.query(Task).filter_by(id="t4").first()
+
+            with patch("src.agents.launch_pipeline.is_cli_tool_available", return_value=True):
+                phase_config = launch_pipeline._launch._resolve_phase_config(
+                    task, cli_type=None, phase_cli_tool=None, phase_cli_model=None,
+                    phase_glm_token_env=None, phase_thinking_level=None,
+                )
+
+        # is_cli_tool_available says "pi" IS installed -- if it were still
+        # being considered, it would pass validation and be kept. The
+        # global kill-switch must disable it before validation is even
+        # reached.
         assert phase_config.fallback_cli_tool is None
         assert phase_config.fallback_cli_model is None
 
@@ -403,3 +457,42 @@ class TestMechanicalRecoveryResolveFallbackCli:
 
         assert fallback_tool == "pi"
         assert fallback_model == "qwen"
+
+    def test_global_config_disabled_overrides_a_stale_phase_level_value(self, tmp_path):
+        """Same live incident as launch_pipeline.py's identical test: a
+        Phase row's fallback_cli_tool was baked in while a fallback tool
+        was still globally configured, and survives that tool later being
+        removed from config entirely. The global config being unset must
+        win outright over the stored Phase value."""
+        db_path = tmp_path / "test.db"
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        detector = self._detector(db)
+
+        with db.session_scope() as session:
+            session.add(Workflow(id="wf-m3", name="W", status="active", phases_folder_path="/tmp"))
+            session.add(Phase(
+                id="ph-m3", workflow_id="wf-m3", name="dev", order=1,
+                description="d", done_definitions=["d"],
+                cli_tool="claude", fallback_cli_tool="pi", fallback_cli_model="qwen",
+            ))
+            session.add(Task(
+                id="task-m3", workflow_id="wf-m3", phase_id="ph-m3",
+                raw_description="r", enriched_description="r", done_definition="d",
+                status="in_progress",
+            ))
+
+        agent = Mock(cli_type="claude", cli_model="sonnet")
+
+        with db.session_scope() as session:
+            stuck_task = session.query(Task).filter_by(id="task-m3").first()
+            with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg, \
+                 patch("src.interfaces.cli_interface.is_cli_tool_available", return_value=True):
+                mock_cfg.return_value = Mock(agents=Mock(
+                    default_fallback_cli_tool=None,
+                    default_fallback_cli_model=None,
+                ))
+                fallback_tool, fallback_model = detector._resolve_fallback_cli(session, agent, stuck_task)
+
+        assert fallback_tool is None
+        assert fallback_model is None

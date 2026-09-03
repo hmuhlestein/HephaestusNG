@@ -2846,8 +2846,16 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         mock_agent_manager.create_agent_for_task.assert_called_once()
         call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
@@ -2887,7 +2895,15 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         assert task.status == "pending"
         assert "--- RETRY:" in task.enriched_description
@@ -2987,8 +3003,16 @@ class TestSessionLimitPause:
         )
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         mock_agent_manager.create_agent_for_task.assert_called_once()
         assert workflow.status == "active"
@@ -3076,8 +3100,16 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         mock_agent_manager.create_agent_for_task.assert_called_once()
         call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
@@ -3161,8 +3193,16 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         mock_agent_manager.create_agent_for_task.assert_called_once()
         assert task.status == "pending"
@@ -3234,8 +3274,13 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
         with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
-            mock_cfg.return_value.agents.default_fallback_cli_tool = None
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
             mock_cfg.return_value.agents.secondary_cli_model_fallback = None
             result = await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
@@ -3414,7 +3459,15 @@ class TestDetectConnectionErrors:
         mock_session_scope, session = self._session_with(task, phase=phase)
         mock_db.session_scope = mock_session_scope
 
-        result = await make_monitoring_loop._detect_connection_errors(agent)
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            result = await make_monitoring_loop._detect_connection_errors(agent)
 
         assert result is True
         assert task.status == "pending"
@@ -3444,7 +3497,15 @@ class TestDetectConnectionErrors:
         mock_session_scope, session = self._session_with(task, phase=phase)
         mock_db.session_scope = mock_session_scope
 
-        result = await make_monitoring_loop._detect_connection_errors(agent)
+        # The global config must allow SOME fallback for the phase's own
+        # fallback_cli_tool to get a chance to apply at all -- unset means
+        # "no fallback, period," which now overrides even a Phase row's
+        # own stored value (see test_fallback_cli_path_validation.py's
+        # kill-switch tests for the live incident this closes).
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = "some-global-fallback"
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            result = await make_monitoring_loop._detect_connection_errors(agent)
 
         assert result is True
         assert task.status == "failed"
