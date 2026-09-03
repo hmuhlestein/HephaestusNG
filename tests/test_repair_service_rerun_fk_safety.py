@@ -14,14 +14,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.database import (
+    Agent,
+    AgentResult,
     AutopilotDesign,
     AutopilotProject,
     DatabaseManager,
     Feature,
     Phase,
+    PromptProposal,
     Task,
+    ValidationReview,
     Workflow,
     WorkflowDefinition,
+    WorkflowResult,
 )
 
 
@@ -41,10 +46,34 @@ def seeded_db(tmp_path, project_dirs, monkeypatch):
     db_manager = DatabaseManager(db_path)
     db_manager.create_tables()
 
+    # conftest.py's session-scoped _skip_fk_enforcement_for_tests fixture
+    # forces PRAGMA foreign_keys=OFF on every DatabaseManager's connections.
+    # With that off, a wrong-order/missing delete succeeds silently and
+    # this test's own assertions give false confidence -- confirmed live:
+    # the phase0_workflow_id fix below regressed to a plain ORM attribute
+    # assignment (invisible to a later raw DELETE in the same session,
+    # since this project's sessions run autoflush=False) and this test
+    # kept passing throughout, because FK enforcement was off. See
+    # seeded_db_with_feature's identical reasoning below.
+    from sqlalchemy import event
+
+    def _force_fk_on(dbapi_conn, connection_record, *_args):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    event.listen(db_manager.engine, "connect", _force_fk_on)
+    event.listen(db_manager.engine, "checkout", _force_fk_on)
+
     session = db_manager.get_session()
     try:
         proj = AutopilotProject(id="proj-1", name="myproject", base_dir=str(project_dirs["project_dir"]))
         session.add(proj)
+        # Workflow.definition_id -> workflow_definitions.id is also an
+        # enforced FK -- must exist before the Workflow insert below now
+        # that real FK enforcement is on.
+        session.add(WorkflowDefinition(id="feature_architect", name="Feature Architect"))
+        session.commit()
         design = AutopilotDesign(
             id="des-1", project_id="proj-1", filename="01-auth.md", name="auth",
             ordinal=1, extension=".md",
@@ -227,5 +256,140 @@ async def test_rerun_deletes_feature_before_its_workflow(seeded_db_with_feature)
         # (caught by rerun()'s own outer except) and the row survives.
         assert session.query(Workflow).filter_by(id="wf-old").first() is None
         assert session.query(Feature).filter_by(id="feat-1").first() is None
+    finally:
+        session.close()
+
+
+async def _run_rerun(dirs):
+    from src.autopilot.repair_service import RepairService
+
+    with patch("src.autopilot.service.get_autopilot_service") as mock_get_service, \
+         patch("src.autopilot.service.get_registry") as mock_get_registry:
+        mock_service = MagicMock()
+        mock_service.running = False
+        mock_service.start = AsyncMock(return_value=None)
+        mock_get_service.return_value = mock_service
+        mock_get_registry.return_value.try_reserve.return_value = (True, "")
+
+        return await RepairService().rerun(
+            project_path=str(dirs["project_dir"]),
+            design_id="des-1",
+            invalidate=lambda *a, **k: None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_rerun_deletes_agent_result_before_its_validation_review(seeded_db_with_feature):
+    """agent_results.verified_by_validation_id is an enforced FK to
+    validation_reviews.id, set by ResultService's normal task-validation
+    flow for any validated task. Step 2b deleted ValidationReview (by
+    task_id) before AgentResult (by task_id) -- same bug, same fix, as
+    remove_project_design/delete_project's identical cascade."""
+    db_manager, dirs = seeded_db_with_feature
+
+    session = db_manager.get_session()
+    try:
+        session.add(Agent(id="agent-1", system_prompt="p", cli_type="claude"))
+        session.commit()
+
+        session.add(ValidationReview(
+            id="vr-1", task_id="task-1", validator_agent_id="agent-1",
+            iteration_number=1, validation_passed=True, feedback="looks good",
+        ))
+        session.commit()
+
+        session.add(AgentResult(
+            id="ar-1", agent_id="agent-1", task_id="task-1",
+            markdown_content="c", markdown_file_path="/tmp/r.md",
+            result_type="implementation", summary="s",
+            verified_by_validation_id="vr-1",
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    result = await _run_rerun(dirs)
+    assert result is not None
+
+    session = db_manager.get_session()
+    try:
+        assert session.query(AgentResult).filter_by(id="ar-1").first() is None
+        assert session.query(ValidationReview).filter_by(id="vr-1").first() is None
+        assert session.query(Workflow).filter_by(id="wf-old").first() is None
+    finally:
+        session.close()
+
+
+@pytest.mark.asyncio
+async def test_rerun_nulls_workflow_result_id_before_deleting_workflow_result(seeded_db_with_feature):
+    """workflows.result_id is an enforced FK to workflow_results.id.
+    WorkflowResultService sets it to a WorkflowResult row whose OWN
+    workflow_id is this same workflow's id -- a self-reference, ordinary
+    behavior for e.g. a bugfix/diagnostic pipeline. Step 2b deleted
+    WorkflowResult (by workflow_id) without first nulling this
+    self-reference -- same bug, same fix, as remove_project_design/
+    delete_project's identical cascade."""
+    db_manager, dirs = seeded_db_with_feature
+
+    session = db_manager.get_session()
+    try:
+        session.add(Agent(id="agent-1", system_prompt="p", cli_type="claude"))
+        session.commit()
+
+        session.add(WorkflowResult(
+            id="res-1", workflow_id="wf-old", agent_id="agent-1",
+            result_file_path="/tmp/result.md", result_content="content",
+            status="validated",
+        ))
+        session.commit()
+
+        wf = session.query(Workflow).filter_by(id="wf-old").first()
+        wf.result_found = True
+        wf.result_id = "res-1"
+        session.commit()
+    finally:
+        session.close()
+
+    result = await _run_rerun(dirs)
+    assert result is not None
+
+    session = db_manager.get_session()
+    try:
+        assert session.query(WorkflowResult).filter_by(id="res-1").first() is None
+        assert session.query(Workflow).filter_by(id="wf-old").first() is None
+    finally:
+        session.close()
+
+
+@pytest.mark.asyncio
+async def test_rerun_deletes_prompt_proposals_before_their_workflow(seeded_db_with_feature):
+    """prompt_proposals.workflow_id is an enforced FK to workflows.id with
+    no ondelete clause. forensics_analysis -- a real phase in the standard
+    autopilot workflow -- creates one of these rows for every prompt
+    improvement it proposes after a pipeline run finishes. Step 2b never
+    touched prompt_proposals at all, so any design whose workflow ever ran
+    forensics_analysis and produced a proposal could not be rerun -- same
+    bug, same fix, as remove_project_design/delete_project's identical
+    cascade."""
+    db_manager, dirs = seeded_db_with_feature
+
+    session = db_manager.get_session()
+    try:
+        session.add(PromptProposal(
+            id="prop-1", workflow_id="wf-old", phase_name="product_requirements",
+            field="description", proposed_value="better description",
+            rationale="observed confusion in agent transcript",
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    result = await _run_rerun(dirs)
+    assert result is not None
+
+    session = db_manager.get_session()
+    try:
+        assert session.query(PromptProposal).filter_by(id="prop-1").first() is None
+        assert session.query(Workflow).filter_by(id="wf-old").first() is None
     finally:
         session.close()
