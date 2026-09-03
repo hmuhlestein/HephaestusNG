@@ -750,6 +750,86 @@ class TestRunPhase0ReviewMode:
         assert len(features) == 1
         session.close()
 
+    def _fake_run_single_workflow_returns_paused(self, db_manager, design, workflow_id):
+        """Simulates run_single_workflow observing a pause that a SEPARATE,
+        non-blocking code path (finalize_phase0_workflow's inline
+        _pause_phase0_for_review call) already set on the workflow row --
+        before this function's own synchronous pause-and-wait block below
+        ever runs."""
+
+        def _fake(*args, **kwargs):
+            session = db_manager.get_session()
+            session.add(
+                Workflow(
+                    id=workflow_id,
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    definition_id="feature_architect",
+                    design_id=design,
+                )
+            )
+            session.commit()
+            session.close()
+            return FeatureRunStatus.PAUSED
+
+        return _fake
+
+    def test_wf_status_paused_is_not_treated_as_design_failure(
+        self, db_manager, design, tmp_path
+    ):
+        """Regression (external evaluation finding): run_single_workflow
+        can return PAUSED directly -- not just COMPLETED followed by this
+        function's own later pause -- when review mode's pause already
+        fired from finalize_phase0_workflow's separate, non-blocking path.
+        Previously this unconditionally marked the whole design "failed"
+        and discarded a valid, already-written features.json and every
+        completed task/phase, even though nothing had actually gone
+        wrong -- it just hadn't been approved yet. Falling through to the
+        normal review-pause-and-wait block must still correctly block on
+        clearance (not skip the gate) since _pause_phase0_for_review is
+        idempotent."""
+        from src.autopilot.orchestrator import run_phase0
+
+        project_id = self._enable_review_mode(db_manager, design)
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = self._worktree_with_features_json(tmp_path)
+        workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+
+        with patch(
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
+            side_effect=self._fake_run_single_workflow_returns_paused(db_manager, design, workflow_id),
+        ), patch(
+            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
+        ), patch(
+            "src.autopilot.orchestrator.pipeline._wait_for_phase0_review_clearance",
+            return_value=True,
+        ) as mock_wait:
+            features_json, _ = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+                project_id=project_id,
+            )
+
+        mock_wait.assert_called_once()
+        assert features_json is not None
+        assert features_json["features"][0]["id"] == "auth"
+
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        assert d.status != "failed", f"design incorrectly marked failed: {d.error}"
+        wf = session.query(Workflow).filter_by(id=workflow_id).first()
+        assert wf.status == "completed"
+        features = session.query(Feature).filter_by(design_id=design).all()
+        assert len(features) == 1
+        session.close()
+
     def test_skips_pause_when_review_mode_disabled(self, db_manager, design, tmp_path):
         """Default behavior, must stay unchanged: no review_mode -> no
         pause, no wait, features created immediately."""

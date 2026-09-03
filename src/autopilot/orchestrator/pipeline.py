@@ -1300,7 +1300,7 @@ def run_phase0(
             project_id=project_id,
         )
 
-        if wf_status != FeatureRunStatus.COMPLETED:
+        if wf_status not in (FeatureRunStatus.COMPLETED, FeatureRunStatus.PAUSED):
             logger.error(f"Phase 0 workflow failed with status: {wf_status.value}")
             _update_design_status(
                 design_entry.db_id,
@@ -1309,6 +1309,24 @@ def run_phase0(
                 logger=logger,
             )
             return None, None
+        # PAUSED is not a failure here -- review mode's own pause (see
+        # _pause_phase0_for_review, called from finalize_phase0_workflow's
+        # non-blocking inline path) can already have set the workflow to
+        # "paused" by the time run_single_workflow's polling observes it,
+        # before this function's OWN blocking pause-and-wait block below
+        # ever runs. features.json is already written at this point either
+        # way (the agent's actual decomposition work is done; the pause is
+        # an approval gate layered on top of completion, not evidence the
+        # work is incomplete -- see _pause_phase0_for_review's docstring).
+        # Falling through to read/validate it, then to the review-pause
+        # check below, is safe because that check and _pause_phase0_for_
+        # review are both idempotent (a no-op if already paused_by ==
+        # "review") -- so this still correctly BLOCKS on human approval via
+        # _wait_for_phase0_review_clearance rather than treating an
+        # approval gate as a design failure. Previously: a successfully-
+        # decomposed design with review_mode on was unconditionally marked
+        # "failed" here, discarding a valid features.json and every
+        # completed task/phase.
 
         # phase0_workflow_id was already persisted immediately after launch,
         # inside run_single_workflow -- see its comment for why that can't
