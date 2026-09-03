@@ -2588,8 +2588,17 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             finally:
                 # Phase is already "in_progress" here (this whole function
                 # only iterates that bucket), so this only clears the
-                # claim -- its status-flip side effect is a no-op.
-                _release_phase_task_creation_claim(db, phase.id)
+                # claim -- its status-flip side effect is a no-op. UNLESS
+                # _maybe_retry_failed_tasks's own exhausted-retry-cap branch
+                # just dispatched an arbitration agent on this SAME phase_id
+                # (already_claimed=True, reusing this claim) -- clearing it
+                # right away would wipe the "arbitration in flight" marker
+                # within milliseconds of the arbiter being dispatched, long
+                # before it can finish (see _phase_has_arbitration_in_flight's
+                # own docstring for the live incident this guards against:
+                # an arbiter's decision silently dropped this exact way).
+                if not _phase_has_arbitration_in_flight(db, phase.id):
+                    _release_phase_task_creation_claim(db, phase.id)
             if result is not None:
                 return result
             continue  # No completed tasks yet
@@ -2654,19 +2663,23 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 continue
             finally:
                 # _retry_failed_tasks_with_done's exhaustion branch
-                # (retried is not True) deliberately sets
-                # execution.status="failed" as a terminal decision.
-                # _release_phase_task_creation_claim's reopen-eligible set
-                # now includes "failed" (this session's fix for the
-                # tombstone bug), so calling it unconditionally here would
-                # flip that terminal decision straight back to
-                # "in_progress" one line after it was made. Only
-                # release-and-maybe-reopen on the genuine retry path; the
-                # exhausted path just clears the claim field directly, so
-                # the deliberately-"failed" status sticks.
+                # (retried is not True) triggers arbitration on this SAME
+                # phase_id (already_claimed=True, reusing this claim) --
+                # clearing it unconditionally here would wipe the
+                # "arbitration in flight" marker within milliseconds of the
+                # arbiter being dispatched, long before it can finish (see
+                # _phase_has_arbitration_in_flight's own docstring for the
+                # live incident this guards against: an arbiter's decision
+                # silently dropped this exact way). Only release-and-maybe-
+                # reopen on the genuine retry path; the exhausted path
+                # clears the claim field directly ONLY when arbitration
+                # isn't actually in flight for it (e.g. the arbitration cap
+                # was itself already exhausted and _trigger_arbitration
+                # resolved the phase some other way instead of dispatching
+                # a new agent).
                 if retried is True:
                     _release_phase_task_creation_claim(db, phase.id)
-                elif execution:
+                elif execution and not _phase_has_arbitration_in_flight(db, phase.id):
                     execution.task_creation_claimed_at = None
                     db.commit()
 
@@ -2939,15 +2952,35 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                 return None
             workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
             if workflow and workflow.status != "paused":
-                from src.autopilot.orchestrator.engine_client import pause_workflow
-
-                pause_workflow(
-                    phase.workflow_id,
-                    reason="system",
-                    status_reason=f"{phase.name}: exhausted retries -- {reason_text}",
-                    session=db,
+                # Let the arbiter decide (force through, goto, or -- only
+                # once ITS OWN MAX_ARBITRATIONS_PER_PHASE cap is also
+                # exhausted -- escalate to a human/pause) instead of
+                # mechanically pausing here ourselves. Mirrors _create_
+                # phase_task's identical fix for its own retry/goto-bound
+                # exhaustion (the orchestrator's evaluation-driven counter,
+                # see TestCreatePhaseTaskExhaustionArbitrates); this is the
+                # sibling exhaustion path for a task's own per-row
+                # retry_count cap. Before this, an exhausted-retry phase
+                # paused with reason="system" and had NO way back: none of
+                # Resume Workflow, Resume Feature, or Reset Phase reset
+                # retry_count, so the very next sweep tick re-hit this same
+                # branch and re-paused it immediately -- a permanently
+                # stuck workflow with every documented "unstick it" action
+                # silently no-op'ing.
+                # already_claimed=True: this function's own caller already
+                # holds phase.id's task_creation_claimed_at claim for the
+                # whole duration of this call (see the claim/finally block
+                # around the _maybe_retry_failed_tasks call site) -- without
+                # this, _trigger_arbitration's own internal claim attempt on
+                # the SAME phase_id silently fails and no arbitration task
+                # is ever created. Confirmed via direct reproduction against
+                # the analogous, previously-broken _create_phase_task path
+                # (see _trigger_arbitration's own docstring).
+                _trigger_arbitration(
+                    phase.workflow_id, phase.id, phase.name,
+                    f"{phase.name}: exhausted retries -- {reason_text}", logger,
+                    already_claimed=True,
                 )
-                db.commit()
             return None
 
         logger.info(f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks and 0 done — retrying {len(retryable_tasks)} (of {len(failed_tasks)}, cap {max_retry_count})")
@@ -3798,12 +3831,22 @@ def _create_phase_task(
                 )
                 if retries >= max_phase_attempts:
                     logger.warning(f"[PHASE-TASK] {phase_name} hit retry bound ({retries}/{max_phase_attempts}), triggering arbitration")
+                    # already_claimed=True: phase_id's claim is already
+                    # held at this point -- either by this function itself
+                    # (own_claim, when target_already_claimed was False) or
+                    # by the caller that passed target_already_claimed=True
+                    # -- either way _trigger_arbitration's own internal
+                    # claim attempt on this SAME phase_id would otherwise
+                    # silently fail and no arbitration task would ever be
+                    # created. See _trigger_arbitration's own docstring for
+                    # the live reproduction that found this.
                     _trigger_arbitration(
                         workflow_id,
                         phase_id,
                         phase_name,
                         f"{phase_name} was sent back {retries} times without resolving (last reason: {feedback or 'unknown'})",
                         logger,
+                        already_claimed=True,
                     )
                     return False
 

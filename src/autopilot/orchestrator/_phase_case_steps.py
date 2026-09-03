@@ -17,6 +17,7 @@ import logging
 import uuid
 from datetime import timedelta
 
+from src.autopilot.orchestrator.arbitration import _trigger_arbitration
 from src.autopilot.orchestrator.engine_client import create_agent_for_task_direct
 from src.autopilot.spec import get_max_task_retries
 from src.core.constants import DIAGNOSTIC_TASK_PREFIX, GOTO_REASON_PREFIX
@@ -194,75 +195,47 @@ def _retry_failed_tasks_with_done(db, phase, workflow_id, execution, logger,
         db.commit()
         return True
     else:
-        # All failed tasks past retry cap. Bug: this used to
-        # only set execution.status = "failed" and fall
-        # straight through into the "phase complete, fire
-        # transition" section below -- _fire_phase_transition
-        # calls PhaseManager.mark_phase_complete, which
-        # evaluates the engine decision from the failed task's
-        # own stale action/completion data (e.g. "continue",
-        # written by the agent's own self-report before the
-        # output validator rejected it), NOT from
-        # execution.status. Observed live: architectural_review
-        # exhausted its retry cap on a real frontmatter-schema
-        # defect and the pipeline advanced straight to
-        # qa_validation as if the review had passed. Mirror
-        # _trigger_arbitration's own exhausted-retry-budget
-        # handling (wf.status = "failed" + status_reason, then
-        # stop) instead of silently continuing.
-        logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — marking phase and workflow as failed")
-        if execution:
-            # transition_phase_execution (Step 3 of docs/designs/
-            # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) replaces the direct
-            # mutation here -- found unmigrated during a follow-up
-            # adversarial review. extra_fields carries completed_at because
-            # _FIELD_RESETS has no (in_progress, failed) entry -- the same
-            # gap Step 3.1's _close_execution migration hit first, and
-            # would otherwise silently drop it here too. commit=False:
-            # this function's OWN db.commit() a few lines below (after the
-            # wf.status="failed" write) is what durably persists this
-            # write -- it already committed the phase-status mutation and
-            # the workflow-status mutation together as one transaction
-            # before this migration, and committing here first would split
-            # that into two, opening a window where an exception between
-            # them leaves the phase "failed" but the workflow still
-            # "active". (The CALLER's own separate commit, in its finally
-            # block, only ever covered task_creation_claimed_at -- that was
-            # already a second, later commit before this migration too.)
-            from src.autopilot.orchestrator.phase_transitions import (
-                transition_phase_execution,
-            )
-
-            transition_phase_execution(
-                db, execution.phase_id, "failed",
-                reason="_retry_failed_tasks_with_done_exhausted",
-                extra_fields={"completed_at": utc_now()},
-                commit=False,
-            )
-        wf = db.query(Workflow).filter_by(id=workflow_id).first()
-        if wf and wf.status != "failed":
-            wf.status = "failed"
-            wf.status_reason = (
-                f"{phase.name}: {failed_count} task(s) exhausted the retry cap "
-                "without producing a valid output"
-            )
-            # A concurrent, unrelated phase's review gate can
-            # leave paused_by="review" set on this workflow
-            # (_advance_phases deliberately keeps other
-            # in-progress phases moving while one sits paused
-            # for review). Left stale here, resume_workflow's
-            # force=True approve path silently no-ops (it
-            # requires status=="paused") while feature_routes'
-            # approve handler doesn't check that return value
-            # and sets Feature.status="active" anyway --
-            # permanently stuck "failed" workflow, feature
-            # shows active forever, Approve becomes a silent
-            # no-op. See pause_workflow's own docstring: every
-            # status/paused_by write must keep the two in
-            # lockstep.
-            wf.paused_by = None
-            wf.paused_at = None
-        db.commit()
+        # All failed tasks past retry cap. Bug (original version of this
+        # fix): this used to only set execution.status = "failed" and fall
+        # straight through into the "phase complete, fire transition"
+        # section below -- _fire_phase_transition calls PhaseManager.
+        # mark_phase_complete, which evaluates the engine decision from the
+        # failed task's own stale action/completion data (e.g. "continue",
+        # written by the agent's own self-report before the output
+        # validator rejected it), NOT from execution.status. Observed live:
+        # architectural_review exhausted its retry cap on a real
+        # frontmatter-schema defect and the pipeline advanced straight to
+        # qa_validation as if the review had passed.
+        #
+        # That first fix then directly set wf.status="failed" -- a
+        # terminal state with no path back, since nothing anywhere resets
+        # retry_count. Let the arbiter decide instead (force through,
+        # goto, or -- only once ITS OWN MAX_ARBITRATIONS_PER_PHASE cap is
+        # also exhausted -- escalate to a human/fail), mirroring _maybe_
+        # retry_failed_tasks's identical fix for its own "all tasks
+        # failed" sibling path (same task.retry_count cap; this is the
+        # "done + failed" variant) and _create_phase_task's original fix
+        # for the orchestrator's evaluation-driven retry/goto counter.
+        # _trigger_arbitration owns PhaseExecution's own transition
+        # internally (keeps it "in_progress" while arbitration is
+        # pending, see its own docstring), so this function must not also
+        # transition it to "failed" first -- that would fight arbitration's
+        # own state management.
+        logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — triggering arbitration")
+        # already_claimed=True: this function's own caller already holds
+        # phase.id's task_creation_claimed_at claim for the whole duration
+        # of this call (see the claim/finally block around this function's
+        # own call site in phase_transitions.py) -- without this,
+        # _trigger_arbitration's own internal claim attempt on the SAME
+        # phase_id silently fails and no arbitration task is ever created.
+        # See _trigger_arbitration's own docstring for the live
+        # reproduction that found this class of bug.
+        _trigger_arbitration(
+            workflow_id, phase.id, phase.name,
+            f"{failed_count} task(s) exhausted the retry cap without producing a valid output",
+            logger,
+            already_claimed=True,
+        )
     return None
 
 

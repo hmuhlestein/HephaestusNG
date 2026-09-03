@@ -1382,8 +1382,9 @@ class TestMaybeRetryFailedTasks:
             old_task = session.query(Task).filter_by(id="task-old-done").first()
             assert old_task.status == "done"
 
-    def test_pauses_workflow_once_retry_cap_exhausted_instead_of_retrying_forever(
-        self, db_manager, sample_workflow
+    @patch("src.autopilot.orchestrator.phase_transitions._trigger_arbitration")
+    def test_arbitrates_once_retry_cap_exhausted_instead_of_pausing_unrecoverably(
+        self, mock_trigger, db_manager, sample_workflow
     ):
         """The exact live bug: a task whose failure is permanent (a deleted
         git worktree raises instantly, no LLM call in between) got reset
@@ -1391,7 +1392,15 @@ class TestMaybeRetryFailedTasks:
         cycle every few seconds indefinitely and starving every other
         workflow's turn in the same poll loop, since nothing here ever
         checked retry_count. Once every failed task in the phase is past
-        the cap, this must stop retrying and pause the workflow instead."""
+        the cap, this must stop retrying -- but it must hand the decision
+        to the arbiter (force through, goto, or escalate to a human once
+        the arbiter's OWN budget is also exhausted), not mechanically pause
+        with reason="system" -- a state that none of Resume Workflow,
+        Resume Feature, or Reset Phase could actually recover from, since
+        none of them reset retry_count and the very next sweep tick just
+        re-hit this same branch and re-paused it. Mirrors
+        TestCreatePhaseTaskExhaustionArbitrates's identical fix for the
+        orchestrator's own evaluation-driven retry/goto counter."""
         from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
@@ -1418,13 +1427,17 @@ class TestMaybeRetryFailedTasks:
 
         assert result is None
         mock_create_agent.assert_not_called()
+        mock_trigger.assert_called_once()
+        args = mock_trigger.call_args[0]
+        assert args[0] == "wf-1"
+        assert args[1] == "phase-1"
+        assert "worktree is missing" in args[3]
+
         with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="task-exhausted").first()
             assert task.status == "failed"  # left alone, not reset to pending
             wf = session.query(Workflow).filter_by(id="wf-1").first()
-            assert wf.status == "paused"
-            assert wf.paused_by == "system"
-            assert "worktree is missing" in wf.status_reason
+            assert wf.status == "active"  # never silently paused
 
     def test_orphaned_task_retries_past_the_cap(self, db_manager, sample_workflow):
         """Characterization: orphaned tasks (never dispatched to an agent)
@@ -1688,6 +1701,66 @@ class TestMaybeRetryFailedTasks:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.paused_by == "user"
             assert wf.status_reason == "user's own note"
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_exhaustion_via_the_real_caller_chain_actually_dispatches_arbitration(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """End-to-end regression: _case_in_progress_complete claims phase-1's
+        task_creation_claimed_at, calls _maybe_retry_failed_tasks (which
+        triggers arbitration on that SAME phase_id with already_claimed=
+        True), and its own finally block must NOT then immediately clear
+        that claim -- doing so would wipe the "arbitration in flight"
+        marker within milliseconds of the arbiter being dispatched, the
+        same live incident _phase_has_arbitration_in_flight's own
+        docstring documents for the sibling _fire_phase_transition path.
+        Exercises the real, unmocked _trigger_arbitration (only the actual
+        agent dispatch is mocked), unlike TestTriggerArbitrationAlreadyClaimed's
+        direct-call tests, which bypass this caller's own finally logic."""
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-exhausted",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Workflow's shared worktree is missing",
+                    retry_count=5,
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            arb_task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY, phase_id="phase-1")
+                .first()
+            )
+            assert arb_task is not None, "arbitration was never actually dispatched"
+
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None, (
+                "the caller's own finally block wiped the claim arbitration "
+                "needs held while it's in flight"
+            )
+            assert execution.status == "in_progress"
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"  # never silently paused
 
 
 class TestCaseInProgressComplete:
@@ -2392,9 +2465,10 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None  # released, not stranded
 
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
-    def test_exhausted_retry_cap_fails_the_workflow_instead_of_firing_transition(
-        self, mock_fire, db_manager, sample_workflow
+    def test_exhausted_retry_cap_arbitrates_instead_of_firing_transition_or_failing(
+        self, mock_fire, mock_create_agent, db_manager, sample_workflow
     ):
         """Regression, found live: once every failed task in a phase (that
         also has a done task from an earlier cycle) is past the retry cap,
@@ -2405,8 +2479,22 @@ class TestCaseInProgressComplete:
         would advance to the next phase as if the failed one had passed.
         Observed live: architectural_review exhausted its retry cap on a
         real frontmatter-schema defect and the pipeline advanced straight
-        to qa_validation as if the review had passed."""
-        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+        to qa_validation as if the review had passed.
+
+        A later fix closed that by setting wf.status="failed" directly --
+        a terminal state with no path back, since nothing anywhere resets
+        retry_count (see test_exhausted_retry_cap_still_recoverable_via_
+        arbitration_despite_a_stale_review_pause below for the exact
+        "Approve becomes a silent no-op forever" failure mode that caused).
+        Must arbitrate instead: neither fire a transition nor fail the
+        workflow terminally."""
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -2431,37 +2519,56 @@ class TestCaseInProgressComplete:
         mock_fire.assert_not_called()
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
-            assert wf.status == "failed"
-            assert "phase-1" not in wf.status_reason  # uses phase.name, not phase.id
+            assert wf.status == "active"  # never terminally failed
             assert "requirements" in wf.status_reason  # phase-1's name, from sample_workflow
-            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
-            assert execution.status == "failed"
-            # transition_phase_execution's extra_fields must carry completed_at
-            # explicitly -- _FIELD_RESETS has no (in_progress, failed) entry, so
-            # this would silently stay None without it (the same gap Step 3.1's
-            # _close_execution migration hit first).
-            assert execution.completed_at is not None
-            # The claim taken by _claim_phase_task_creation for this same call
-            # must still get cleared -- the caller's finally block clears it
-            # (a separate, later commit, same as before this migration).
-            assert execution.task_creation_claimed_at is None
 
-    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
-    def test_exhausted_retry_cap_clears_a_stale_review_pause(
-        self, mock_fire, db_manager, sample_workflow
+            arb_task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY, phase_id="phase-1")
+                .first()
+            )
+            assert arb_task is not None, "arbitration was never actually dispatched"
+
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            # "in_progress", not "failed" -- _trigger_arbitration owns this
+            # transition and keeps the phase alive while arbitration is
+            # pending (see its own docstring).
+            assert execution.status == "in_progress"
+            # The claim must survive the caller's own finally block, not
+            # get cleared out from under the in-flight arbitration task
+            # (see _phase_has_arbitration_in_flight's own docstring for the
+            # live incident an unconditional clear here reproduces).
+            assert execution.task_creation_claimed_at is not None
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_exhausted_retry_cap_still_recoverable_via_arbitration_despite_a_stale_review_pause(
+        self, mock_create_agent, db_manager, sample_workflow
     ):
         """Regression, found live: this phase's own retry-cap-exhaustion
-        sets wf.status = "failed" directly, bypassing pause_workflow's
-        shared status/paused_by/paused_at primitive -- if an UNRELATED,
-        concurrent phase's review gate had already set paused_by="review"
-        on this same workflow (_advance_phases deliberately keeps other
-        in-progress phases moving while one sits paused for review), that
-        stale marker survived the "failed" write untouched. resume_workflow
-        then permanently no-ops (it requires status=="paused"), while
-        feature_routes' approve handler doesn't check that return value and
-        sets Feature.status="active" anyway -- a workflow stuck "failed"
-        forever with Approve as a silent no-op."""
-        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+        used to set wf.status = "failed" directly, bypassing pause_
+        workflow's shared status/paused_by/paused_at primitive -- if an
+        UNRELATED, concurrent phase's review gate had already set
+        paused_by="review" on this same workflow (_advance_phases
+        deliberately keeps other in-progress phases moving while one sits
+        paused for review), that stale marker survived the "failed" write
+        untouched. resume_workflow then permanently no-op'd (it requires
+        status=="paused"), while feature_routes' approve handler didn't
+        check that return value and set Feature.status="active" anyway --
+        a workflow stuck "failed" forever with Approve as a silent no-op.
+
+        Arbitrating instead of failing closes this the same way the
+        sibling test above does: wf.status never becomes "failed" here at
+        all, so this specific dead end can no longer occur via this path
+        -- a stale paused_by="review" left over from an unrelated phase is
+        simply inert while status stays "active" (every real consumer of
+        paused_by gates on status=="paused" first)."""
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -2488,9 +2595,13 @@ class TestCaseInProgressComplete:
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
-            assert wf.status == "failed"
-            assert wf.paused_by is None
-            assert wf.paused_at is None
+            assert wf.status == "active"  # never failed -- nothing to get stuck in
+            arb_task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY, phase_id="phase-1")
+                .first()
+            )
+            assert arb_task is not None, "arbitration was never actually dispatched"
 
     def test_a_queued_sibling_task_counts_as_incomplete(self, db_manager, sample_workflow):
         """Regression, found live: the "incomplete" check omitted "queued"
@@ -5530,6 +5641,88 @@ class TestTriggerArbitration:
             assert wf.status_reason is not None
 
 
+class TestTriggerArbitrationAlreadyClaimed:
+    """Regression: every caller that reaches _trigger_arbitration by way of
+    a retry/exhaustion check (_create_phase_task's retry/goto bound,
+    _maybe_retry_failed_tasks's and _retry_failed_tasks_with_done's own
+    task.retry_count cap) does so from WITHIN a task_creation_claimed_at
+    claim it (or an ancestor caller) already holds on that exact phase_id.
+    Without already_claimed=True, _trigger_arbitration's own internal
+    _claim_phase_task_creation call finds the claim already non-NULL,
+    silently hits its "already has arbitration in flight" branch, and
+    returns False without ever dispatching an arbitration agent -- proven
+    by direct reproduction against _create_phase_task's own retry-bound
+    path before this fix: an exhausted phase created zero arbitration
+    tasks despite the "hit retry bound... triggering arbitration" log line
+    firing every time."""
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_already_claimed_true_dispatches_despite_pre_held_claim(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _claim_phase_task_creation,
+            _trigger_arbitration,
+        )
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        with db_manager.session_scope() as session:
+            # Simulate the caller (e.g. _maybe_retry_failed_tasks's own
+            # caller) already holding phase-1's claim before arbitration
+            # is triggered on that same phase_id.
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted retries",
+            MagicMock(), already_claimed=True,
+        )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        with db_manager.session_scope() as session:
+            task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY, phase_id="phase-1")
+                .first()
+            )
+            assert task is not None, "arbitration task was never created despite already_claimed=True"
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_without_already_claimed_a_pre_held_claim_silently_blocks_dispatch(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Characterizes the bug itself: the default (already_claimed=False)
+        against a phase_id whose claim is already held reproduces exactly
+        what _create_phase_task's retry-bound path did before this fix --
+        no arbitration task, no error, just a quiet no-op."""
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _claim_phase_task_creation,
+            _trigger_arbitration,
+        )
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted retries", MagicMock()
+        )
+
+        assert result is False
+        mock_create_agent.assert_not_called()
+        with db_manager.session_scope() as session:
+            task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY, phase_id="phase-1")
+                .first()
+            )
+            assert task is None
+
+
 class TestResolveHumanArbitrationChoice:
     """Unit tests for _resolve_human_arbitration_choice, the half of the
     human-escalation flow that applies a decision once one exists --
@@ -6535,6 +6728,79 @@ class TestRetryFailedTasksWithDone:
             assert task.failure_reason is None
             assert "RETRY" not in (task.enriched_description or "")
             assert task.enriched_description == "Execute phase X: do the thing"
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_exhausted_retry_cap_triggers_arbitration_not_a_terminal_fail(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: this branch used to set wf.status="failed" directly
+        -- a terminal state with no path back, since nothing anywhere
+        resets retry_count. Must call _trigger_arbitration instead (with
+        already_claimed=True, since this function's own caller always
+        holds phase.id's claim for the duration of this call -- see
+        TestTriggerArbitrationAlreadyClaimed for why that parameter is
+        required), and must NOT also transition PhaseExecution to "failed"
+        first, which would fight arbitration's own state management."""
+        from src.autopilot.orchestrator._phase_case_steps import _retry_failed_tasks_with_done
+        from src.autopilot.orchestrator.phase_transitions import (
+            ARBITRATION_CREATED_BY,
+            _claim_phase_task_creation,
+        )
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-fail-exhausted",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Workflow's shared worktree is missing",
+                    retry_count=5,
+                )
+            )
+            session.add(
+                Task(
+                    id="task-done-sibling",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+            # Simulate the caller (_case_in_progress_complete) already
+            # holding phase-1's claim, exactly as it does in production.
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+        logger = MagicMock()
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            result = _retry_failed_tasks_with_done(
+                session, phase, "wf-1", execution,
+                logger=logger, failed_count=1, done_count=1, cycle_filter=(),
+            )
+
+        assert result is None
+        mock_create_agent.assert_called_once()
+
+        with db_manager.session_scope() as session:
+            arb_task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY, phase_id="phase-1")
+                .first()
+            )
+            assert arb_task is not None, "arbitration was never actually dispatched"
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"  # never terminally failed
+
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"  # not force-failed out from under arbitration
 
 
 class TestMarkSkippedOverPhases:
