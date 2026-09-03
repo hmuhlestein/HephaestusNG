@@ -126,8 +126,15 @@ class SetupChecker:
             self.results["mcp_servers"]["Claude MCP accessible"] = True
             output = result.stdout.lower()
 
-            # Check for Hephaestus and Qdrant servers
-            has_hephaestus = "hephaestus" in output
+            # Check for Hephaestus and Qdrant servers. `claude mcp list`
+            # prints "<name>: <command> - <status>" per line -- matching a
+            # bare substring like "hephaestus" without the trailing colon
+            # only ever passed by accident here, because the command path
+            # itself contains "HephaestusNG" (this repo's own directory
+            # name). install.sh registers the server as "heph", not
+            # "hephaestus" -- a checkout under any other directory name
+            # would fail this check even when correctly configured.
+            has_hephaestus = "heph:" in output
             has_qdrant = "qdrant" in output
 
             self.results["mcp_servers"]["Hephaestus MCP server"] = has_hephaestus
