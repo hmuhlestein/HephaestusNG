@@ -67,12 +67,7 @@ class AutopilotService:
 
     @property
     def running(self) -> bool:
-        task_done = self._task.done() if self._task else "N/A"
-        r = self._running and self._task is not None and not self._task.done()
-        logger.warning(
-            f"[SERVICE] running check: _running={self._running}, _task={self._task is not None}, done={task_done}, result={r}"
-        )
-        return r
+        return self._running and self._task is not None and not self._task.done()
 
     async def start(
         self,
