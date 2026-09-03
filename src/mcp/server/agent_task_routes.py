@@ -302,9 +302,40 @@ async def _update_task_status_once(
         else:
             output_lost_rejection = await _complete_task_normally(session, agent_id, task, request, phase, background_tasks)
 
-        await _maybe_fire_spec_gate(session, task, request, output_lost_rejection)
+        # Best-effort from here on: by this point the task's terminal status
+        # is already durably committed and (for the non-validation path)
+        # agent termination is already queued on background_tasks. Letting
+        # an exception from either call below propagate would, via
+        # FastAPI's default exception handling, discard that already-queued
+        # background_tasks entirely (confirmed empirically -- HTTPException's
+        # default handler builds a fresh response with no background tasks
+        # attached) -- silently leaving the agent alive as a zombie forever,
+        # since a client retry hits the idempotency guard above and never
+        # reaches _complete_task_normally again to re-queue it. It would also
+        # report a misleading failure for a task that actually succeeded.
+        # OperationalError still propagates to preserve update_task_status's
+        # existing lock-contention retry behavior for these calls.
+        try:
+            await _maybe_fire_spec_gate(session, task, request, output_lost_rejection)
+        except OperationalError:
+            raise
+        except Exception:
+            logger.exception(
+                f"[{request.task_id[:8]}] fire_spec_gate_if_ready failed after task "
+                "completion -- phase advancement may lag until the next sweep tick, "
+                "but the task's own completion and agent termination are unaffected"
+            )
 
-        await _broadcast_task_completion(task, agent_id, request, output_lost_rejection)
+        try:
+            await _broadcast_task_completion(task, agent_id, request, output_lost_rejection)
+        except OperationalError:
+            raise
+        except Exception:
+            logger.exception(
+                f"[{request.task_id[:8]}] broadcast_task_completion failed after task "
+                "completion -- dashboard clients may miss the live update, but the "
+                "task's own completion and agent termination are unaffected"
+            )
 
         # Return appropriate response based on whether validation was spawned
         if output_lost_rejection:

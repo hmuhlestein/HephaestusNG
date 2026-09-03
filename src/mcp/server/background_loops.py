@@ -315,9 +315,21 @@ async def terminate_agents_and_process_queue(agent_manager, agent_ids: List[str]
     (SOLID review 1.17) -- each independently paired agent termination with
     a process_queue() call, so a future edit applied to one copy but not
     the others could silently stall the queue.
+
+    One caller (update_task_status) now schedules this via FastAPI's
+    BackgroundTasks, which Starlette runs strictly after the HTTP response
+    has already been sent -- so an uncaught exception here would surface
+    as an ASGI-level "Exception in ASGI application" traceback well after
+    the client got its response, not as anything the caller could react
+    to. Catching per-agent keeps one agent's termination failure from
+    stopping the rest of the batch, or from skipping process_queue
+    entirely -- a stalled queue is a worse outcome than a noisy log line.
     """
     for agent_id in agent_ids:
-        await agent_manager.terminate_agent(agent_id)
+        try:
+            await agent_manager.terminate_agent(agent_id)
+        except Exception:
+            logger.exception(f"Failed to terminate agent {agent_id[:8]} in terminate_agents_and_process_queue")
     await process_queue(project_id)
 
 
