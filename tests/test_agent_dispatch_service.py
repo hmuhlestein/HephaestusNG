@@ -116,3 +116,77 @@ class TestMarkAssigned:
         mock_state.db_manager.get_session.assert_not_called()
         # Should NOT have closed the external session
         external_session.close.assert_not_called()
+
+    @patch("src.core.app_context.get_app_state")
+    def test_does_not_overwrite_a_task_that_already_finished_during_dispatch(
+        self, mock_get_state
+    ):
+        """Regression, observed live (task b938bee7-b327-4e69-9ba6-5ace277c1314):
+        every caller dispatches an agent (an awaited call than can run for
+        over a minute -- worktree setup, tmux launch, ready-wait, prompt
+        delivery) and only calls mark_assigned AFTER that returns. The
+        agent itself is live the whole time that call is in flight and can
+        legitimately finish and call update_task_status first -- an
+        arbitration task recognizing a duplicate dispatch and reporting
+        "done" within seconds is exactly this shape. Overwriting status
+        back to "assigned" here would clobber that real "done" outcome
+        with a fresh started_at and an assigned_agent_id pointing at an
+        agent already terminated by the time this runs -- indistinguishable
+        from a real in-flight task to every self-heal path, so the
+        pipeline never advances past it."""
+        from src.services.agent_dispatch_service import AgentDispatchService
+
+        mock_state = MagicMock()
+        mock_get_state.return_value = mock_state
+
+        mock_task = MagicMock()
+        mock_task.status = "done"
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_task
+        mock_state.db_manager.get_session.return_value = mock_session
+
+        AgentDispatchService.mark_assigned("task-123", "agent-456")
+
+        mock_session.commit.assert_not_called()
+        assert mock_task.assigned_agent_id != "agent-456"
+        assert mock_task.status == "done"
+
+    @patch("src.core.app_context.get_app_state")
+    def test_does_not_overwrite_a_failed_task_either(self, mock_get_state):
+        from src.services.agent_dispatch_service import AgentDispatchService
+
+        mock_state = MagicMock()
+        mock_get_state.return_value = mock_state
+
+        mock_task = MagicMock()
+        mock_task.status = "failed"
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_task
+        mock_state.db_manager.get_session.return_value = mock_session
+
+        AgentDispatchService.mark_assigned("task-123", "agent-456")
+
+        mock_session.commit.assert_not_called()
+        assert mock_task.status == "failed"
+
+    @patch("src.core.app_context.get_app_state")
+    def test_still_assigns_a_genuinely_pending_task(self, mock_get_state):
+        """Confirms the fix is scoped to terminal states only -- the
+        overwhelming normal case (task still pending/in_progress when
+        dispatch confirms) must be unaffected."""
+        from src.services.agent_dispatch_service import AgentDispatchService
+
+        mock_state = MagicMock()
+        mock_get_state.return_value = mock_state
+
+        mock_task = MagicMock()
+        mock_task.status = "pending"
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_task
+        mock_state.db_manager.get_session.return_value = mock_session
+
+        AgentDispatchService.mark_assigned("task-123", "agent-456")
+
+        assert mock_task.assigned_agent_id == "agent-456"
+        assert mock_task.status == "assigned"
+        mock_session.commit.assert_called_once()

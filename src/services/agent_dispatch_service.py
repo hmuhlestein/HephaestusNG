@@ -212,6 +212,25 @@ class AgentDispatchService:
 
         FIX #12: Added rollback on commit failure.
         FIX #16: Accept optional session to avoid double-session issue.
+
+        Every caller dispatches an agent (an awaited call that can run for
+        well over a minute -- worktree setup, tmux launch, CLI ready-wait,
+        initial prompt delivery) and only calls this AFTER that returns.
+        The agent itself is live and working the whole time that call is
+        in flight, and can legitimately finish and call update_task_status
+        before this ever runs -- especially for a task whose real work is
+        fast (e.g. an arbitration task recognizing a duplicate dispatch
+        and reporting "done" within seconds of receiving its prompt).
+        Overwriting task.status back to "assigned"/"in_progress" here would
+        then clobber a genuine "done"/"failed" outcome, silently hiding
+        that the work is actually finished -- observed live: an arbitration
+        task (b938bee7) completed successfully at 12:27:36 while restart_
+        task_endpoint's own dispatch() call was still awaiting delivery
+        confirmation, and this function's unconditional write at 12:27:39
+        reset it back to a live-looking status with a fresh started_at,
+        long after the agent that "started" it had already been terminated
+        -- indistinguishable from a real in-flight task to every self-heal
+        path, so nothing ever re-noticed it needed advancing.
         """
         from src.core.app_context import get_app_state
         from src.core.database import Task
@@ -224,6 +243,14 @@ class AgentDispatchService:
         try:
             task = session.query(Task).filter_by(id=task_id).first()
             if task:
+                if task.status in ("done", "failed"):
+                    logger.warning(
+                        f"mark_assigned: task {task_id[:8]} already reached a "
+                        f"terminal status ({task.status}) before dispatch of "
+                        f"agent {agent_id[:8]} finished recording -- leaving "
+                        "it alone instead of overwriting a real outcome."
+                    )
+                    return
                 task.assigned_agent_id = agent_id
                 task.status = status
                 task.started_at = utc_now()
