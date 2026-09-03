@@ -202,6 +202,50 @@ class MechanicalRecoveryDetector:
         return False
 
 
+    def _resolve_fallback_cli(self, session, agent, stuck_task):
+        """Resolve stuck_task's phase-level, else global-config,
+        fallback_cli_tool/fallback_cli_model for a retry dispatch --
+        shared by every hard-blocker handler below (session/spend limit,
+        context overflow, connection errors) that redispatches a stuck
+        agent's task onto a different CLI.
+
+        Validates the resolved tool against what's actually installed
+        (shutil.which, via is_cli_tool_available) before handing it back --
+        a configured fallback that isn't on PATH would otherwise relaunch
+        straight into a tmux pane with a bare shell and no CLI running at
+        all (Agent.status stays "working" with nothing live behind it),
+        indistinguishable from a healthy agent to every other check.
+        Returns (None, None) when nothing usable is configured, exactly
+        like callers already treat an unset default_fallback_cli_tool.
+        """
+        from src.core.database import Phase as _Phase
+        from src.interfaces.cli_interface import is_cli_tool_available
+
+        fallback_tool = None
+        fallback_model = None
+        if stuck_task.phase_id:
+            phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
+            if phase:
+                fallback_tool = getattr(phase, "fallback_cli_tool", None)
+                fallback_model = getattr(phase, "fallback_cli_model", None)
+
+        if not fallback_tool:
+            cfg = get_config()
+            if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
+                fallback_tool = cfg.agents.default_fallback_cli_tool
+                fallback_model = cfg.agents.default_fallback_cli_model
+
+        if fallback_tool and not is_cli_tool_available(fallback_tool):
+            logger.warning(
+                f"[FALLBACK-CLI] Configured fallback CLI '{fallback_tool}' is not "
+                "installed (not found on PATH) -- skipping it rather than "
+                "relaunching into a dead pane"
+            )
+            return None, None
+
+        return fallback_tool, fallback_model
+
+
     async def _check_spend_or_session_limit(self, agent, raw_text) -> bool:
         """Spend/session-limit hard blocker check against the live pane --
         mechanical_recovery_for_agent's first check. For a genuine spend cap
@@ -267,8 +311,6 @@ class MechanicalRecoveryDetector:
                     f"terminating immediately (not recoverable)"
                 )
                 with self.db_manager.session_scope() as session:
-                    from src.core.database import Phase as _Phase
-
                     stuck_task = (
                         session.query(Task)
                         .filter_by(assigned_agent_id=agent.id)
@@ -283,21 +325,8 @@ class MechanicalRecoveryDetector:
                             f"phase will be retried"
                         )
 
-                        fallback_tool = None
-                        fallback_model = None
-                        if stuck_task.phase_id:
-                            phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
-                            if phase:
-                                fallback_tool = getattr(phase, "fallback_cli_tool", None)
-                                fallback_model = getattr(phase, "fallback_cli_model", None)
-
+                        fallback_tool, fallback_model = self._resolve_fallback_cli(session, agent, stuck_task)
                         cfg = get_config()
-
-                        # Fall back to global config defaults
-                        if not fallback_tool:
-                            if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
-                                fallback_tool = cfg.agents.default_fallback_cli_tool
-                                fallback_model = cfg.agents.default_fallback_cli_model
 
                         # Last resort: default_fallback_cli_tool/_model can
                         # resolve to the exact same cli+model that just hit
@@ -498,8 +527,6 @@ class MechanicalRecoveryDetector:
                 f"hit context size limit — terminating for fresh restart"
             )
             with self.db_manager.session_scope() as session:
-                from src.core.database import Phase as _Phase
-
                 stuck_task = (
                     session.query(Task)
                     .filter_by(assigned_agent_id=agent.id)
@@ -508,18 +535,7 @@ class MechanicalRecoveryDetector:
                 )
                 if stuck_task:
                     # Resolve fallback model
-                    fallback_tool = None
-                    fallback_model = None
-                    if stuck_task.phase_id:
-                        phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
-                        if phase:
-                            fallback_tool = getattr(phase, "fallback_cli_tool", None)
-                            fallback_model = getattr(phase, "fallback_cli_model", None)
-                    if not fallback_tool:
-                        cfg = get_config()
-                        if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
-                            fallback_tool = cfg.agents.default_fallback_cli_tool
-                            fallback_model = cfg.agents.default_fallback_cli_model
+                    fallback_tool, fallback_model = self._resolve_fallback_cli(session, agent, stuck_task)
 
                     if fallback_tool and fallback_tool != agent.cli_type:
                         logger.info(
@@ -1711,7 +1727,6 @@ class MechanicalRecoveryDetector:
             # this function's own session ever gets to it, silently
             # skipping the fallback dispatch entirely.
             with self.db_manager.session_scope() as session:
-                from src.core.database import Phase as _Phase
                 from src.core.database import Task as _Task
 
                 stuck_task = (
@@ -1725,18 +1740,7 @@ class MechanicalRecoveryDetector:
                     self._stuck_state.pop(agent.id, None)
                     return True
 
-                fallback_tool = None
-                fallback_model = None
-                if stuck_task.phase_id:
-                    phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
-                    if phase:
-                        fallback_tool = getattr(phase, "fallback_cli_tool", None)
-                        fallback_model = getattr(phase, "fallback_cli_model", None)
-                if not fallback_tool:
-                    cfg = get_config()
-                    if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
-                        fallback_tool = cfg.agents.default_fallback_cli_tool
-                        fallback_model = cfg.agents.default_fallback_cli_model
+                fallback_tool, fallback_model = self._resolve_fallback_cli(session, agent, stuck_task)
 
                 if fallback_tool and fallback_tool != agent.cli_type:
                     logger.warning(

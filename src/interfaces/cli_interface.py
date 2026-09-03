@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -1145,3 +1146,25 @@ def get_cli_agent(agent_type: str) -> CLIAgentInterface:
             f"Unsupported CLI agent type: {agent_type}. Available: {list(CLI_AGENTS.keys())}"
         )
     return CLI_AGENTS[agent_type]()
+
+
+def is_cli_tool_available(cli_type: str) -> bool:
+    """Whether cli_type's CLI binary is actually reachable on PATH --
+    shutil.which is the stdlib equivalent of the `command -v` checks
+    scripts/install.sh already relies on throughout for this same class
+    of check. cli_type is also the literal binary name every registered
+    *Agent's get_launch_command invokes (claude, pi, codex, opencode,
+    droid), so a plain PATH lookup on the string itself is correct
+    without a separate binary-name mapping -- except "swarm"
+    (SwarmCodeAgent), whose own launch command execs "swarmcode"; that
+    registration is a hypothetical/unused stub (see its class docstring),
+    so this is left as a known gap rather than special-cased.
+
+    Used to validate a configured fallback CLI (hephaestus_config.yaml's
+    default_fallback_cli_tool, or a Phase's own fallback_cli_tool) before
+    an agent is actually launched under it -- a fallback that isn't
+    installed otherwise produces a tmux pane with a bare shell prompt and
+    no CLI running at all, indistinguishable from a healthy agent to
+    every status field (Agent.status stays "working").
+    """
+    return shutil.which(cli_type) is not None

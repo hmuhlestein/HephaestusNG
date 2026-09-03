@@ -33,7 +33,7 @@ from src.core.database import (
 )
 from src.core.phase_lookup import resolve_task_phase
 from src.core.worktree_manager import WorktreeManager
-from src.interfaces import LaunchResult, get_cli_agent
+from src.interfaces import LaunchResult, get_cli_agent, is_cli_tool_available
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +422,17 @@ class LaunchPipeline:
         matched unrelated text from the agent's own in-progress work and
         killed the session, marking a perfectly running agent "failed to
         start".
+
+        The base "command not found"/"No such file or directory" patterns
+        (everything except the Claude Code confirmation-dialog pattern,
+        which is unambiguous and always trusted on its own) are corroborated
+        against tmux's own live process state via _pane_has_returned_to_shell
+        before being treated as a real failure -- a substring match in
+        scrollback is history, not current state, so it can't tell a CLI
+        that's still running (busy printing unrelated output that happens
+        to contain the phrase) from one that's actually dead and back at a
+        bare shell prompt. See that method's own docstring for why this is
+        a materially stronger signal than text-matching alone.
         """
         import re
 
@@ -441,8 +452,60 @@ class LaunchPipeline:
                 if pattern == self._CLAUDE_CODE_CONFIRMATION_PATTERN:
                     logger.error(f"{cli_type} launch command is stuck on an unhandled confirmation dialog in tmux session {session_name}: {launch_check_text.strip()[-300:]}")
                     raise Exception(f"{cli_type} CLI is stuck on an unhandled first-run confirmation dialog")
+                if not self._pane_has_returned_to_shell(pane):
+                    logger.info(
+                        f"{cli_type} launch check matched a generic rejection pattern "
+                        f"in tmux session {session_name}, but the pane's foreground "
+                        "process is still running (not back at a shell prompt) -- "
+                        f"treating as a false positive, not a real launch failure: "
+                        f"{launch_check_text.strip()[-300:]}"
+                    )
+                    continue
                 logger.error(f"{cli_type} launch command failed in tmux session {session_name}: {launch_check_text.strip()[-300:]}")
                 raise Exception(f"{cli_type} CLI failed to start -- shell reported the launch command was not found")
+
+    # Foreground process names that mean "nothing but the login shell is
+    # running in this pane" -- see _pane_has_returned_to_shell.
+    _SHELL_PROCESS_NAMES = frozenset({"zsh", "bash", "sh", "dash", "fish", "tcsh", "csh", "ksh"})
+
+    @classmethod
+    def _pane_has_returned_to_shell(cls, pane) -> bool:
+        """Whether tmux reports this pane's foreground process is back at a
+        plain login shell rather than the CLI (or its interpreter) still
+        running -- a far more specific signal than grepping scrollback text
+        for "command not found" (see _detect_launch_failure's own docstring
+        for the false positive that check alone produces). tmux's
+        `pane_current_command` format variable tracks the actual live
+        process tree, not historical output, so a healthy CLI that's busy
+        printing unrelated text which happens to contain one of those
+        substrings can't trip this -- its own process name (or its
+        interpreter's, e.g. "node"/"python3") would show instead of a shell.
+
+        This is the closest equivalent available here to checking the
+        launch command's own exit status: the command runs inside a tmux
+        pane's shell via send_keys, not as a Python subprocess this code
+        holds a handle to, so there's no direct exit code to read -- but a
+        shell that has regained the foreground (nothing it exec'd is still
+        running) is the same underlying fact an exit-status check would be
+        confirming.
+
+        Errs toward True (treat a broken/empty probe as "back at the
+        shell," i.e. defer to the substring match alone) whenever it can't
+        positively confirm something else is running -- both on a tmux
+        failure and on an empty result (tmux's `pane_current_command`
+        always names *something* for a real pane, so empty output means
+        the probe itself didn't work, not that nothing is running). A
+        broken probe can then only widen the corroboration signal, never
+        silently suppress a genuine launch failure.
+        """
+        try:
+            current_command = pane.cmd("display-message", "-p", "#{pane_current_command}").stdout
+            name = (current_command[0] if current_command else "").strip().lower()
+            if not name:
+                return True
+            return name in cls._SHELL_PROCESS_NAMES
+        except Exception:
+            return True
 
     async def _wait_for_cli_ready(
         self,
@@ -568,6 +631,22 @@ class LaunchPipeline:
             if self.config.agents.default_fallback_cli_tool != cli_type:
                 fallback_cli_tool = self.config.agents.default_fallback_cli_tool
                 fallback_cli_model = self.config.agents.default_fallback_cli_model
+
+        # A fallback (phase-level or global config) that isn't actually
+        # installed produces a tmux pane with a bare shell and no CLI
+        # running at all when it's later launched into -- the shell
+        # rejection text this would otherwise produce isn't a reliable
+        # enough signal on its own (see _detect_launch_failure's own
+        # docstring), so validate up front instead and drop the fallback
+        # entirely rather than risk a dead pane that reads as "working".
+        if fallback_cli_tool and not is_cli_tool_available(fallback_cli_tool):
+            logger.warning(
+                f"Configured fallback CLI tool '{fallback_cli_tool}' for task "
+                f"{task.id} is not installed (not found on PATH) -- disabling "
+                "the fallback for this launch instead of risking a dead pane"
+            )
+            fallback_cli_tool = None
+            fallback_cli_model = None
 
         return PhaseConfig(
             cli_type=cli_type,
@@ -2089,6 +2168,63 @@ class LaunchPipeline:
                 logger.error(f"Task {agent.current_task_id} not found")
                 return
 
+            # Re-validate the agent's stored cli_type is still actually
+            # installed before blindly relaunching under it again. A
+            # restart that keeps reusing a broken cli_type (e.g. a
+            # fallback CLI that was never on PATH -- see
+            # _resolve_phase_config's own validation for the analogous
+            # create-time check) would otherwise replay the exact same
+            # dead-pane failure on every restart attempt, permanently
+            # immune to a config fix made after the agent was first
+            # launched. Re-resolve from CURRENT config only when the
+            # stored value is actually broken -- an agent whose cli_type
+            # is fine (the overwhelming majority of restarts: frozen
+            # output, a missing tmux session, a server restart resuming
+            # interrupted work) restarts exactly as before.
+            restart_cli_type = agent.cli_type
+            restart_cli_model = agent.cli_model
+            if not is_cli_tool_available(restart_cli_type):
+                candidate_tool = self.config.agents.default_fallback_cli_tool
+                candidate_model = self.config.agents.default_fallback_cli_model
+                if (
+                    not candidate_tool
+                    or candidate_tool == restart_cli_type
+                    or not is_cli_tool_available(candidate_tool)
+                ):
+                    candidate_tool = self.config.agents.default_cli_tool
+                    candidate_model = getattr(self.config.agents, "cli_model", None)
+                if (
+                    candidate_tool
+                    and candidate_tool != restart_cli_type
+                    and is_cli_tool_available(candidate_tool)
+                ):
+                    logger.warning(
+                        f"[RESTART] Agent {agent_id[:8]}'s cli_type "
+                        f"'{restart_cli_type}' is not on PATH -- re-resolving "
+                        f"from current config instead of reusing it; "
+                        f"switching to '{candidate_tool}'"
+                    )
+                    restart_cli_type = candidate_tool
+                    restart_cli_model = candidate_model
+                    agent.cli_type = candidate_tool
+                    agent.cli_model = candidate_model
+                    session.commit()
+                else:
+                    logger.error(
+                        f"[RESTART] Cannot restart agent {agent_id[:8]}: stored "
+                        f"cli_type '{agent.cli_type}' is not installed and no "
+                        "available fallback/default CLI was found in current "
+                        "config -- failing the task instead of relaunching "
+                        "into a dead pane"
+                    )
+                    task.status = "failed"
+                    task.failure_reason = (
+                        f"CLI tool '{agent.cli_type}' is not installed and no "
+                        "usable fallback/default CLI was found for restart"
+                    )
+                    session.commit()
+                    return
+
             # Kill existing tmux session
             if agent.tmux_session_name:
                 try:
@@ -2108,13 +2244,14 @@ class LaunchPipeline:
                 except Exception as e:
                     logger.warning(f"Failed to kill tmux session {agent.tmux_session_name} before restart; the old agent may still be running: {e}")
 
-            # Resolve env vars and model (restart path: uses agent's frozen values)
+            # Resolve env vars and model (restart path: uses agent's frozen
+            # values, re-resolved above if the stored cli_type was broken)
             env_vars, model, cli_agent = self._resolve_env_and_model(
-                agent.cli_type,
+                restart_cli_type,
                 task,
                 agent_id,
                 label="restarted agent",
-                agent_cli_model=agent.cli_model,
+                agent_cli_model=restart_cli_model,
             )
 
             # Resolve worktree (restart: create_if_missing=False, silent None)
@@ -2227,7 +2364,6 @@ class LaunchPipeline:
             await loop.run_in_executor(None, self._wait_for_shell_ready, pane)
             pane.send_keys(launch_result.command, enter=True)
 
-            restart_cli_type = agent.cli_type
             restart_task_id = task.id
 
             if (

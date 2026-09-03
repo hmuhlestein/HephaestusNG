@@ -2795,9 +2795,20 @@ class TestLaunchPipelineOwnAttributesAfterManagerSplit:
         self, mock_agent_manager
     ):
         """A non-confirmation-dialog pattern must still raise the generic
-        message, not crash on the way to deciding which message to raise."""
+        message, not crash on the way to deciding which message to raise.
+
+        The pane is back at a bare shell (`display-message` reports "zsh"),
+        corroborating the "command not found" text -- a genuine dead pane,
+        not a healthy CLI whose own output happens to contain that phrase.
+        """
         pane = MagicMock()
-        pane.cmd.return_value = MagicMock(stdout=["command not found: pi"])
+
+        def _pane_cmd(cmd, *args, **kwargs):
+            if cmd == "capture-pane":
+                return MagicMock(stdout=["command not found: pi"])
+            return MagicMock(stdout=["zsh"])
+
+        pane.cmd.side_effect = _pane_cmd
 
         cli_agent = MagicMock()
         cli_agent.get_launch_rejection_patterns.return_value = [

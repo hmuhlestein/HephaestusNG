@@ -10,6 +10,7 @@ from .cli_interface import (
     OpenCodeAgent,
     PiAgent,
     get_cli_agent,
+    is_cli_tool_available,
 )
 from .llm_interface import (
     LLM_PROVIDERS,
@@ -31,4 +32,5 @@ __all__ = [
     "PiAgent",
     "CLI_AGENTS",
     "get_cli_agent",
+    "is_cli_tool_available",
 ]
