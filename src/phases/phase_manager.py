@@ -1905,11 +1905,33 @@ class PhaseManager:
                     transition_phase_execution,
                 )
 
-                transition_phase_execution(
+                transitioned = transition_phase_execution(
                     session, next_phase.id, "in_progress", reason="_start_next_phase"
                 )
 
-                logger.info(f"Started next phase: {next_phase.name}")
+                # Observed during a live monitor watching this exact
+                # migration: a stale caller (a completion evaluation for a
+                # task whose phase had already been reset "pending" by an
+                # intervening goto's own broad reset) can race this call --
+                # transition_phase_execution correctly rejects the invalid
+                # write and returns None rather than raising. Logging
+                # "Started next phase" unconditionally here used to claim
+                # success regardless, misrepresenting what the DB write
+                # actually did. next_phase is still the right phase to
+                # return either way -- someone (this call or the one that
+                # won the race) has legitimately identified it as next, and
+                # _advance_or_complete/_advance_or_complete_with_phase_info/
+                # _handle_evaluation_skip all treat a falsy return as "no
+                # next phase, complete the workflow instead," which would
+                # be wrong here.
+                if transitioned is not None:
+                    logger.info(f"Started next phase: {next_phase.name}")
+                else:
+                    logger.info(
+                        f"[PHASE] {next_phase.name} was not in a state this call could "
+                        "start (already moved on by another caller) -- proceeding with "
+                        "it as the next phase regardless"
+                    )
             return next_phase
 
         return None

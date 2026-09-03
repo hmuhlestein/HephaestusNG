@@ -1800,6 +1800,99 @@ class TestTagCompletingTask:
             assert task.action_target_phase == "architecture_design"
 
 
+class TestStartNextPhaseLogsAccurately:
+    """Regression, caught by a live monitor watching the PhaseExecution
+    state-machine refactor (docs/designs/PHASE_EXECUTION_STATE_MACHINE_
+    REFACTOR.md): _start_next_phase logged "Started next phase: X"
+    unconditionally after calling transition_phase_execution, without
+    checking whether the transition actually succeeded. Observed live: a
+    stale completion evaluation raced an intervening goto's broad
+    "reset every execution back to pending" sweep -- transition_phase_
+    execution correctly rejected the now-invalid write and returned None,
+    but the misleading log still claimed success. next_phase must still be
+    returned either way: _advance_or_complete, _advance_or_complete_with_
+    phase_info, and _handle_evaluation_skip all treat a falsy return as
+    "no next phase, complete the workflow instead," which would be wrong
+    here -- someone (this call or whoever won the race) has legitimately
+    identified this as the next phase."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager as _DBM
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def _seed(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Phase(id="phase-1", workflow_id="wf-1", order=1, name="requirements", description="d", done_definitions=["x"])
+            )
+            session.add(
+                Phase(id="phase-2", workflow_id="wf-1", order=2, name="implementation", description="d", done_definitions=["x"])
+            )
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="in_progress"))
+            session.add(PhaseExecution(id="exec-2", phase_id="phase-2", status="pending"))
+            session.add(
+                Task(
+                    id="task-1", raw_description="r", done_definition="d",
+                    status="done", phase_id="phase-1", workflow_id="wf-1",
+                )
+            )
+
+    def test_returns_next_phase_even_when_the_transition_loses_the_race(self, real_db):
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.transition_phase_execution",
+            return_value=None,
+        ):
+            with real_db.session_scope() as session:
+                next_phase = pm._start_next_phase(session, "phase-1")
+
+        assert next_phase is not None
+        assert next_phase.name == "implementation"
+
+    def test_logs_success_only_when_the_transition_actually_succeeds(self, real_db):
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with patch("src.phases.phase_manager.logger") as mock_logger:
+            with real_db.session_scope() as session:
+                pm._start_next_phase(session, "phase-1")
+
+        messages = [str(call.args[0]) for call in mock_logger.info.call_args_list]
+        assert any("Started next phase: implementation" in m for m in messages)
+
+    def test_does_not_claim_success_when_the_transition_loses_the_race(self, real_db):
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.transition_phase_execution",
+            return_value=None,
+        ):
+            with patch("src.phases.phase_manager.logger") as mock_logger:
+                with real_db.session_scope() as session:
+                    pm._start_next_phase(session, "phase-1")
+
+        messages = [str(call.args[0]) for call in mock_logger.info.call_args_list]
+        assert not any("Started next phase" in m for m in messages)
+
+
 class TestStartNextPhaseMarksJumpedOverPhasesSkipped:
     """Regression, observed live: _start_next_phase honors an explicit
     action_target_phase (e.g. product_validation goto's back to
