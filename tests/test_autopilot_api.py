@@ -233,6 +233,55 @@ class TestDesignQueue:
         )
         assert resp.status_code == 400
 
+    def test_design_outside_queue_dir_is_visible(self, client, autopilot_dirs, tmp_path):
+        """Regression: POST /designs/add's file_path can point anywhere on
+        disk -- its own docstring says it never copies the file into the
+        queue dir. GET /queue used to glob only the queue dir, so such a
+        design was invisible to it even though a real AutopilotDesign row
+        existed for it (the CLI's `queue` vs `add` disagreement traced back
+        to this same gap in the backend's own /queue endpoint).
+        """
+        from src.core.database import AutopilotProject, DatabaseManager
+
+        project_dir = tmp_path / "external_project"
+        project_dir.mkdir()
+        outside_file = tmp_path / "somewhere_else.md"
+        outside_file.write_text("# External design")
+
+        db = DatabaseManager(None)
+        with db.session_scope() as session:
+            session.add(
+                AutopilotProject(
+                    id="proj-outside",
+                    name="outside",
+                    base_dir=str(project_dir.resolve()),
+                    is_active=True,
+                )
+            )
+
+        resp = client.post(
+            "/api/autopilot/designs/add",
+            json={"file_path": str(outside_file), "project_path": str(project_dir)},
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = client.get("/api/autopilot/queue?project_id=proj-outside")
+        assert resp.status_code == 200, resp.text
+        names = [d["filename"] for d in resp.json()]
+        assert "somewhere_else.md" in names
+
+        # A file dropped directly into the queue dir with no design row yet
+        # (not synced) must still be visible too -- the pre-existing fallback.
+        (autopilot_dirs["queue"] / "unsynced.md").write_text("# Not yet synced")
+        from src.mcp.autopilot import _shared as api_mod
+
+        api_mod._invalidate("queue:proj-outside")
+
+        resp = client.get("/api/autopilot/queue?project_id=proj-outside")
+        names = [d["filename"] for d in resp.json()]
+        assert "unsynced.md" in names
+        assert "somewhere_else.md" in names
+
 
 def _seed_design(project_dir, filename="my_design.md", design_id="des-rerun", **kw):
     """Rerun is addressed by design_id, so a rerun test needs a real row.

@@ -294,7 +294,12 @@ def _read_jsonl_tail(path: Path, limit: int = 100) -> List[dict]:
         return []
 
 class DesignQueueItem(BaseModel):
-    filename: str
+    # Optional: NULL for a directory-backed design (source_dir set, NFR-02) --
+    # a required `str` here raised a pydantic ValidationError (500) the
+    # moment list_design_queue became DB-authoritative and started
+    # returning such rows (see DesignItem's identical fix in
+    # design_file_routes.py).
+    filename: Optional[str] = None
     name: str
     size_bytes: int
     modified: str

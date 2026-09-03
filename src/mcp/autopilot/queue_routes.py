@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+def _design_rows_for_project(db, project_id: Optional[str]) -> List[Any]:
+    """Every one of a project's design rows -- file- and directory-backed
+    alike -- ordered by ordinal, the queue's real order (see
+    _design_rows_by_filename's docstring below).
+    """
+    from src.core.database import AutopilotDesign, AutopilotProject
+
+    if project_id:
+        query = db.query(AutopilotDesign).filter_by(project_id=project_id)
+    else:
+        proj = db.query(AutopilotProject).filter_by(is_active=True).first()
+        if not proj:
+            return []
+        query = db.query(AutopilotDesign).filter_by(project_id=proj.id)
+    return query.order_by(AutopilotDesign.ordinal).all()
+
+
 def _design_rows_by_filename(db, project_id: Optional[str]) -> Dict[str, Any]:
     """This project's file-backed design rows, keyed by filename.
 
@@ -33,14 +50,21 @@ def _design_rows_by_filename(db, project_id: Optional[str]) -> Dict[str, Any]:
     directory-backed design, whose filename is NULL (the mirror recorded a
     literal null for it).
     """
-    from src.core.database import AutopilotDesign, AutopilotProject
+    return {d.filename: d for d in _design_rows_for_project(db, project_id) if d.filename}
 
-    if project_id:
-        rows = db.query(AutopilotDesign).filter_by(project_id=project_id).all()
-    else:
-        proj = db.query(AutopilotProject).filter_by(is_active=True).first()
-        rows = db.query(AutopilotDesign).filter_by(project_id=proj.id).all() if proj else []
-    return {d.filename: d for d in rows if d.filename}
+
+def _to_queue_item(d) -> DesignQueueItem:
+    """Build a DesignQueueItem straight from a design row's own stored
+    fields, rather than re-deriving them by globbing a directory and hoping
+    the file is still there (see list_design_queue)."""
+    modified = d.modified_at or d.created_at
+    return DesignQueueItem(
+        filename=d.filename,
+        name=d.name,
+        size_bytes=d.size_bytes,
+        modified=modified.replace(tzinfo=timezone.utc).isoformat(),
+        extension=d.extension,
+    )
 
 
 def _pin_design_to_front(db, design) -> None:
@@ -69,29 +93,26 @@ async def list_design_queue(project_id: Optional[str] = None):
 
     queue_path = Path(effective_dir)
 
-    files_by_name: Dict[str, Path] = {}
-    for ext in ALLOWED_EXTENSIONS:
-        for f in queue_path.glob(f"*{ext}"):
-            files_by_name[f.name] = f
-
     from src.core.database import get_db
 
     with get_db() as db:
-        ordinals = {
-            name: row.ordinal for name, row in _design_rows_by_filename(db, project_id).items()
-        }
+        rows = _design_rows_for_project(db, project_id)
+        items = [_to_queue_item(d) for d in rows]
+        known_filenames = {d.filename for d in rows if d.filename}
 
-    # A file with a design row sorts by its ordinal; one without a row (dropped
-    # into the queue dir but not yet synced) falls in behind them by mtime.
-    ordered_names = sorted(
-        (n for n in files_by_name if n in ordinals), key=lambda n: ordinals[n]
-    )
-    unordered = [n for n in files_by_name if n not in ordinals]
-    all_names = ordered_names + sorted(unordered, key=lambda n: files_by_name[n].stat().st_mtime)
-
-    items = []
-    for fname in all_names:
-        f = files_by_name[fname]
+    # DB rows are the primary, authoritative source -- including one whose
+    # file_path points anywhere on disk, not just inside this queue dir
+    # (add_design_by_path never requires that). A file dropped straight into
+    # the queue dir with no design row yet (not synced) still needs
+    # visibility, so it's unioned in behind the DB rows, ordered by mtime --
+    # the same fallback list_design_queue always had for that case.
+    unsynced = [
+        f
+        for ext in ALLOWED_EXTENSIONS
+        for f in queue_path.glob(f"*{ext}")
+        if f.name not in known_filenames
+    ]
+    for f in sorted(unsynced, key=lambda f: f.stat().st_mtime):
         stat = f.stat()
         name = f.stem.replace("_", " ").replace("-", " ").title()
         items.append(

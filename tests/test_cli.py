@@ -549,22 +549,45 @@ class TestTaskCommand:
 
 
 class TestAutopilotCommand:
-    def test_show_queue_nonexistent_dir(self, args, capsys):
+    def test_show_queue_unregistered_project(self, args, capsys):
+        """show_queue now resolves --project-path to a registered
+        AutopilotProject via the backend (GET /api/autopilot/projects, same
+        pattern pipeline_status already uses) instead of globbing the
+        filesystem directly -- an unregistered path is a clean error, not a
+        filesystem check. Regression test for the CLI/backend `queue`
+        disagreement: `add` writes a DB row via the backend while the old
+        `queue` command read the filesystem straight, so a design added
+        outside .hephaestus/specs (add_design_by_path never copies the
+        file there) was invisible to `queue` even with a real DB row.
+        """
+        mock_projects_resp = MagicMock()
+        mock_projects_resp.status_code = 200
+        mock_projects_resp.json.return_value = []
+
         from src.cli.commands.autopilot import show_queue
 
         args.project_path = "/tmp/nonexistent_project_xyz"
-        result = show_queue(args)
-        assert result == 0
-        out = capsys.readouterr().out
-        assert "not found" in out.lower() or "empty" in out.lower()
+        with patch("requests.get", return_value=mock_projects_resp):
+            result = show_queue(args)
+        assert result == 1
+        assert "no registered project" in capsys.readouterr().out.lower()
 
     def test_show_queue_empty(self, args, capsys):
         from src.cli.commands.autopilot import show_queue
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            queue_dir = Path(tmpdir) / ".hephaestus" / "specs"
-            queue_dir.mkdir(parents=True)
-            args.project_path = tmpdir
+        args.project_path = "/tmp/some_project"
+        resolved_base_dir = str(Path(args.project_path).resolve())
+
+        def fake_get(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if url.endswith("/api/autopilot/projects"):
+                resp.json.return_value = [{"id": "proj-1", "base_dir": resolved_base_dir}]
+            else:
+                resp.json.return_value = []
+            return resp
+
+        with patch("requests.get", side_effect=fake_get):
             result = show_queue(args)
         assert result == 0
         out = capsys.readouterr().out
@@ -573,12 +596,34 @@ class TestAutopilotCommand:
     def test_show_queue_with_files(self, args, capsys):
         from src.cli.commands.autopilot import show_queue
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            queue_dir = Path(tmpdir) / ".hephaestus" / "specs"
-            queue_dir.mkdir(parents=True)
-            (queue_dir / "design1.md").write_text("# Design 1")
-            (queue_dir / "design2.md").write_text("# Design 2")
-            args.project_path = tmpdir
+        args.project_path = "/tmp/some_project"
+        resolved_base_dir = str(Path(args.project_path).resolve())
+
+        def fake_get(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if url.endswith("/api/autopilot/projects"):
+                resp.json.return_value = [{"id": "proj-1", "base_dir": resolved_base_dir}]
+            else:
+                resp.json.return_value = [
+                    {
+                        "filename": "design1.md",
+                        "name": "design1",
+                        "size_bytes": 10,
+                        "modified": "2024-01-01T00:00:00+00:00",
+                        "extension": ".md",
+                    },
+                    {
+                        "filename": "design2.md",
+                        "name": "design2",
+                        "size_bytes": 12,
+                        "modified": "2024-01-01T00:00:00+00:00",
+                        "extension": ".md",
+                    },
+                ]
+            return resp
+
+        with patch("requests.get", side_effect=fake_get):
             result = show_queue(args)
         assert result == 0
         out = capsys.readouterr().out
