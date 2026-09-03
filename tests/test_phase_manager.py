@@ -636,6 +636,63 @@ def two_architect_phases(real_db):
     return real_db
 
 
+class TestStartPhase:
+    """Direct unit tests for _start_phase, the very first PhaseExecution
+    write in a workflow's life (called once from start_execution to start
+    Phase 1). Migrated to transition_phase_execution (Step 3 of
+    docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- found with
+    zero pre-existing direct test coverage (the one other reference to it
+    in the test suite mocks it out entirely) during a follow-up
+    adversarial review."""
+
+    def test_starts_a_pending_phase(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-1", workflow_id="wf-1", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="pending"))
+
+        pm = PhaseManager(db_manager=real_db)
+        with real_db.session_scope() as session:
+            pm._start_phase(session, "phase-1")
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at is not None
+
+    def test_a_non_pending_phase_is_left_untouched(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-1", workflow_id="wf-1", order=1, name="development", description="d", done_definitions=["x"]))
+            session.add(PhaseExecution(id="exec-1", phase_id="phase-1", status="in_progress"))
+
+        pm = PhaseManager(db_manager=real_db)
+        with real_db.session_scope() as session:
+            pm._start_phase(session, "phase-1")  # already in_progress -- must not raise or restamp
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.status == "in_progress"
+
+    def test_a_phase_with_no_execution_row_is_a_noop(self, real_db):
+        from src.core.database import Phase, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(id="phase-1", workflow_id="wf-1", order=1, name="development", description="d", done_definitions=["x"]))
+
+        pm = PhaseManager(db_manager=real_db)
+        with real_db.session_scope() as session:
+            pm._start_phase(session, "phase-1")  # must not raise
+
+
 class TestHandleEvaluationRetryAndArbitrateReopenExecution:
     """§4.1's 4th copy-family: _handle_evaluation_retry and
     _handle_evaluation_arbitrate's status/started_at/task_creation_claimed_at

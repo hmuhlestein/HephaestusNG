@@ -1474,7 +1474,17 @@ def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: "Orche
     if not most_recent_done_task:
         return
 
-    execution = db.query(PhaseExecution).filter_by(phase_id=most_recent_done_task.phase_id).first()
+    # populate_existing() matters here: db is _advance_phases's own
+    # session, which just ran _release_stale_task_creation_claims
+    # immediately before this call -- if that function's own atomic,
+    # synchronize_session=False claim-clearing UPDATE touched this exact
+    # phase's row, a plain query here would return the same stale
+    # in-memory object instead of a fresh one, and the started_at read
+    # below (which feeds extra_fields, with no atomic-UPDATE-WHERE-clause
+    # backstop protecting a field VALUE) could compute the wrong backfill.
+    # Same class of gap found and fixed in _clear_stale_task_creation_
+    # claim's equivalent read.
+    execution = db.query(PhaseExecution).filter_by(phase_id=most_recent_done_task.phase_id).populate_existing().first()
     if not execution or execution.status != "pending":
         return
 
@@ -1485,14 +1495,22 @@ def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: "Orche
         f"{most_recent_done_task.id[:8]} -- flipping to in_progress so "
         "dispatch can see it"
     )
-    execution.status = "in_progress"
-    # Same rationale as _release_stale_task_creation_claims's backfill:
-    # scope from the task that actually ran, not "now" (this repair can
-    # run long after that task finished), or _fire_phase_transition's
+    # transition_phase_execution's atomic UPDATE replaces the direct
+    # mutation here (Step 3 of docs/designs/
+    # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) -- found unmigrated
+    # during a follow-up adversarial review. started_at passed through
+    # extra_fields, not left to _FIELD_RESETS's started_at="now" default:
+    # this site's real behavior (same rationale as
+    # _release_stale_task_creation_claims's own backfill) is to scope
+    # from the task that actually ran, not "now" (this repair can run
+    # long after that task finished), or _fire_phase_transition's
     # done_count/incomplete queries would wrongly exclude that same task
     # from what they treat as its own cycle.
-    execution.started_at = execution.started_at or most_recent_done_task.created_at
-    db.commit()
+    transition_phase_execution(
+        db, execution.phase_id, "in_progress",
+        reason="_release_pending_phases_with_done_tasks",
+        extra_fields={"started_at": execution.started_at or most_recent_done_task.created_at},
+    )
 
 
 # Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md: detect
