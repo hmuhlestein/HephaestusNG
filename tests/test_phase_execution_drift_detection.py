@@ -64,8 +64,7 @@ class TestFindPhaseExecutionDrift:
 
     def test_pending_task_counts_as_live(self, db_manager):
         """A task that exists but hasn't been picked up yet is still real
-        work under this phase (see _release_pending_phases_with_orphaned_task's
-        own "never dispatched, stale >1min" case) -- must not be blind to it."""
+        work under this phase -- must not be blind to it."""
         _seed(db_manager, execution_status="pending", task_status="pending")
         with db_manager.session_scope() as session:
             results = pt.find_phase_execution_drift(session, "wf-1")

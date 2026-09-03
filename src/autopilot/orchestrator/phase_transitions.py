@@ -1118,16 +1118,19 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
             # phase statuses below, so the dispatch that follows sees the
             # repaired state, not a claim-blocked snapshot.
             _release_stale_task_creation_claims(db, workflow_id, logger)
-            # Same reasoning: a phase stuck "pending" despite a done task
-            # is invisible to every dispatch case below otherwise.
-            _release_pending_phases_with_done_tasks(db, workflow_id, logger)
-            # Sibling repair: a phase stuck "pending" despite an existing
-            # non-terminal (orphaned) task -- same blind spot, a task that
-            # never reached "done" instead of one that did.
-            _release_pending_phases_with_orphaned_task(db, workflow_id, logger)
-            # Third sibling, and the widest of the three: a phase whose
-            # execution is "failed" while the workflow itself is active.
-            # Every dispatch case below filters phase_statuses to exactly
+            # _release_pending_phases_with_done_tasks and
+            # _release_pending_phases_with_orphaned_task -- drift-repair
+            # self-heals for a phase stuck "pending" despite a done/live
+            # task -- were deleted here (Step 3 item 5 of docs/designs/
+            # PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md) once Steps 1-4's
+            # atomic writers closed the defect class that caused that
+            # drift by construction: a phase whose task exists but whose
+            # PhaseExecution.status disagrees with it, exactly what Step 1's
+            # find_phase_execution_drift already detects independently.
+            #
+            # A phase whose execution is "failed" while the workflow
+            # itself is active. Every dispatch case below filters
+            # phase_statuses to exactly
             # "pending"/"in_progress"/"completed", so a "failed" execution
             # is invisible to all four -- the phase can never be entered
             # again, and the workflow can never derive "completed" either
@@ -1388,162 +1391,13 @@ def _release_stale_task_creation_claims(db, workflow_id: str, logger: "Orchestra
         _clear_stale_task_creation_claim(db, execution.phase_id, repair_status=True)
 
 
-def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: "OrchestratorLogger") -> None:
-    """Self-heal for a PhaseExecution stuck at status="pending" despite
-    already having a "done" Task -- a state none of _advance_phases's four
-    dispatch cases recognize (Case 0/0b act on a *lack* of tasks, Case 1
-    needs the *predecessor* completed, Case 2 only ever looks at phases
-    already "in_progress"), so a phase in it is invisible to every one of
-    them, forever, no matter how many times its task actually finishes.
-
-    Several paths create/complete a task without re-flipping its phase to
-    "in_progress" the way _create_phase_task does (e.g.
-    _maybe_retry_failed_tasks's reset-and-redispatch loop never touches
-    PhaseExecution at all), and the broader "reset ALL executions with
-    order >= target back to pending" goto-reset can also revert a phase
-    that's since moved on. Observed live: two workflows' phases sat
-    "pending" with a done task for days, invisible to every self-heal
-    path, while an unrelated workflow's endlessly-retried task (see
-    _maybe_retry_failed_tasks's retry cap) hogged every poll cycle so this
-    one's design queue turn never came around to notice.
-
-    Repairs at most ONE phase per call -- the one whose done task is the
-    most recent for the whole workflow (i.e. whatever it was actually
-    working on right before getting stuck). A workflow with any real goto
-    history has MANY pending phases each carrying SOME old done task from
-    an earlier cycle -- that's normal, not stuck, and flipping every one
-    of them to "in_progress" in one pass previously created several
-    simultaneously-active phases for the same workflow (multiple agents
-    burning tokens on unrelated phases at once, confirmed live). Also
-    skips entirely if any phase is already "in_progress": a workflow
-    legitimately doing something must never gain a second concurrent one.
-
-    Must run before _get_phase_statuses is read for this cycle's dispatch,
-    same as _release_stale_task_creation_claims.
-    """
-    already_active = db.query(PhaseExecution).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == workflow_id, PhaseExecution.status == "in_progress").first()
-    if already_active:
-        return
-
-    most_recent_done_task = (
-        db.query(Task)
-        .join(Phase, Task.phase_id == Phase.id)
-        .filter(
-            Phase.workflow_id == workflow_id,
-            Task.status == "done",
-            # Same exclusion _case_in_progress_complete's own queries apply
-            # a few lines below -- a diagnostic task (created by the
-            # monitor against a stuck phase's phase_id, see
-            # _create_diagnostic_agent) completing its investigation isn't
-            # real phase progress and must not be mistaken for "what the
-            # workflow was actually working on most recently."
-            ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
-        )
-        .order_by(Task.created_at.desc())
-        .first()
-    )
-    if not most_recent_done_task:
-        return
-
-    execution = db.query(PhaseExecution).filter_by(phase_id=most_recent_done_task.phase_id).first()
-    if not execution or execution.status != "pending":
-        return
-
-    phase = db.query(Phase).filter_by(id=execution.phase_id).first()
-    logger.warning(
-        f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
-        f"PhaseExecution stuck 'pending' despite done task "
-        f"{most_recent_done_task.id[:8]} -- flipping to in_progress so "
-        "dispatch can see it"
-    )
-    execution.status = "in_progress"
-    # Same rationale as _release_stale_task_creation_claims's backfill:
-    # scope from the task that actually ran, not "now" (this repair can
-    # run long after that task finished), or _fire_phase_transition's
-    # done_count/incomplete queries would wrongly exclude that same task
-    # from what they treat as its own cycle.
-    execution.started_at = execution.started_at or most_recent_done_task.created_at
-    db.commit()
-
-
-def _release_pending_phases_with_orphaned_task(db, workflow_id: str, logger: "OrchestratorLogger") -> None:
-    """Self-heal for a PhaseExecution stuck at status="pending" despite
-    already having a non-terminal (pending/assigned/in_progress/queued)
-    Task pointing at it -- the task's mere existence is proof something
-    already meant to work this phase (most commonly a goto/retry reset
-    that reverted the PhaseExecution without flipping it back), but no
-    dispatch case recognizes a "pending" phase that already has a task:
-    Case 0/0b act on a *lack* of tasks, Case 1 needs the *predecessor*
-    completed and skips outright if the successor already has a task, and
-    Case 2 only ever looks at phases already "in_progress".
-
-    Sibling to _release_pending_phases_with_done_tasks (same blind spot, a
-    non-terminal task instead of a done one) -- kept separate rather than
-    merged into it because that function's "skip entirely if ANY phase is
-    already in_progress" guard doesn't hold here: a manual-only phase
-    (git_expert) sitting "in_progress" only because it's paused
-    waiting on a human, with its own task already failed (not actively
-    consuming an agent), must not block this repair for an unrelated
-    phase behind it. Guards against real concurrency instead by checking
-    for an actually-live task (assigned/in_progress) anywhere in the
-    workflow, not merely a PhaseExecution.status column.
-
-    Observed live: development (task 66e7c1ff) sat "pending" -- reverted
-    by an earlier goto cycle -- for the entire time its workflow was
-    paused for git_expert review, invisible to every dispatch case,
-    because _release_pending_phases_with_done_tasks only matches a done
-    task and unconditionally skips whenever any phase (including the
-    parked git_expert one) is "in_progress".
-    """
-    live_task = (
-        db.query(Task)
-        .join(Phase, Task.phase_id == Phase.id)
-        .filter(Phase.workflow_id == workflow_id, Task.status.in_(["assigned", "in_progress"]))
-        .first()
-    )
-    if live_task:
-        return
-
-    orphaned_task = (
-        db.query(Task)
-        .join(Phase, Task.phase_id == Phase.id)
-        .join(PhaseExecution, PhaseExecution.phase_id == Phase.id)
-        .filter(
-            Phase.workflow_id == workflow_id,
-            PhaseExecution.status == "pending",
-            Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
-            ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
-        )
-        .order_by(Task.created_at.desc())
-        .first()
-    )
-    if not orphaned_task:
-        return
-
-    execution = db.query(PhaseExecution).filter_by(phase_id=orphaned_task.phase_id).first()
-    if not execution or execution.status != "pending":
-        return
-
-    phase = db.query(Phase).filter_by(id=execution.phase_id).first()
-    logger.warning(
-        f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
-        f"PhaseExecution stuck 'pending' despite existing task "
-        f"{orphaned_task.id[:8]} (status={orphaned_task.status}) -- "
-        "flipping to in_progress so dispatch can see it"
-    )
-    execution.status = "in_progress"
-    execution.started_at = execution.started_at or orphaned_task.created_at
-    db.commit()
-
-
 # Step 1 of docs/designs/PHASE_EXECUTION_STATE_MACHINE_REFACTOR.md: detect
 # PhaseExecution/real-state drift and log it immediately, without changing
 # any write path yet. "pending" is included alongside the other live
 # statuses: a task that exists at all but hasn't been picked up yet is
-# still real, pending work under this phase (see
-# _release_pending_phases_with_orphaned_task above's own "never dispatched
-# to an agent, stale >1min" case) -- omitting it would make this detector
-# blind to exactly the failure mode that self-heal exists for.
+# still real, pending work under this phase -- omitting it would make
+# this detector blind to a phase stuck "pending" despite an actual task
+# sitting under it.
 LIVE_TASK_STATUSES = ["pending", "assigned", "in_progress", "queued", "blocked", "needs_work", "under_review"]
 
 
