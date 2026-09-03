@@ -668,6 +668,7 @@ async def delete_project(
         PhaseExecution,
         PhasePromptVersion,
         ProjectRepo,
+        PromptProposal,
         Task,
         TaskPromptOverride,
         Ticket,
@@ -733,8 +734,15 @@ async def delete_project(
             task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
             if task_ids:
                 db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
-                db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                # AgentResult before ValidationReview -- agent_results.
+                # verified_by_validation_id is an enforced FK to
+                # validation_reviews.id, set by ResultService's normal
+                # task-validation flow for any validated task. Same bug,
+                # same fix, as remove_project_design's identical cascade
+                # (design_file_routes.py) -- confirmed there via a real
+                # FOREIGN KEY error before this fix.
                 db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
                 db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
                 db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
@@ -749,10 +757,26 @@ async def delete_project(
                 )
 
             db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+            # workflows.result_id -> workflow_results.id is also an enforced
+            # FK, and WorkflowResultService sets it to a WorkflowResult with
+            # the SAME workflow_id (a self-reference), common for
+            # has-result pipelines (bugfix/diagnostic). Null the
+            # self-reference before deleting WorkflowResult below, or that
+            # delete fails -- same bug, same fix, as remove_project_design's
+            # identical cascade (design_file_routes.py).
+            db.query(Workflow).filter(Workflow.id.in_(wf_ids)).update(
+                {"result_id": None}, synchronize_session=False
+            )
             db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
             db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
             db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
             db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+            # prompt_proposals.workflow_id also FKs to workflows.id, no
+            # ondelete clause -- forensics_analysis (a real phase in the
+            # standard autopilot workflow) creates these after a pipeline
+            # run finishes. Same bug, same fix, as remove_project_design's
+            # identical cascade.
+            db.query(PromptProposal).filter(PromptProposal.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
             # tasks.phase_id and tickets.phase_id both FK to phases.id --
             # Task (and Ticket, already deleted above) must be gone before
