@@ -71,6 +71,13 @@ class ProjectItem(BaseModel):
     updated_at: str
     cost_total_usd: float = 0.0
     cost_limit_usd: Optional[float] = None
+    # Omitted entirely from every construction site below until this fix --
+    # every response silently read back False regardless of the actual DB
+    # value, indistinguishable from a PATCH (feature_review_routes.py's
+    # set_review_mode) that genuinely failed. review_mode itself is still
+    # only ever written through that dedicated endpoint, not this model's
+    # own PUT handler.
+    review_mode: bool = False
 
 class ProjectCreate(BaseModel):
     name: str
@@ -310,6 +317,7 @@ async def list_projects():
                     updated_at=p.updated_at.isoformat() if p.updated_at else "",
                     cost_total_usd=p.cost_total_usd or 0.0,
                     cost_limit_usd=p.cost_limit_usd,
+                    review_mode=getattr(p, "review_mode", False),
                 )
             )
         return result
@@ -406,6 +414,7 @@ async def create_project(
             design_count=len(designs),
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+            review_mode=getattr(proj, "review_mode", False),
         )
 
 
@@ -434,6 +443,7 @@ async def get_active_projects():
                     design_count=count,
                     created_at=proj.created_at.isoformat() if proj.created_at else "",
                     updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+                    review_mode=getattr(proj, "review_mode", False),
                 )
             )
         return result
@@ -491,6 +501,7 @@ async def activate_project(project_id: str):
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+            review_mode=getattr(proj, "review_mode", False),
         )
 
 
@@ -519,6 +530,7 @@ async def deactivate_project(project_id: str):
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+            review_mode=getattr(proj, "review_mode", False),
         )
 
 
@@ -542,6 +554,7 @@ async def get_project(project_id: str):
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
             cost_total_usd=proj.cost_total_usd or 0.0,
             cost_limit_usd=proj.cost_limit_usd,
+            review_mode=getattr(proj, "review_mode", False),
         )
 
 @router.put("/projects/{project_id}", response_model=ProjectItem)
@@ -622,6 +635,7 @@ async def update_project(
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
             cost_total_usd=proj.cost_total_usd or 0.0,
             cost_limit_usd=proj.cost_limit_usd,
+            review_mode=getattr(proj, "review_mode", False),
         )
 
 @router.delete("/projects/{project_id}")
