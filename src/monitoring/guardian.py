@@ -106,6 +106,70 @@ def _sanitize_tmux_output_for_llm(tmux_output: str) -> str:
     )
 
 
+# External eval (§3.5): the Guardian's own trajectory-analysis LLM call
+# misjudged a healthy, already-finished agent as "stuck in a search loop"
+# and sent three consecutive "[GUARDIAN - LAST RESORT]: stop exploring and
+# write features.json" nudges -- AFTER the agent had already written and
+# verified that exact file. Each time, the agent's own reply correctly said
+# the work was done and the real blocker was that complete_my_task wasn't
+# callable (a separate MCP-registration bug). ~40 of that run's 56 minutes
+# were spent on Guardian re-prodding already-finished work instead of
+# recognizing "agent reports a tool it needs is unavailable" as a
+# fundamentally different situation from a stuck loop -- one more "keep
+# working" nudge can't fix a missing tool registration, and cutting the
+# agent off (steer_agent's Esc interrupt for stuck/idle) can even sever the
+# very reply that explains the real blocker.
+#
+# Two independent, narrowly-scoped signals must BOTH be present (see
+# detect_tool_unavailable_blocker below) -- requiring the compound match is
+# what keeps a genuinely stuck agent's passing remark ("I can't get this to
+# work") from being incorrectly exempted from real stuck-loop nudging;
+# mirrors this module's other confirmation gates (GUARDIAN_TIMEOUT_
+# ESCALATION_THRESHOLD, the 2-consecutive-flag gate in
+# _evaluate_steering_eligibility) in spirit, though here the "confirmation"
+# is two co-occurring signals in one cycle rather than repeated cycles --
+# a real capability outage is a stable, re-readable fact in the transcript
+# each cycle, not a one-off judgment call that benefits from waiting.
+
+# Signal 1: the agent believes its actual work is already finished.
+# Deliberately just "already" + a completion verb (not a longer phrase) --
+# broad within THIS category is fine because signal 2 below is what
+# supplies the specificity; the incident's own phrasing ("work was already
+# done") is exactly this shape.
+_WORK_ALREADY_DONE_RE = re.compile(
+    r"already\s+(?:done|complete|completed|finished|wrote|written|created|verified)",
+    re.IGNORECASE,
+)
+
+# Signal 2: the agent names a specific tool/function (an identifier in the
+# snake_case shape every MCP tool in this codebase uses -- complete_my_task,
+# update_task_status, ...) and reports it as not callable/registered/
+# resolving/available, in either word order ("X isn't callable" / "isn't
+# registered ... X" / "can't call X"). Anchored to this curated
+# capability-registration vocabulary (callable/registered/resolve/exposed/
+# recognized/available/working/found) rather than a bare "can't do X" --
+# that generic phrasing is exactly the passing remark a genuinely stuck
+# agent might also make, and must NOT trip this detector on its own.
+_NOT_WORD = (
+    r"(?:isn'?t|is\s+not|wasn'?t|was\s+not|doesn'?t|does\s+not|didn'?t|"
+    r"did\s+not|couldn'?t|could\s+not|can'?t|cannot|not)"
+)
+_UNAVAIL_TARGET = (
+    r"(?:callable|registered|resolve(?:d|ing)?|exposed|recognized|"
+    r"available|working|found|showing up)"
+)
+_TOOL_NAME_TOKEN = r"`?\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,5}\b`?"
+_TOOL_UNAVAILABLE_RE = re.compile(
+    rf"(?:{_TOOL_NAME_TOKEN}[^\n.]{{0,50}}{_NOT_WORD}[^\n.]{{0,25}}{_UNAVAIL_TARGET}"
+    rf"|{_NOT_WORD}[^\n.]{{0,25}}{_UNAVAIL_TARGET}[^\n.]{{0,50}}{_TOOL_NAME_TOKEN}"
+    # "can't call X" specifically -- "call" alone is too generic to pair
+    # with _UNAVAIL_TARGET (would match "can't call this a success"), so
+    # it's only accepted immediately adjacent to a named tool token.
+    rf"|{_NOT_WORD}\s+call\s+(?:the\s+|this\s+)?{_TOOL_NAME_TOKEN})",
+    re.IGNORECASE,
+)
+
+
 class SteeringType(Enum):
     """Types of steering interventions."""
 
@@ -487,6 +551,24 @@ class Guardian:
             f"last resort steering (parent already detected impasse)"
         )
 
+        # Fetched once, up front, so both the tool-unavailable check below
+        # and the queued-message check further down read the same snapshot.
+        tmux_output = self.agent_manager.get_agent_output(agent.id, lines=50)
+
+        # A trajectory-analysis LLM judgment of "stuck"/"idle" produces the
+        # generic "stop exploring, do the work" nudge (plus an Esc interrupt
+        # keystroke, below) -- exactly the framing that's actively
+        # counterproductive when the agent's own output shows the work is
+        # already done and it's blocked on a missing tool, not looping. Soft
+        # concerns (drifting/off_track/...) already require 2 confirmed
+        # passes and never carry this framing, so they're not gated here.
+        if steering_type in (
+            SteeringType.STUCK.value,
+            "idle",
+        ) and self.detect_tool_unavailable_blocker(tmux_output):
+            self._record_tool_unavailable_stall(agent, steering_type, message)
+            return
+
         # Genuinely stuck/idle agents act on the first flag — waiting only
         # prolongs a frozen agent. Everything else (drifting, off_track,
         # over_engineering, confused, ...) is a single LLM trajectory
@@ -505,7 +587,6 @@ class Guardian:
             return
 
         # Check if there's already a queued message
-        tmux_output = self.agent_manager.get_agent_output(agent.id, lines=50)
         if "Press up to edit queued messages" in tmux_output:
             logger.info(
                 f"[GUARDIAN] Discarding — previous message still queued for agent {agent.id[:8]}"
@@ -556,6 +637,46 @@ class Guardian:
                     "message": message,
                     "timestamp": utc_now().isoformat(),
                     "model": "parent_child_last_resort",
+                },
+            )
+            session.add(log_entry)
+
+    def _record_tool_unavailable_stall(
+        self, agent: Agent, steering_type: str, message: str
+    ) -> None:
+        """Escalate a detected tool-unavailable stall distinctly from a
+        normal steering intervention -- deliberately does NOT call
+        _apply_steering (no nudge, no Esc interrupt): another "stop
+        exploring and do the work" message can't fix a missing tool
+        registration, and the interrupt keystroke risks cutting off the
+        agent's own explanation of the real blocker. This needs a human
+        or a different automated recovery path, so it's logged under a
+        distinct log_type (guardian_tool_unavailable_stall, not
+        guardian_steering) so it's queryable/alertable separately from
+        ordinary steering activity.
+        """
+        logger.warning(
+            f"[GUARDIAN - TOOL UNAVAILABLE] Agent {agent.id[:8]} reports its "
+            f"work is already done and blocked on an unavailable tool -- "
+            f"suppressing generic '{steering_type}' nudge, escalating "
+            f"instead of re-prodding already-finished work"
+        )
+        self._record_steering(
+            agent.id, f"{steering_type}_TOOL_UNAVAILABLE_STALL", message
+        )
+        with self.db_manager.session_scope() as session:
+            log_entry = AgentLog(
+                agent_id=agent.id,
+                log_type="guardian_tool_unavailable_stall",
+                message=(
+                    f"Guardian suppressed a generic '{steering_type}' nudge — "
+                    "agent output shows work already done, blocked on an "
+                    "unavailable tool"
+                ),
+                details={
+                    "steering_type": steering_type,
+                    "suppressed_message": message,
+                    "timestamp": utc_now().isoformat(),
                 },
             )
             session.add(log_entry)
@@ -698,6 +819,22 @@ class Guardian:
             if any(v >= 8 for v in seen.values()):
                 return True
         return False
+
+    def detect_tool_unavailable_blocker(self, tmux_output: str) -> bool:
+        """True if the agent's own recent output reports it has already
+        finished its real work and is blocked because a tool/capability it
+        needs is unavailable -- see the module-level comment above
+        _WORK_ALREADY_DONE_RE for the incident this guards against.
+
+        Both signals must be present in the SAME tmux_output snapshot; see
+        that same comment for why this compound-AND is the false-positive
+        guard rather than a repeated-cycle confirmation gate.
+        """
+        if not tmux_output:
+            return False
+        return bool(_WORK_ALREADY_DONE_RE.search(tmux_output)) and bool(
+            _TOOL_UNAVAILABLE_RE.search(tmux_output)
+        )
 
     def _record_steering(self, agent_id: str, steering_type: str, message: str):
         """Record steering in history."""

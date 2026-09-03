@@ -750,5 +750,193 @@ class TestGuardianPhaseContextUsesLiveRequiredOutput:
         assert context["outputs"] == ["source code in project path"]
 
 
+class TestToolUnavailableStallDetection:
+    """External eval (§3.5): Guardian's trajectory LLM misjudged a healthy,
+    already-finished agent as 'stuck in a search loop' and sent three
+    generic '[GUARDIAN - LAST RESORT]: stop exploring and write X' nudges
+    after the agent had already written and verified X — the agent's real,
+    correctly self-reported blocker was that complete_my_task wasn't
+    callable. detect_tool_unavailable_blocker/steer_agent must recognize
+    that compound signal (work already done + a named tool reported
+    unavailable) and suppress the generic nudge, without exempting a
+    genuinely stuck agent's vague remarks from normal stuck-loop nudging.
+    """
+
+    # --- detect_tool_unavailable_blocker: regex-level cases ---
+
+    def test_detects_already_done_plus_tool_not_callable(self, guardian):
+        text = (
+            "I've already written and verified features.json. The actual "
+            "blocker is that complete_my_task wasn't callable in this "
+            "session."
+        )
+        assert guardian.detect_tool_unavailable_blocker(text) is True
+
+    def test_detects_already_done_plus_tool_did_not_resolve(self, guardian):
+        text = (
+            "I already completed this task. I tried invoking "
+            "complete_my_task and it didn't resolve, so I can't confirm "
+            "completion."
+        )
+        assert guardian.detect_tool_unavailable_blocker(text) is True
+
+    def test_detects_already_done_plus_tool_not_registered(self, guardian):
+        text = (
+            "The work is already done. complete_my_task isn't registered "
+            "as a callable tool right now."
+        )
+        assert guardian.detect_tool_unavailable_blocker(text) is True
+
+    def test_detects_already_done_plus_cant_call_tool(self, guardian):
+        text = (
+            "I already finished the implementation. I can't call "
+            "complete_my_task — it's not showing up in my tool list."
+        )
+        assert guardian.detect_tool_unavailable_blocker(text) is True
+
+    def test_genuinely_stuck_no_already_done_claim_not_detected(self, guardian):
+        """No 'already done' claim at all — a real stuck/exploring agent
+        must not be exempted just because it mentions a tool name."""
+        text = (
+            "I'm still exploring the codebase trying to figure out where "
+            "the config lives. complete_my_task isn't callable yet because "
+            "I haven't found the right module."
+        )
+        assert guardian.detect_tool_unavailable_blocker(text) is False
+
+    def test_passing_ambiguous_difficulty_not_detected(self, guardian):
+        """A vague 'this is hard' remark, with no already-done claim and no
+        named-tool-unavailable report, must be a normal stuck candidate."""
+        text = "This is tricky, I can't quite get the tests to pass yet, still debugging."
+        assert guardian.detect_tool_unavailable_blocker(text) is False
+
+    def test_already_done_without_tool_signal_not_detected(self, guardian):
+        """'Already done' alone (no tool-unavailability report) is not
+        enough — e.g. a benign wrap-up message must not trip this."""
+        text = "I already finished writing the file and verified it works great."
+        assert guardian.detect_tool_unavailable_blocker(text) is False
+
+    def test_empty_output_not_detected(self, guardian):
+        assert guardian.detect_tool_unavailable_blocker("") is False
+
+    # --- steer_agent integration: the actual nudge-suppression behavior ---
+
+    @pytest.mark.asyncio
+    async def test_stuck_with_tool_unavailable_signal_suppresses_nudge(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-blocked", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+        mock_agent_manager.get_agent_output.return_value = (
+            "I've already written and verified features.json. The actual "
+            "blocker is that complete_my_task wasn't callable."
+        )
+
+        await guardian.steer_agent(
+            agent=agent,
+            steering_type="stuck",
+            message="Stop exploring and write features.json",
+        )
+
+        # No generic nudge, no interrupt keystroke — a nudge can't fix a
+        # missing tool registration, and the interrupt risks cutting off
+        # the agent's own explanation of the real blocker.
+        mock_agent_manager.send_recovery_keystrokes.assert_not_awaited()
+        mock_agent_manager.send_message_to_agent.assert_not_awaited()
+
+        # Escalated distinctly instead: a separate AgentLog log_type, not
+        # the ordinary "guardian_steering" entry _apply_steering would add.
+        mock_session = mock_db_manager.get_session.return_value
+        assert mock_session.add.called
+        logged = mock_session.add.call_args[0][0]
+        assert logged.log_type == "guardian_tool_unavailable_stall"
+
+    @pytest.mark.asyncio
+    async def test_idle_with_tool_unavailable_signal_suppresses_nudge(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-blocked-idle", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+        mock_agent_manager.get_agent_output.return_value = (
+            "The work is already done. complete_my_task isn't registered "
+            "as a callable tool."
+        )
+
+        await guardian.steer_agent(
+            agent=agent, steering_type="idle", message="Keep working"
+        )
+
+        mock_agent_manager.send_recovery_keystrokes.assert_not_awaited()
+        mock_agent_manager.send_message_to_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_genuinely_stuck_transcript_still_gets_normal_nudge(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        """Regression guard: a real stuck agent (no already-done + tool-
+        unavailable signal in its output) must still get the existing
+        generic nudge + interrupt behavior, unchanged."""
+        agent = Agent(id="agent-really-stuck", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+        mock_agent_manager.get_agent_output.return_value = (
+            "Agent working on task... still searching for the right file "
+            "to edit, trying another grep."
+        )
+
+        await guardian.steer_agent(
+            agent=agent, steering_type="stuck", message="m"
+        )
+
+        mock_agent_manager.send_recovery_keystrokes.assert_awaited_once_with(
+            "agent-really-stuck"
+        )
+        mock_agent_manager.send_message_to_agent.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_passing_ambiguous_remark_still_gets_normal_nudge(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        """A vague, non-specific difficulty mention must not be treated as
+        the tool-unavailable signal — normal stuck nudging proceeds."""
+        agent = Agent(id="agent-ambiguous", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+        mock_agent_manager.get_agent_output.return_value = (
+            "This is tricky, I can't quite get the tests to pass yet, "
+            "still debugging."
+        )
+
+        await guardian.steer_agent(
+            agent=agent, steering_type="stuck", message="m"
+        )
+
+        mock_agent_manager.send_recovery_keystrokes.assert_awaited_once_with(
+            "agent-ambiguous"
+        )
+        mock_agent_manager.send_message_to_agent.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_soft_concern_type_not_gated_by_tool_signal(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        """The suppression only applies to stuck/idle's generic 'keep
+        working' framing — a soft-concern type (off_track, etc.) is
+        unaffected by this signal and keeps its own existing 2-flag gate,
+        even if the transcript happens to contain the tool-unavailable
+        pattern."""
+        agent = Agent(id="agent-offtrack", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+        mock_agent_manager.get_agent_output.return_value = (
+            "I've already written and verified features.json. The actual "
+            "blocker is that complete_my_task wasn't callable."
+        )
+
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+
+        # Confirmed on the 2nd consecutive flag, per the existing soft-
+        # concern gate — untouched by the tool-unavailable detector.
+        mock_agent_manager.send_message_to_agent.assert_awaited_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
