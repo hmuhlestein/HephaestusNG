@@ -43,8 +43,23 @@ _MAX_TOKEN_LIMIT_RE = re.compile(
 # generic enough to risk matching an agent's own reasoning text or an echoed
 # task prompt) -- same reasoning as AgentManager._send_initial_prompt_with_retry's
 # equivalent check.
+#
+# The bare fragments "session limit"/"rate limit"/"too many requests" used to
+# be additional alternatives here, directly contradicting this comment's own
+# stated reasoning -- and not just in theory. Confirmed live: a healthy,
+# working security_review agent (67c25666) was reading applinator's own
+# backend source, which contains the literal string "Applinator backend rate
+# limit exceeded" as an application-level error-class name with nothing to do
+# with the CLI. The bare "rate limit" alternative matched that quoted source
+# text in the agent's pane scrollback, `_check_spend_or_session_limit` (this
+# module's caller) treated it as a genuine hard blocker, and terminated a
+# perfectly working agent mid-task -- which then raced against its own
+# fallback redispatch and left the task stuck. "rate limit"/"too many
+# requests"/bare "session limit" are exactly the kind of generic fragment
+# any real backend codebase's own error handling can legitimately contain;
+# only the confirmed, distinctive exact phrase is safe to trust here.
 _SESSION_LIMIT_RE = re.compile(
-    r"(?:you've hit your session limit|session limit|rate limit|too many requests)",
+    r"you've hit your session limit",
     re.IGNORECASE,
 )
 
