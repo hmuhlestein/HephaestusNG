@@ -23,6 +23,25 @@ from sqlalchemy import event
 # production database.
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
+# SQLAlchemy's declarative mapper configuration runs lazily on first ORM
+# use and is documented as not thread-safe if that first trigger happens
+# concurrently from multiple threads. Production configures it eagerly at
+# server startup (see lifecycle.py's startup_event) specifically for this
+# reason, but tests that call route handlers directly (not through
+# `with TestClient(app) as client:`) never fire that startup event -- and
+# several tests now dispatch concurrent DB-bound work via asyncio.gather
+# (get_pipeline_status). Confirmed live: running those tests as part of
+# the full suite (multiple threads racing to trigger mapper configuration
+# for the first time) intermittently raised "RuntimeError: deque mutated
+# during iteration" from inside configure_mappers' own bookkeeping,
+# silently swallowed by the caller's own try/except and surfacing as
+# wrong data instead of a loud error. Configuring mappers eagerly here,
+# at conftest import time (before any test session starts), closes the
+# same gap for tests that production's startup_event already closes.
+from sqlalchemy.orm import configure_mappers as _configure_mappers
+
+_configure_mappers()
+
 
 @pytest.fixture(autouse=True, scope="session")
 def _skip_fk_enforcement_for_tests():
@@ -35,10 +54,34 @@ def _skip_fk_enforcement_for_tests():
     The FK constraints still exist in the schema — we just skip the
     per-connection pragma enforcement in tests."""
     _original_init = DatabaseManager.__init__
+    # DatabaseManager(path) constructs a FRESH wrapper on every call (e.g.
+    # every get_db()), but its underlying engine is cached/reused across
+    # calls for the same path -- this must register the "connect" listener
+    # exactly ONCE per engine, not once per wrapper construction. Without
+    # this guard it re-registered a duplicate listener on the SAME engine
+    # every single call, growing that engine's listener deque unbounded
+    # and racing with itself: code that dispatches concurrent DB-bound
+    # work (e.g. get_pipeline_status's asyncio.gather) can have multiple
+    # threads simultaneously constructing DatabaseManager for the same
+    # cached engine while OTHER threads are mid-iteration firing that
+    # engine's "connect" event for a new physical connection -- confirmed
+    # live: "RuntimeError: deque mutated during iteration" from inside
+    # SQLAlchemy's own event.attr._exec_w_sync_on_first_run, surfacing as
+    # silently wrong data (e.g. a queue_depth count reading 0) wherever
+    # the caller's own try/except swallowed it. Guarded by
+    # DatabaseManager._lock -- the same lock __init__ itself already uses
+    # for the analogous "only create this engine once" check -- so the
+    # check-and-register is atomic against concurrent callers.
+    _patched_engine_ids: set = set()
 
     def _test_init(self, *args, **kwargs):
         _original_init(self, *args, **kwargs)
         if hasattr(self, 'engine'):
+            with DatabaseManager._lock:
+                if id(self.engine) in _patched_engine_ids:
+                    return
+                _patched_engine_ids.add(id(self.engine))
+
             @event.listens_for(self.engine, "connect")
             def _skip_fk(dbapi_conn, connection_record):
                 cursor = dbapi_conn.cursor()

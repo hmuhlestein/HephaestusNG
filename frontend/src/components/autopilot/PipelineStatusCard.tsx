@@ -35,6 +35,40 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
     prevLoadingRef.current = loading;
   }, [loading, status?.running]);
   
+  // status is `undefined` only before its query's first response ever
+  // lands (React Query has no cached data yet) -- distinct from a
+  // resolved-but-empty status object. Without this check the card
+  // rendered a fully-formed-looking gray "Idle / 0 / 0 / 0 / 0" card
+  // immediately, indistinguishable from a project that's genuinely idle,
+  // then silently snapped to the real data once it arrived -- looking
+  // like the page's most prominent element populated last (and wrong in
+  // the meantime) rather than like it was still loading.
+  if (status === undefined) {
+    return (
+      <div className="relative overflow-hidden rounded-2xl shadow-lg bg-gradient-to-r from-gray-600 via-gray-700 to-gray-800 animate-pulse">
+        <div className="relative px-8 py-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-2xl bg-white/10 w-14 h-14" />
+              <div>
+                <div className="h-7 w-40 rounded bg-white/20" />
+                <div className="h-4 w-56 rounded bg-white/10 mt-2" />
+              </div>
+            </div>
+            <div className="flex items-start gap-6">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="text-center px-3 py-2">
+                  <div className="h-3 w-14 rounded bg-white/10 mb-2 mx-auto" />
+                  <div className="h-6 w-8 rounded bg-white/20 mx-auto" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const running = loading ? stableRunning : (status?.running ?? false);
   const currentDesign = status?.current_design;
   const queueDepth = status?.queue_depth ?? 0;

@@ -296,6 +296,25 @@ async def startup_event():
     """Initialize server on startup."""
     logger.info("Starting Hephaestus MCP Server...")
 
+    # SQLAlchemy's declarative mapper configuration (relationship/backref
+    # resolution across every model) runs lazily on first ORM use, and is
+    # documented as NOT thread-safe if that first trigger happens
+    # concurrently from multiple threads -- exactly what get_pipeline_status
+    # now does (several independent DB-bound resolvers dispatched together
+    # via asyncio.gather, each on its own run_in_executor thread). Confirmed
+    # live: concurrent first-queries against AutopilotDesign/AutopilotProject
+    # raised "RuntimeError: deque mutated during iteration" from inside
+    # configure_mappers' own internal bookkeeping, silently swallowed by
+    # each resolver's own try/except and surfacing as wrong data (e.g.
+    # queue_depth reading 0 instead of the real count) rather than a loud
+    # error. Configuring mappers eagerly, once, here -- before the server
+    # accepts any request, let alone a concurrent one -- makes every later
+    # concurrent ORM access safe regardless of which model queries which
+    # relationship first.
+    from sqlalchemy.orm import configure_mappers
+
+    configure_mappers()
+
     # Several handlers (e.g. autopilot_api.py's repair endpoint) write files
     # under AUTOPILOT_STATE_DIR without their own mkdir guard, previously
     # relying on PersistentPipelineState's constructor having created it as

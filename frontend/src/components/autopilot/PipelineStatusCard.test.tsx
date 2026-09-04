@@ -8,6 +8,18 @@ import PipelineStatusCard from './PipelineStatusCard';
 // derive a "total designs" figure (see PipelineStatusCard.tsx).
 
 describe('PipelineStatusCard', () => {
+  it('renders a loading skeleton instead of a misleading Idle/0 card while status has not loaded yet', () => {
+    // status is `undefined` before its query's first response ever
+    // lands. Previously this rendered a fully-formed "Idle" card with
+    // every metric zeroed out -- indistinguishable from a genuinely idle
+    // project -- then silently snapped to real data once it arrived.
+    render(<PipelineStatusCard status={undefined} />);
+
+    expect(screen.queryByText(/Idle/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Running/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Agents')).not.toBeInTheDocument();
+  });
+
   it('does not inflate the remaining-work count with the lifetime designs_processed counter', () => {
     // A project that already finished one design in the past (recorded
     // forever in designs_processed) with exactly one design still queued
