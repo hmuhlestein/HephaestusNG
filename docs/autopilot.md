@@ -160,6 +160,80 @@ feature outcomes in the `designs/` directory.
 
 ---
 
+## Projects & Concurrent Execution
+
+Every `--project-path` the pipeline runs against is backed by an
+`AutopilotProject` row, keyed by its resolved absolute `base_dir`. `heph
+autopilot start --project-path ~/my-project` auto-creates this row on first
+use and activates it (`_get_or_create_project_id`) — most single-project
+users never need to touch project activation directly. Multi-project setups
+(running autopilot against more than one repo from the same backend) need to
+understand two things: how many projects can run at once, and what "active"
+actually means.
+
+### `is_active` vs. workflow status — two different things named "active"
+
+`AutopilotProject.is_active` and a `Workflow`'s own `status` field answer
+different questions, and confusing them is a real source of stuck-pipeline
+confusion:
+
+- **`AutopilotProject.is_active`** (boolean) controls whether this project's
+  work is picked up **at all**. The phase-advancement sweep and the dispatch
+  loop only ever touch phases and workflows belonging to an active project.
+- **`Workflow.status`** (e.g. `active`, `completed`, `paused`, `failed`) is
+  the state of one specific pipeline run, independent of whether its
+  project is currently active.
+
+Deactivating a project does **not** touch the `status` of its in-flight
+workflows — a `Workflow` can sit at `status="active"` indefinitely once its
+project is deactivated, because nothing is polling it anymore. There is no
+error, no `paused_by` reason set, nothing in the UI beyond the project
+itself showing as inactive — the workflow just silently stops making
+progress. If a feature looks stuck with no obvious error, check whether its
+project is still active before looking anywhere else.
+
+### The concurrency cap
+
+`max_concurrent_projects` (`hephaestus_config.yaml`'s `autopilot:` section,
+default `2`) caps how many `AutopilotProject` rows can have `is_active=True`
+at once. `heph autopilot start` and `POST /projects/{id}/activate` both
+enforce it:
+
+- `heph autopilot start` reserves a slot before launching; a genuinely new
+  project that would exceed the cap is refused outright. Restarting a
+  project that already occupies a slot is always allowed — it isn't
+  claiming a new one.
+- `POST /projects/{id}/activate` returns `409` naming every currently-active
+  project if the cap is already full:
+  ```
+  Max concurrent projects (2) reached: backend-api, frontend-app.
+  Stop one before starting another.
+  ```
+
+Activating a project never evicts another active one to make room — you
+must explicitly deactivate something first.
+
+### Selecting a project
+
+```bash
+heph project list                       # every registered project, active/default flags
+heph project create <name> <path>       # register a new project
+heph project activate <name-or-id>      # bring it into the active rotation (subject to the cap)
+heph project deactivate <name-or-id>    # stop the sweep/dispatch loop from touching it
+heph project current                    # list every currently-active project
+```
+
+The equivalent API:
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/autopilot/projects` | List every registered project. |
+| `POST` | `/api/autopilot/projects/{id}/activate` | Activate; `409` if the cap is full. |
+| `POST` | `/api/autopilot/projects/{id}/deactivate` | Deactivate — in-flight workflows are left exactly as they are. |
+| `GET` | `/api/autopilot/projects/active` | Every currently-active project (0 to `max_concurrent_projects`), not just one — this used to return a single project via `.first()` before multi-project concurrency existed. |
+
+---
+
 ## Pipeline Phases
 
 ### Phase 0: Feature Architect (design-scoped, runs once per design)
@@ -546,6 +620,82 @@ what the change actually did when it landed.
 - Applies and reverts are serialized, so two approvals landing together cannot
   interleave and silently lose one.
 
+---
+
+## Full Autopilot vs. Review Mode
+
+`AutopilotProject.review_mode` (boolean, per-project, default off) controls
+whether a feature merges to main unattended or waits for a human to approve
+it. Toggle it with:
+
+```
+PATCH /api/autopilot/projects/{project_id}/review-mode
+Body: {"review_mode": true}
+```
+
+(`ReviewModeToggle.tsx` on the dashboard's Autopilot page calls the same
+endpoint.)
+
+### Full Autopilot (`review_mode=false`, the default)
+
+Phase 13 (Git Commit & Push) merges the feature branch into main directly
+and pushes both. The completion hard floor
+(`verify_git_expert_merged_and_pushed`,
+`src/services/task_completion/verification.py`) rejects the task as "done"
+unless the worktree is clean, the branch is actually merged into `main`,
+and `main` is pushed to the remote — a prompt instruction alone isn't
+trusted.
+
+### Review Mode (`review_mode=true`)
+
+Phase 13 stops short of merging: it only needs the worktree clean and the
+feature branch pushed to the remote, then creates or updates a pull request
+(`git_expert.yaml`'s prompt is instructed not to open a second PR on a
+retry — push a follow-up commit to the same branch/PR instead). The hard
+floor's `review_mode` branch then checks the **real** PR status via `gh pr
+view` (`get_pr_status`, `src/services/github_pr_status.py`) before letting
+the phase finish:
+
+| PR state | Result |
+|---|---|
+| CI failing, or `reviewDecision == CHANGES_REQUESTED` | Task rejected with the concrete reason — a real retry: the agent pushes a follow-up commit to the **same** PR/branch. |
+| CI still running, no unresolved review | Task is left `in_progress`, untouched — nothing for this turn's agent to do. `Feature.pr_url` is recorded so this state is identifiable later. |
+| CI passing, no unresolved review | "Done" stands; the phase completes normally. |
+
+The "CI still running" case doesn't sit forever: a periodic sweep
+(`_resolve_pending_pr_status`, `src/autopilot/orchestrator/pr_resolution.py`,
+run on every phase-advancement sweep tick from
+`src/mcp/server/background_loops.py`) re-checks `gh pr view` and either
+marks the task `done` (advancing the phase exactly as if the agent itself
+had just finished) or `failed` with the real CI/review reason — without
+spinning up a fresh agent every tick just to ask "done yet?".
+
+Once the feature's entire pipeline (through Phase 14) reaches `completed`,
+the orchestrator pauses that feature's `Workflow` with `paused_by="review"`
+and waits (polling every 30s) for a human decision:
+
+```
+POST /api/autopilot/features/{feature_id}/review
+Body: {"action": "approve"}
+Body: {"action": "request_changes", "feedback": "..."}
+```
+
+- **`approve`** clears the pause and merges the PR (`gh pr merge --merge
+  --auto`, confirmed via a follow-up `gh pr view`). If that fails and
+  `git.allow_local_merge_fallback` is enabled (default off), it falls back
+  to a local `git merge --no-ff` into main, aborting cleanly on a real
+  conflict rather than auto-resolving; local main is synced with the
+  remote afterward either way.
+- **`request_changes`** (feedback required) records the feedback and
+  restarts or creates a task on the development phase carrying it, leaving
+  the workflow paused for another review round once the fix is in.
+
+`review_mode` fails safe to `True` on a DB read error — a check gating a
+risky autonomous action (merging unattended) must not silently skip the
+gate just because it couldn't be read.
+
+---
+
 ## Iteration Loop
 
 Iteration is scoped **per feature**, not per design.
@@ -862,6 +1012,35 @@ A `"user"`-initiated pause (stop button) is independent of budget pauses:
 clicking play resumes `paused_by="user"` workflows but never
 `paused_by="budget"` ones.
 
+New projects inherit a system-wide default cap
+(`get_default_cost_limit`, `src/services/system_settings.py`, stored as the
+`settings:default_cost_limit_usd` key) if one is configured; `None` (the
+factory default) means unlimited. Set or clear it dashboard-wide with:
+
+```
+PUT /api/autopilot/settings/default-budget
+Body: {"default_cost_limit_usd": 25.0}
+```
+
+This only seeds newly-created projects — it does not retroactively change
+an existing project's own `cost_limit_usd`.
+
+Raise or clear a specific project's limit with `PUT /projects/{id}`:
+
+```
+PUT /api/autopilot/projects/{project_id}
+Body: {"cost_limit_usd": 50.0}
+Body: {"clear_cost_limit": true}
+```
+
+Either call automatically resumes (`force=True`) every one of that
+project's workflows currently paused with `paused_by="budget"` — you don't
+need a separate resume step after raising the cap. Sending
+`cost_limit_usd: null` alone does **not** clear the limit; use
+`clear_cost_limit: true` explicitly, or the update leaves the existing
+limit untouched (this lets a partial `PUT` update other project fields
+without accidentally wiping the budget).
+
 ---
 
 ## Vector Database Integration
@@ -922,6 +1101,17 @@ heph autopilot add ./specs/dashboard.md --project-path ~/my-project
 ```bash
 heph autopilot queue --project-path ~/my-project
 ```
+
+### Alternative source: Spec Kit
+
+A design doesn't have to be a hand-written `.md` file. If the project has a
+[GitHub Spec Kit](https://github.com/github/spec-kit) `specs/<NNN>-<name>/`
+directory, autopilot can build directly from it instead — either pinned
+explicitly (`heph autopilot start --feature 001-checkout-flow`) or
+automatically enqueued once a feature has a `plan.md`
+(`speckit_auto_scan_enabled`, per project). Both paths feed the same design
+queue described above. See [Spec Kit Support](speckit.md) for the full
+detection, selection, and auto-scan behavior.
 
 ---
 
@@ -986,3 +1176,12 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 | 13 | Feature | Committed source, forensics.md | Git commit, PR, merge |
 | 14 | Feature | Merged code, deployment config | deploy.md, deployment output/logs |
 | —  | Design  | All feature outputs | design_report.html, design_metrics.json |
+
+---
+
+## Related
+
+- [Spec Kit Support](speckit.md) — building directly from a Spec Kit
+  `specs/<NNN>-<name>/` directory instead of a hand-written design.
+- [Multi-Repo Projects](multi-repo-projects.md) — registering child repos
+  on a project and binding a `Feature` to one of them.
