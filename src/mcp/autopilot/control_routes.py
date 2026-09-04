@@ -107,206 +107,287 @@ async def get_pipeline_status(
 
     running = service_status.get("running", False)
 
-    # When project_id is provided, also check if THIS project has an active
-    # workflow OR an active agent -- a belt-and-suspenders promotion for
-    # when the service object itself missed something (e.g. it crashed but
-    # an agent it spawned is still working). This must only ever promote
-    # False -> True, never demote a True from service_status: the pipeline
-    # loop is legitimately "running" (alive, watching the queue) between
-    # designs or while idling on an empty queue, with zero active
-    # workflows/agents at that instant -- demoting to False here used to
-    # flip the Play button straight back to "Paused" during any such lull,
-    # even though get_autopilot_service(project_id) is already correctly
-    # scoped per-project (unlike when this check was first written).
-    if project_id and not running:
-        try:
-            from src.core.database import Agent, AutopilotProject, Task, Workflow, get_db
+    # Everything below is independent, DB-bound work that used to run as a
+    # chain of sequentially-awaited run_in_executor calls (6+ round trips,
+    # each opening and closing its own DB session). Confirmed live: with
+    # Autopilot.tsx polling this endpoint every 3s -- shorter than the 2s
+    # cache TTL above -- nearly every poll paid the FULL sequential cost,
+    # observed taking 8+ seconds combined on a project with substantial
+    # workflow/task history (14-40x slower than sibling endpoints polled
+    # in the same batch). None of these blocks depend on each other's
+    # results, only on inputs already resolved above (project_id,
+    # effective_project_id, service_status, running) -- gathering them
+    # concurrently cuts wall-clock time to roughly the SLOWEST single call
+    # instead of the sum of all of them. Each keeps exactly its original
+    # try/except -- one failing must not fail the others or the endpoint.
 
-            def _check_project_running_sync():
-                with get_db() as db:
-                    # A project excluded from the active rotation (is_active=False)
-                    # cannot be running no matter what stale Workflow/Agent state
-                    # exists -- the phase-advancement sweep and dispatch loop both
-                    # scope to active projects only (see the concurrent-active-
-                    # projects invariant), so a leftover status="active" workflow
-                    # row from before deactivation will never be touched again.
-                    # Without this, the UI showed "Running" for a project that had
-                    # been deactivated for weeks, purely because of that stale row.
-                    project = db.query(AutopilotProject).filter_by(id=project_id).first()
-                    if project is not None and not project.is_active:
+    async def _resolve_running() -> bool:
+        # When project_id is provided, also check if THIS project has an
+        # active workflow OR an active agent -- a belt-and-suspenders
+        # promotion for when the service object itself missed something
+        # (e.g. it crashed but an agent it spawned is still working). This
+        # must only ever promote False -> True, never demote a True from
+        # service_status: the pipeline loop is legitimately "running"
+        # (alive, watching the queue) between designs or while idling on an
+        # empty queue, with zero active workflows/agents at that instant --
+        # demoting to False here used to flip the Play button straight back
+        # to "Paused" during any such lull, even though
+        # get_autopilot_service(project_id) is already correctly scoped
+        # per-project (unlike when this check was first written).
+        if project_id and not running:
+            try:
+                from src.core.database import Agent, AutopilotProject, Task, Workflow, get_db
+
+                def _check_project_running_sync():
+                    with get_db() as db:
+                        # A project excluded from the active rotation (is_active=False)
+                        # cannot be running no matter what stale Workflow/Agent state
+                        # exists -- the phase-advancement sweep and dispatch loop both
+                        # scope to active projects only (see the concurrent-active-
+                        # projects invariant), so a leftover status="active" workflow
+                        # row from before deactivation will never be touched again.
+                        # Without this, the UI showed "Running" for a project that had
+                        # been deactivated for weeks, purely because of that stale row.
+                        project = db.query(AutopilotProject).filter_by(id=project_id).first()
+                        if project is not None and not project.is_active:
+                            return False
+
+                        has_active = db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status == "active").first()
+                        if has_active:
+                            return True
+                        # Also check: are any agents working on tasks in this
+                        # project's workflows? A workflow can be "failed" while
+                        # an agent is still actively working on it. Excludes
+                        # "paused" workflows -- a deliberate pause must not get
+                        # reported back as "still running" just because a
+                        # straggler agent (e.g. one whose launch was already
+                        # mid-flight when the pause hit) hasn't cleaned up yet.
+                        project_wf_ids = [w.id for w in db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status != "paused").all()]
+                        if project_wf_ids:
+                            active_agent = (
+                                db.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(Task.workflow_id.in_(project_wf_ids), Agent.status.in_(["working", "starting", "idle"])).first()
+                            )
+                            return active_agent is not None
                         return False
 
-                    has_active = db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status == "active").first()
-                    if has_active:
-                        return True
-                    # Also check: are any agents working on tasks in this
-                    # project's workflows? A workflow can be "failed" while
-                    # an agent is still actively working on it. Excludes
-                    # "paused" workflows -- a deliberate pause must not get
-                    # reported back as "still running" just because a
-                    # straggler agent (e.g. one whose launch was already
-                    # mid-flight when the pause hit) hasn't cleaned up yet.
-                    project_wf_ids = [w.id for w in db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status != "paused").all()]
-                    if project_wf_ids:
-                        active_agent = (
-                            db.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(Task.workflow_id.in_(project_wf_ids), Agent.status.in_(["working", "starting", "idle"])).first()
-                        )
-                        return active_agent is not None
-                    return False
+                return await loop.run_in_executor(None, _check_project_running_sync)
+            except Exception:
+                return running
+        elif not running:
+            # No project_id specified, fallback to checking any active workflow
+            try:
+                from src.core.database import Agent, Workflow, get_db
 
-            running = await loop.run_in_executor(None, _check_project_running_sync)
-        except Exception:
-            pass
-    elif not running:
-        # No project_id specified, fallback to checking any active workflow
-        try:
-            from src.core.database import Agent, Workflow, get_db
-
-            def _check_any_running_sync():
-                with get_db() as db:
-                    # Excludes "paused" -- see the project_id-scoped check above,
-                    # which deliberately does the same for the same reason: a
-                    # user pause must not be reported back as "still running".
-                    active_wf = db.query(Workflow).filter(Workflow.status == "active").first()
-                    if active_wf:
-                        active_agents = (
-                            db.query(Agent)
-                            .filter(
-                                Agent.agent_type == "phase",
-                                Agent.status.in_(["working", "idle", "starting"]),
+                def _check_any_running_sync():
+                    with get_db() as db:
+                        # Excludes "paused" -- see the project_id-scoped check above,
+                        # which deliberately does the same for the same reason: a
+                        # user pause must not be reported back as "still running".
+                        active_wf = db.query(Workflow).filter(Workflow.status == "active").first()
+                        if active_wf:
+                            active_agents = (
+                                db.query(Agent)
+                                .filter(
+                                    Agent.agent_type == "phase",
+                                    Agent.status.in_(["working", "idle", "starting"]),
+                                )
+                                .count()
                             )
-                            .count()
-                        )
-                        return active_agents > 0
-                    return False
+                            return active_agents > 0
+                        return False
 
-            if await loop.run_in_executor(None, _check_any_running_sync):
-                running = True
-        except Exception:
-            pass
+                if await loop.run_in_executor(None, _check_any_running_sync):
+                    return True
+                return running
+            except Exception:
+                return running
+        return running
 
-    state = _cached(f"state:{effective_project_id}", ttl=2.0)
-    if state is None:
-        try:
-            import asyncio
+    async def _resolve_state() -> dict:
+        state = _cached(f"state:{effective_project_id}", ttl=2.0)
+        if state is None:
+            try:
+                from src.autopilot.orchestrator.state import PersistentPipelineState
 
-            from src.autopilot.orchestrator.state import PersistentPipelineState
+                # .load() does two synchronous DB round-trips and deserializes
+                # a JSON blob that grows with every design ever processed
+                # (838+ processed-design hashes on the live DB) -- offloaded
+                # here so it runs on the executor's thread pool, not the
+                # event loop's own thread. Confirmed live 2026-08-19: /health
+                # -- a bare dict return with zero I/O of its own -- still hit
+                # the full 8s curl timeout even after offloading the two
+                # other blocking cost-recording call sites found in the same
+                # investigation, which is what motivated gathering this
+                # alongside its siblings below instead of awaiting it alone.
+                state_obj, _processed = await loop.run_in_executor(
+                    None, PersistentPipelineState(project_id=effective_project_id).load
+                )
+                state = state_obj.to_dict()
+            except Exception:
+                state = {}
 
-            # .load() does two synchronous DB round-trips and deserializes
-            # a JSON blob that grows with every design ever processed
-            # (838+ processed-design hashes on the live DB) -- called
-            # directly here, that blocks the single-threaded event loop on
-            # every uncached poll of this endpoint, which the dashboard
-            # hits every 3s (see frontend Autopilot.tsx). The 2s cache
-            # above limits how often this actually runs, but doesn't make
-            # each run free. Confirmed live 2026-08-19: /health -- a bare
-            # dict return with zero I/O of its own -- intermittently took
-            # several seconds (once the full 8s curl timeout) even after
-            # offloading the two other blocking cost-recording call sites
-            # found in the same investigation.
-            state_obj, _processed = await loop.run_in_executor(
-                None, PersistentPipelineState(project_id=effective_project_id).load
-            )
-            state = state_obj.to_dict()
-        except Exception:
-            state = {}
+            state = _store(f"state:{effective_project_id}", state or {})
+        return state
 
-        state = _store(f"state:{effective_project_id}", state or {})
+    async def _resolve_queue_depth() -> int:
+        # Count queue depth from DB when project_id is provided (consistent
+        # with the queue panel which reads from the DB). Fall back to
+        # filesystem count.
+        queue_depth = 0
+        if project_id:
+            from src.core.database import AutopilotDesign, get_db
 
-    # Count queue depth from DB when project_id is provided (consistent with
-    # the queue panel which reads from the DB). Fall back to filesystem count.
-    queue_depth = 0
-    if project_id:
-        from src.core.database import AutopilotDesign, get_db
-
-        def _count_queue_depth_sync():
-            with get_db() as db:
-                return db.query(AutopilotDesign).filter(
-                    AutopilotDesign.project_id == project_id,
-                    AutopilotDesign.status.notin_(["completed", "failed", "skipped"]),
-                    AutopilotDesign.archived_at.is_(None),
-                ).count()
-
-        try:
-            queue_depth = await loop.run_in_executor(None, _count_queue_depth_sync)
-        except Exception:
-            pass
-    else:
-        try:
-            effective_dir = _get_effective_queue_dir()
-            for ext in ALLOWED_EXTENSIONS:
-                queue_depth += len(list(Path(effective_dir).glob(f"*{ext}")))
-        except (FileNotFoundError, RuntimeError):
-            pass  # Queue dir not configured or missing — return queue_depth=0
-
-    last_event = _cached(f"last_event:{effective_project_id}", ttl=5.0)
-    if last_event is None:
-        last_event = None
-        if effective_project_id:
-            from src.core.database import AutopilotPipelineEvent
-            from src.core.database import get_db as _get_db
-
-            def _fetch_last_event_sync():
-                with _get_db() as _db:
-                    row = (
-                        _db.query(AutopilotPipelineEvent)
-                        .filter(AutopilotPipelineEvent.project_id == effective_project_id)
-                        .order_by(AutopilotPipelineEvent.created_at.desc())
-                        .first()
-                    )
-                    if row:
-                        return {
-                            "timestamp": row.created_at.isoformat(),
-                            "type": row.event_type,
-                            **(row.data or {}),
-                        }
-                    return None
+            def _count_queue_depth_sync():
+                with get_db() as db:
+                    return db.query(AutopilotDesign).filter(
+                        AutopilotDesign.project_id == project_id,
+                        AutopilotDesign.status.notin_(["completed", "failed", "skipped"]),
+                        AutopilotDesign.archived_at.is_(None),
+                    ).count()
 
             try:
-                last_event = await loop.run_in_executor(None, _fetch_last_event_sync)
+                queue_depth = await loop.run_in_executor(None, _count_queue_depth_sync)
             except Exception:
                 pass
-        last_event = _store(f"last_event:{effective_project_id}", last_event)
+        else:
+            try:
+                effective_dir = _get_effective_queue_dir()
+                for ext in ALLOWED_EXTENSIONS:
+                    queue_depth += len(list(Path(effective_dir).glob(f"*{ext}")))
+            except (FileNotFoundError, RuntimeError):
+                pass  # Queue dir not configured or missing — return queue_depth=0
+        return queue_depth
 
-    # Count active agents
-    from src.core.database import Agent
-    from src.core.database import get_db as _get_db
+    async def _resolve_last_event():
+        last_event = _cached(f"last_event:{effective_project_id}", ttl=5.0)
+        if last_event is None:
+            last_event = None
+            if effective_project_id:
+                from src.core.database import AutopilotPipelineEvent
+                from src.core.database import get_db as _get_db
 
-    def _count_active_agents_sync():
-        with _get_db() as _db:
-            agent_query = _db.query(Agent).filter(Agent.status.in_(["working", "starting", "idle"]))
-            if project_id:
-                from src.core.database import Task, Workflow
+                def _fetch_last_event_sync():
+                    with _get_db() as _db:
+                        row = (
+                            _db.query(AutopilotPipelineEvent)
+                            .filter(AutopilotPipelineEvent.project_id == effective_project_id)
+                            .order_by(AutopilotPipelineEvent.created_at.desc())
+                            .first()
+                        )
+                        if row:
+                            return {
+                                "timestamp": row.created_at.isoformat(),
+                                "type": row.event_type,
+                                **(row.data or {}),
+                            }
+                        return None
 
-                wf_ids = [wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()]
-                task_ids = [t.id for t in _db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
-                agent_query = agent_query.filter(Agent.current_task_id.in_(task_ids))
-            return agent_query.count()
+                try:
+                    last_event = await loop.run_in_executor(None, _fetch_last_event_sync)
+                except Exception:
+                    pass
+            last_event = _store(f"last_event:{effective_project_id}", last_event)
+        return last_event
 
-    try:
-        active_agents = await loop.run_in_executor(None, _count_active_agents_sync)
-    except Exception:
-        active_agents = 0
+    async def _resolve_active_agents() -> int:
+        from src.core.database import Agent
+        from src.core.database import get_db as _get_db
 
-    # Resolve which project the (single, global) service is actually running,
-    # if any -- so the UI can tell the user what's really running instead of
-    # a generic "another project" message that's just as misleading when
-    # it's actually the caller's own just-started run.
-    running_project_path = service_status.get("project_path")
-    running_project_name = None
-    if running_project_path:
+        def _count_active_agents_sync():
+            with _get_db() as _db:
+                agent_query = _db.query(Agent).filter(Agent.status.in_(["working", "starting", "idle"]))
+                if project_id:
+                    from src.core.database import Task, Workflow
+
+                    wf_ids = [wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()]
+                    task_ids = [t.id for t in _db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
+                    agent_query = agent_query.filter(Agent.current_task_id.in_(task_ids))
+                return agent_query.count()
+
         try:
-            from src.core.database import AutopilotProject
-            from src.core.database import get_db as _get_db
-
-            def _lookup_running_project_name_sync():
-                with _get_db() as _db:
-                    _rp = _db.query(AutopilotProject).filter_by(base_dir=running_project_path).first()
-                    return _rp.name if _rp else Path(running_project_path).name
-
-            running_project_name = await loop.run_in_executor(None, _lookup_running_project_name_sync)
+            return await loop.run_in_executor(None, _count_active_agents_sync)
         except Exception:
-            running_project_name = Path(running_project_path).name
+            return 0
+
+    async def _resolve_running_project():
+        # Resolve which project the (single, global) service is actually
+        # running, if any -- so the UI can tell the user what's really
+        # running instead of a generic "another project" message that's
+        # just as misleading when it's actually the caller's own
+        # just-started run.
+        running_project_path = service_status.get("project_path")
+        running_project_name = None
+        if running_project_path:
+            try:
+                from src.core.database import AutopilotProject
+                from src.core.database import get_db as _get_db
+
+                def _lookup_running_project_name_sync():
+                    with _get_db() as _db:
+                        _rp = _db.query(AutopilotProject).filter_by(base_dir=running_project_path).first()
+                        return _rp.name if _rp else Path(running_project_path).name
+
+                running_project_name = await loop.run_in_executor(None, _lookup_running_project_name_sync)
+            except Exception:
+                running_project_name = Path(running_project_path).name
+        return running_project_path, running_project_name
+
+    async def _resolve_review_mode():
+        # Populate review_mode and features_awaiting_review for the requested project
+        review_mode = False
+        speckit_auto_scan_enabled = False
+        features_awaiting_review = 0
+        if project_id:
+            try:
+                from src.core.database import AutopilotProject, Feature, Workflow
+                from src.core.database import get_db as _get_db
+
+                def _fetch_review_mode_sync():
+                    with _get_db() as _db:
+                        _proj = _db.query(AutopilotProject).get(project_id)
+                        review_mode = bool(_proj and getattr(_proj, "review_mode", False))
+                        speckit_auto_scan_enabled = bool(_proj and getattr(_proj, "speckit_auto_scan_enabled", False))
+                        # Count features whose workflow is paused_by="review"
+                        proj_wf_ids = [
+                            wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()
+                        ]
+                        features_awaiting_review = 0
+                        if proj_wf_ids:
+                            features_awaiting_review = (
+                                _db.query(Feature)
+                                .join(Workflow, Feature.workflow_id == Workflow.id)
+                                .filter(
+                                    Feature.workflow_id.in_(proj_wf_ids),
+                                    Workflow.paused_by == "review",
+                                )
+                                .count()
+                            )
+                        return review_mode, speckit_auto_scan_enabled, features_awaiting_review
+
+                review_mode, speckit_auto_scan_enabled, features_awaiting_review = await loop.run_in_executor(
+                    None, _fetch_review_mode_sync
+                )
+            except Exception:
+                pass
+        return review_mode, speckit_auto_scan_enabled, features_awaiting_review
+
+    (
+        running,
+        state,
+        queue_depth,
+        last_event,
+        active_agents,
+        (running_project_path, running_project_name),
+        (review_mode, speckit_auto_scan_enabled, features_awaiting_review),
+    ) = await asyncio.gather(
+        _resolve_running(),
+        _resolve_state(),
+        _resolve_queue_depth(),
+        _resolve_last_event(),
+        _resolve_active_agents(),
+        _resolve_running_project(),
+        _resolve_review_mode(),
+    )
 
     # Merge service status with file-based state
     # Derive error/reason for why the pipeline stopped
@@ -370,43 +451,10 @@ async def get_pipeline_status(
             )
         ),
         running_projects=running_projects_list,
+        review_mode=review_mode,
+        speckit_auto_scan_enabled=speckit_auto_scan_enabled,
+        features_awaiting_review=features_awaiting_review,
     )
-
-    # Populate review_mode and features_awaiting_review for the requested project
-    if project_id:
-        try:
-            from src.core.database import AutopilotProject, Feature, Workflow
-            from src.core.database import get_db as _get_db
-
-            def _fetch_review_mode_sync():
-                with _get_db() as _db:
-                    _proj = _db.query(AutopilotProject).get(project_id)
-                    review_mode = bool(_proj and getattr(_proj, "review_mode", False))
-                    speckit_auto_scan_enabled = bool(_proj and getattr(_proj, "speckit_auto_scan_enabled", False))
-                    # Count features whose workflow is paused_by="review"
-                    proj_wf_ids = [
-                        wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()
-                    ]
-                    features_awaiting_review = 0
-                    if proj_wf_ids:
-                        features_awaiting_review = (
-                            _db.query(Feature)
-                            .join(Workflow, Feature.workflow_id == Workflow.id)
-                            .filter(
-                                Feature.workflow_id.in_(proj_wf_ids),
-                                Workflow.paused_by == "review",
-                            )
-                            .count()
-                        )
-                    return review_mode, speckit_auto_scan_enabled, features_awaiting_review
-
-            (
-                result.review_mode,
-                result.speckit_auto_scan_enabled,
-                result.features_awaiting_review,
-            ) = await loop.run_in_executor(None, _fetch_review_mode_sync)
-        except Exception:
-            pass
 
     return _store(cache_key, result)
 
