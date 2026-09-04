@@ -1332,7 +1332,6 @@ class TestMaybeRetryFailedTasks:
         failed_count == total_count was never true once a phase had ever
         succeeded before -- this retry never fired for a later failing
         re-attempt, the exact live bug this covers."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
         from src.core.database import Agent
@@ -2218,7 +2217,6 @@ class TestCaseInProgressComplete:
         (see TestReleaseStaleTaskCreationClaims), before phase_statuses is
         even read for this cycle. By the time this loop runs, any claim
         still present is a genuinely live one (e.g. mid-arbitration)."""
-        from datetime import timedelta
 
         from src.core.database import PhaseExecution
         from src.autopilot.orchestrator.phase_transitions import (
@@ -2339,7 +2337,6 @@ class TestCaseInProgressComplete:
         whatever -- usually nothing -- the failed current attempt left on
         disk, producing a false goto-back with a "result not found"
         reason instead of just retrying the failed attempt."""
-        from datetime import timedelta
 
         from src.core.database import PhaseExecution
         from src.autopilot.orchestrator.phase_transitions import (
@@ -2415,7 +2412,6 @@ class TestCaseInProgressComplete:
         for a real feature: a completed predecessor phase never advanced
         to its successor because the successor itself was stuck exactly
         this way."""
-        from datetime import timedelta
 
         from src.core.database import PhaseExecution
         from src.autopilot.orchestrator.phase_transitions import (
@@ -2918,7 +2914,6 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
     _release_stale_task_creation_claims and never reaches this guard)."""
 
     def test_leaves_claim_alone_when_arbitration_in_flight(self, db_manager, sample_workflow):
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
         from src.autopilot.orchestrator.phase_transitions import (
@@ -2954,7 +2949,6 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
         so a stale claim on a "failed" execution cleared the claim but
         never reopened the phase, leaving it invisible to every
         _advance_phases dispatch case even after its task had already run."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import (
             CLAIM_STALE_TIMEOUT_SECONDS,
@@ -2992,7 +2986,6 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
         "backfill from the latest task's created_at if started_at isn't
         already set", passed explicitly via extra_fields to override that
         default. No existing test checked started_at at all before this."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import (
             CLAIM_STALE_TIMEOUT_SECONDS,
@@ -3035,7 +3028,6 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
         _create_phase_task/_start_next_phase (always stamp "now"), this
         site must NOT overwrite an already-set started_at with the latest
         task's created_at -- it only backfills when unset."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import (
             CLAIM_STALE_TIMEOUT_SECONDS,
@@ -3082,7 +3074,6 @@ class TestClearStaleTaskCreationClaimArbitrationGuard:
         session before calling this function -- mirrored here directly
         rather than through that sweep, to isolate the read path being
         tested."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import (
             CLAIM_STALE_TIMEOUT_SECONDS,
@@ -3160,7 +3151,6 @@ class TestReleaseStaleTaskCreationClaims:
     def test_stale_claim_on_pending_phase_with_done_task_flips_to_in_progress(
         self, db_manager, sample_workflow
     ):
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
         from src.core.database import PhaseExecution
@@ -3189,7 +3179,6 @@ class TestReleaseStaleTaskCreationClaims:
     def test_stale_claim_with_no_task_just_clears_claim(self, db_manager, sample_workflow):
         """No task exists yet -- don't fabricate progress that didn't
         happen; just free the claim so Case 0/0b can create one fresh."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
         from src.core.database import PhaseExecution
@@ -3222,7 +3211,6 @@ class TestReleaseStaleTaskCreationClaims:
         genuinely abandoned one; clearing it here reproduces the exact
         silently-dropped-decision bug _phase_has_arbitration_in_flight's
         other two call sites were added to fix, just on a longer clock."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
         from src.autopilot.orchestrator.phase_transitions import (
@@ -3254,7 +3242,6 @@ class TestReleaseStaleTaskCreationClaims:
         """A claim well within CLAIM_STALE_TIMEOUT_SECONDS is exactly the
         legitimate in-flight case (e.g. mid-arbitration) this guard exists
         for -- must be left completely untouched."""
-        from datetime import timedelta
 
         from src.core.database import PhaseExecution
 
@@ -3283,7 +3270,6 @@ class TestReleaseStaleTaskCreationClaims:
         _phase_has_arbitration_in_flight was introduced to close (see
         arbitration.py's ARBITRATION_CREATED_BY and _maybe_resolve_arbitration,
         which finds claimed phases via task_creation_claimed_at.isnot(None))."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
         from src.autopilot.orchestrator.phase_transitions import (
@@ -3318,7 +3304,6 @@ class TestReleaseStaleTaskCreationClaims:
         "pending" phase (not "in_progress") with a done task and a
         day-old, never-released claim must actually advance -- not just
         have its claim cleared in isolation."""
-        from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
         from src.core.database import PhaseExecution
@@ -3462,7 +3447,6 @@ class TestReleasePendingPhasesWithDoneTasks:
         phase matching the workflow's most recent completion -- whatever
         it was actually working on right before getting stuck -- may be
         repaired."""
-        from datetime import timedelta
 
         from src.core.database import PhaseExecution
         from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
@@ -3555,7 +3539,6 @@ class TestReleasePendingPhasesWithDoneTasks:
         done task workflow-wide, it must not be mistaken for "what the
         workflow was actually working on," matching the same exclusion
         _case_in_progress_complete's own queries already apply."""
-        from datetime import timedelta
 
         from src.core.constants import DIAGNOSTIC_TASK_PREFIX
         from src.core.database import PhaseExecution
@@ -5843,6 +5826,112 @@ class TestResolveWorkflowWorkingDirectory:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             result = _resolve_workflow_working_directory(session, "wf-1", wf)
             assert result is None
+
+    def test_prefers_the_newest_worktree_over_an_older_one(
+        self, db_manager, sample_workflow, tmp_path
+    ):
+        """Not verify_output_artifact's earliest-first default: a workflow
+        that went through multiple redo rounds before exhausting its
+        retry budget can have several disconnected worktrees, and the
+        earliest one is likely a long-abandoned attempt, not what the
+        phase is actually stuck on right now."""
+
+        from src.autopilot.orchestrator.arbitration import (
+            _resolve_workflow_working_directory,
+        )
+
+        old_dir = tmp_path / "old-worktree"
+        old_dir.mkdir()
+        new_dir = tmp_path / "new-worktree"
+        new_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            for suffix, wt_dir, age_days in (("old", old_dir, 5), ("new", new_dir, 0)):
+                session.add(
+                    Agent(
+                        id=f"dev-agent-{suffix}",
+                        system_prompt="test",
+                        status="working",
+                        cli_type="claude",
+                    )
+                )
+                session.add(
+                    Task(
+                        id=f"dev-task-{suffix}",
+                        raw_description="do the thing",
+                        done_definition="done",
+                        workflow_id="wf-1",
+                        assigned_agent_id=f"dev-agent-{suffix}",
+                    )
+                )
+                session.add(
+                    AgentWorktree(
+                        agent_id=f"dev-agent-{suffix}",
+                        worktree_path=str(wt_dir),
+                        branch_name=f"feature/wf-1-{suffix}",
+                        parent_commit_sha="abc123",
+                        base_commit_sha="abc123",
+                        created_at=datetime.utcnow() - timedelta(days=age_days),
+                    )
+                )
+            session.commit()
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            result = _resolve_workflow_working_directory(session, "wf-1", wf)
+            assert result == str(new_dir)
+
+    def test_falls_back_past_a_worktree_whose_directory_is_gone(
+        self, db_manager, sample_workflow, tmp_path
+    ):
+        """The newest AgentWorktree row isn't guaranteed to still exist on
+        disk (e.g. merged and cleaned up) -- must fall through to the next
+        candidate rather than giving up after the first DB row."""
+
+        from src.autopilot.orchestrator.arbitration import (
+            _resolve_workflow_working_directory,
+        )
+
+        surviving_dir = tmp_path / "surviving-worktree"
+        surviving_dir.mkdir()
+        gone_dir = tmp_path / "gone-worktree"  # deliberately never created
+
+        with db_manager.session_scope() as session:
+            for suffix, wt_dir, age_days in (
+                ("surviving", surviving_dir, 5),
+                ("gone", gone_dir, 0),
+            ):
+                session.add(
+                    Agent(
+                        id=f"dev-agent-{suffix}",
+                        system_prompt="test",
+                        status="working",
+                        cli_type="claude",
+                    )
+                )
+                session.add(
+                    Task(
+                        id=f"dev-task-{suffix}",
+                        raw_description="do the thing",
+                        done_definition="done",
+                        workflow_id="wf-1",
+                        assigned_agent_id=f"dev-agent-{suffix}",
+                    )
+                )
+                session.add(
+                    AgentWorktree(
+                        agent_id=f"dev-agent-{suffix}",
+                        worktree_path=str(wt_dir),
+                        branch_name=f"feature/wf-1-{suffix}",
+                        parent_commit_sha="abc123",
+                        base_commit_sha="abc123",
+                        created_at=datetime.utcnow() - timedelta(days=age_days),
+                    )
+                )
+            session.commit()
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            result = _resolve_workflow_working_directory(session, "wf-1", wf)
+            assert result == str(surviving_dir)
 
     @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_trigger_arbitration_prompt_uses_the_recovered_working_directory(
