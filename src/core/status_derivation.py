@@ -254,8 +254,25 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
             derived = feature.status
         elif workflow_blocks_completion:
             # Workflow is paused/failed, so the feature should be failed
-            # even if some tasks are done
-            derived = FeatureStatus.FAILED
+            # even if some tasks are done -- UNLESS the pause is
+            # paused_by="review", which only ever fires once every phase
+            # has already reached "completed" (_pause_feature_for_review).
+            # A mix of done + failed task_statuses here is commonly just
+            # old, superseded task rows from an earlier retry attempt that
+            # failed before a later one succeeded (real history, not
+            # evidence the feature itself is broken) -- the same
+            # distinction already made for the all-done branch above (see
+            # its own comment/feat-e1d649cf incident). Missing it here
+            # left a feature with ANY leftover failed task row (nearly
+            # guaranteed on a workflow that needed even one retry) stuck
+            # reporting FAILED and hiding its Review button even while
+            # paused_by="review" correctly showed it as pending.
+            if wf and wf.status == "failed":
+                derived = FeatureStatus.FAILED
+            elif wf and wf.paused_by == "review":
+                derived = FeatureStatus.PAUSED
+            else:
+                derived = FeatureStatus.FAILED
         else:
             # Mix of failed and other statuses
             derived = FeatureStatus.ACTIVE  # Still active - has work to do

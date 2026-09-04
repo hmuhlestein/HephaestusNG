@@ -575,6 +575,53 @@ class TestDeriveFeatureStatus:
             result = derive_feature_status(session, "feat-1")
         assert result == "paused"
 
+    def test_returns_paused_not_failed_when_paused_for_review_with_a_leftover_failed_task(
+        self, db_manager
+    ):
+        """Sibling of test_returns_paused_not_active_when_paused_for_review,
+        for the MIXED task_statuses branch instead of the all-done one.
+        task_4ec4f680's own saga: a task that failed several times (session
+        limit hits) before a later retry succeeded leaves an old, real
+        "failed" Task row behind forever -- nothing deletes superseded
+        history. That single leftover row makes task_statuses {done,
+        failed} instead of the exact-match {done} the all-done branch
+        requires, routing into the `elif workflow_blocks_completion`
+        branch instead -- which derived FAILED unconditionally, with no
+        paused_by="review" check at all, hiding the Review button exactly
+        like the already-fixed all-done case did."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(
+                id="wf-1", name="Test", status="paused", paused_by="review",
+                phases_folder_path="/tmp/phases",
+            )
+            session.add(wf)
+
+            feature = Feature(
+                id="feat-1",
+                design_id="design-1",
+                feature_key="test-feature",
+                name="Test Feature",
+                scope="Test scope",
+                workflow_id="wf-1",
+                status="failed",
+            )
+            session.add(feature)
+
+            session.add(Task(
+                id="task-done", workflow_id="wf-1", raw_description="r",
+                done_definition="d", status="done",
+            ))
+            session.add(Task(
+                id="task-old-failed", workflow_id="wf-1", raw_description="r",
+                done_definition="d", status="failed",
+                failure_reason="CLI session limit reached",
+            ))
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1")
+        assert result == "paused"
+
 
 class TestDeriveWorkflowStatus:
     """Tests for derive_workflow_status function."""
