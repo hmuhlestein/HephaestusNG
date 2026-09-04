@@ -36,10 +36,15 @@ export default function PhaseDetailPanel({
     queryFn: () => apiService.getPhaseYaml(phaseId),
   });
 
-  // Tasks for this phase
+  // Tasks for this phase. Filtered server-side by phase_id -- pulling the
+  // 100 most-recently-created tasks SYSTEM-WIDE and filtering client-side
+  // by phase_id (the old approach) silently dropped this phase's own
+  // tasks off a busy instance once 100 OTHER tasks elsewhere had been
+  // created more recently, showing "No tasks in this phase yet" for a
+  // phase that actually had tasks. Observed live on a 2,000+ task DB.
   const { data: tasks } = useQuery({
     queryKey: ['phase-tasks', phaseId],
-    queryFn: () => apiService.getTasks(0, 100, undefined, undefined),
+    queryFn: () => apiService.getTasks(0, 100, undefined, undefined, undefined, phaseId),
     refetchInterval: 10000,
   });
 
@@ -59,7 +64,7 @@ export default function PhaseDetailPanel({
     },
   });
 
-  const phaseTasks = tasks?.filter((t: any) => t.phase_id === phaseId) || [];
+  const phaseTasks = tasks || [];
   const agents = agentsData?.agents || [];
 
   return (

@@ -361,6 +361,24 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   </div>
                 </div>
               )}
+
+              {/* A pending task can carry a failure_reason left over from a
+                  prior attempt (e.g. a retried task, or its workflow paused
+                  mid-retry) -- the task itself hasn't failed, so this uses a
+                  distinct amber "pending retry" tone rather than the red
+                  "Failure Reason" banner above, which would misleadingly
+                  imply the task is currently failed. */}
+              {taskDetails?.failure_reason && taskDetails.status === 'pending' && (
+                <div className="mt-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide mb-1">Last Attempt Failed — Pending Retry</p>
+                      <p className="text-sm text-amber-800 dark:text-amber-200 max-h-64 overflow-y-auto whitespace-pre-wrap break-words">{taskDetails.failure_reason}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
                 {taskDetails?.status === 'queued' && (
                   <button
                     onClick={handleBumpPriority}
