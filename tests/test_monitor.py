@@ -502,6 +502,62 @@ class TestDetectResumeSessionPrompt:
         await make_monitoring_loop._detect_resume_session_prompt(agent)
         assert mock_agent_manager.send_raw_key.call_count == 2
 
+    @pytest.mark.asyncio
+    async def test_catches_dialog_split_across_two_polls_neither_alone_matches(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression for the live gap this session's own investigation
+        found: the dialog was visible for only part of one polling
+        interval before the pane's foreground state moved on, so NEITHER
+        a single poll's own fixed-size capture ever contained the whole
+        header...footer pattern on its own. Poll 1 sees only the header
+        (footer not rendered/scrolled out of THIS snapshot); poll 2 sees
+        only the footer (header already scrolled out of THIS snapshot).
+        A detector with no memory of poll 1 would never match on poll 2
+        either -- accumulating across polls is what lets the combined
+        text satisfy the regex."""
+        agent = Agent(id="a1", cli_type="claude")
+        header_only = " This session is 15h 14m old and 106.8k tokens.\n\n   Resuming...\n"
+        footer_only = "   ❯ 1. Resume from summary (recommended)\n   Enter to confirm · Esc to cancel\n"
+        assert not re.search(r"This session is .*?old and .*?tokens\..*?Enter to confirm", header_only, re.DOTALL)
+        assert not re.search(r"This session is .*?old and .*?tokens\..*?Enter to confirm", footer_only, re.DOTALL)
+
+        mock_agent_manager.send_raw_key = AsyncMock(return_value=True)
+
+        mock_agent_manager.get_agent_output.return_value = header_only
+        result_poll_1 = await make_monitoring_loop._detect_resume_session_prompt(agent)
+        assert not result_poll_1, "poll 1 alone must not match -- it never saw the footer"
+        mock_agent_manager.send_raw_key.assert_not_called()
+
+        mock_agent_manager.get_agent_output.return_value = footer_only
+        result_poll_2 = await make_monitoring_loop._detect_resume_session_prompt(agent)
+
+        assert result_poll_2 is True, (
+            "poll 2 must match against the ACCUMULATED text (poll 1's header + "
+            "poll 2's footer), even though poll 2's own snapshot alone has no header"
+        )
+        mock_agent_manager.send_raw_key.assert_called_once_with("a1", "Enter")
+
+    @pytest.mark.asyncio
+    async def test_buffer_cleared_after_handling_does_not_replay_stale_match(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Once a dialog is handled, its text must not linger in the
+        accumulated buffer and spuriously re-match on a later, unrelated
+        poll once the cooldown has passed and the agent has moved on to
+        real work -- that would send it a disruptive stray Enter."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.send_raw_key = AsyncMock(return_value=True)
+
+        mock_agent_manager.get_agent_output.return_value = self.RESUME_PROMPT
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+        make_monitoring_loop._resumed_session_prompt["a1"] = time.time() - 31
+
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+
+        mock_agent_manager.send_raw_key.assert_called_once()
+
 
 # ── _within_resume_replay_grace ───────────────────────────────────
 
