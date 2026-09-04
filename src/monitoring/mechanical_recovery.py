@@ -92,6 +92,11 @@ class MechanicalRecoveryDetector:
         self._paused_credit_exhausted: set = set()
         self._never_started_handled: set = set()
 
+        # Rolling scan buffer for detectors that must never miss a pattern
+        # just because it's gone by the time the NEXT poll's fixed-size
+        # capture runs -- see _accumulate_scan_buffer's own docstring.
+        self._dialog_scan_buffer: Dict[str, str] = {}
+
     def _capture_stuck_check_pane(self, agent_id: str) -> str:
         """Sync helper for mechanical_recovery_for_agent's stuck-detection
         pane read -- run via run_in_executor since it does a blocking DB
@@ -256,6 +261,41 @@ class MechanicalRecoveryDetector:
 
         return fallback_tool, fallback_model
 
+    _SCAN_BUFFER_MAX_CHARS = 8000
+
+    def _accumulate_scan_buffer(self, agent_id: str, raw_text: str) -> str:
+        """Append this poll's raw capture onto a persisted per-agent buffer
+        and return the ACCUMULATED text to scan, not just this one poll's
+        fixed-size snapshot.
+
+        Every pane-scanning detector here (_check_spend_or_session_limit,
+        detect_resume_session_prompt) reads a fixed, recent window
+        (capture-pane -S -40, or get_agent_output(lines=40)) fresh on each
+        poll, with no memory of what a PREVIOUS poll saw. Confirmed live,
+        twice, for the resume-session-prompt detector specifically (see
+        _RESUME_SESSION_PROMPT_RE's own docstring for the first incident):
+        an interactive dialog can be visible for only part of one polling
+        interval -- dismissed, scrolled past, or the pane's foreground
+        state otherwise moved on -- before the NEXT poll's snapshot ever
+        runs, so a detector that only ever looks at "right now" can miss
+        something that was genuinely there and never nudge the agent past
+        it, leaving it stuck indefinitely with nothing else able to
+        recognize why.
+
+        Deliberately not deduplicated against overlap with the previous
+        capture -- a plain append-and-cap is far cheaper than computing
+        the true overlap, and duplicate text already scanned is harmless
+        for a regex search (only wastes a little memory/CPU, never causes
+        a false negative). Capped at _SCAN_BUFFER_MAX_CHARS so a
+        long-lived agent's buffer can't grow unbounded; that's several
+        polls' worth of pane text, comfortably more than any real dialog
+        or banner spans.
+        """
+        combined = self._dialog_scan_buffer.get(agent_id, "") + raw_text
+        combined = combined[-self._SCAN_BUFFER_MAX_CHARS:]
+        self._dialog_scan_buffer[agent_id] = combined
+        return combined
+
 
     async def _check_spend_or_session_limit(self, agent, raw_text) -> bool:
         """Spend/session-limit hard blocker check against the live pane --
@@ -268,10 +308,15 @@ class MechanicalRecoveryDetector:
         comment. Returns True whenever this check recognized and handled the
         pane's state, whether or not that meant actually terminating
         anything."""
-        # Spend/session limit check using the already-captured pane output.
-        # The interactive menu ("Stop and wait for limit to reset") only
+        # Spend/session limit check using the already-captured pane output,
+        # accumulated across polls (see _accumulate_scan_buffer's own
+        # docstring) so a banner that's no longer visible by the time THIS
+        # poll's fixed-size capture ran -- because it scrolled away, or
+        # the pane's foreground state moved on before this check saw it --
+        # can still be found in what an earlier poll captured. The
+        # interactive menu ("Stop and wait for limit to reset") only
         # appears in the live pane, not in the transcript log.
-        stripped_raw = _strip_sgr(raw_text)
+        stripped_raw = _strip_sgr(self._accumulate_scan_buffer(agent.id, raw_text))
         if stripped_raw:
             spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
             usage_limit_hit = _USAGE_LIMIT_RE.search(stripped_raw)
@@ -385,6 +430,7 @@ class MechanicalRecoveryDetector:
                             session.commit()
                             await self.agent_manager.terminate_agent(agent.id)
                             self._stuck_state.pop(agent.id, None)
+                            self._dialog_scan_buffer.pop(agent.id, None)
 
                             try:
                                 # Same retry-context injection as
@@ -455,6 +501,7 @@ class MechanicalRecoveryDetector:
                         )
                         await self.agent_manager.terminate_agent(agent.id)
                         self._stuck_state.pop(agent.id, None)
+                        self._dialog_scan_buffer.pop(agent.id, None)
                     return True
 
 
@@ -559,6 +606,7 @@ class MechanicalRecoveryDetector:
 
                         await self.agent_manager.terminate_agent(agent.id)
                         self._stuck_state.pop(agent.id, None)
+                        self._dialog_scan_buffer.pop(agent.id, None)
 
                         new_agent = await self.agent_manager.create_agent_for_task(
                             task=stuck_task,
@@ -718,6 +766,7 @@ class MechanicalRecoveryDetector:
                 )
         await self.agent_manager.terminate_agent(agent.id)
         self._stuck_state.pop(agent.id, None)
+        self._dialog_scan_buffer.pop(agent.id, None)
         return True
 
     async def detect_cli_model_fallback(self, agent) -> bool:
@@ -1272,6 +1321,16 @@ class MechanicalRecoveryDetector:
         keystroke. Enter alone (no recovery Escape, no nudge) is correct
         here: the chooser already defaults its cursor to option 1 (resume
         from summary), which is also the recommended, cheaper choice.
+
+        Scans an accumulated buffer (_accumulate_scan_buffer), not just
+        this poll's own fixed-size capture -- confirmed live, twice, that
+        a plain single-snapshot check can miss this dialog entirely: it's
+        only visible for part of one polling interval before the pane's
+        foreground state moves on (dismissed some other way, or Claude
+        Code proceeds past it on its own), and a detector with no memory
+        of what an earlier poll saw never gets a chance to answer it,
+        leaving the agent stuck indefinitely with nothing else able to
+        recognize why.
         """
         try:
             if not hasattr(self, "_resumed_session_prompt"):
@@ -1279,7 +1338,7 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return
-            if not _RESUME_SESSION_PROMPT_RE.search(_strip_sgr(out)):
+            if not _RESUME_SESSION_PROMPT_RE.search(_strip_sgr(self._accumulate_scan_buffer(agent.id, out))):
                 return
 
             # Cooldown, not a permanent one-shot flag -- same reasoning as
@@ -1296,6 +1355,12 @@ class MechanicalRecoveryDetector:
                 f"has a pending session-resume chooser — accepting default (Enter)"
             )
             await self.agent_manager.send_raw_key(agent.id, "Enter")
+            # Clear the accumulated buffer now that this occurrence has been
+            # handled -- otherwise the same dialog text lingers in it and
+            # could re-match on a later poll (past the 30s cooldown) even
+            # once the agent has long since moved on to real work, sending
+            # it a spurious, disruptive Enter keystroke mid-task.
+            self._dialog_scan_buffer.pop(agent.id, None)
             return True
         except Exception as e:
             logger.warning(f"[RESUME-SESSION-PROMPT] check failed for {agent.id[:8]}: {e}")
@@ -1749,6 +1814,7 @@ class MechanicalRecoveryDetector:
                 if not stuck_task:
                     await self.agent_manager.terminate_agent(agent.id)
                     self._stuck_state.pop(agent.id, None)
+                    self._dialog_scan_buffer.pop(agent.id, None)
                     return True
 
                 fallback_tool, fallback_model = self._resolve_fallback_cli(session, agent, stuck_task)
@@ -1776,6 +1842,7 @@ class MechanicalRecoveryDetector:
                     session.commit()
                     await self.agent_manager.terminate_agent(agent.id)
                     self._stuck_state.pop(agent.id, None)
+                    self._dialog_scan_buffer.pop(agent.id, None)
                     try:
                         new_agent = await self.agent_manager.create_agent_for_task(
                             task=stuck_task,
@@ -1842,6 +1909,7 @@ class MechanicalRecoveryDetector:
                     session.commit()
                     await self.agent_manager.terminate_agent(agent.id)
                     self._stuck_state.pop(agent.id, None)
+                    self._dialog_scan_buffer.pop(agent.id, None)
             return True
         except Exception as e:
             logger.warning(f"[CONNECTION-ERROR] check failed for {agent.id[:8]}: {e}")
