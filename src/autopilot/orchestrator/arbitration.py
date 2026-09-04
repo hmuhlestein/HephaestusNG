@@ -146,6 +146,43 @@ WHAT TO DO:
 """
 
 
+def _resolve_workflow_working_directory(db, workflow_id: str, wf: Optional["Workflow"]) -> Optional[str]:
+    """wf.working_directory, falling back to the workflow's earliest
+    AgentWorktree record when it's empty -- mirrors verify_output_
+    artifact's own recovery (src/services/task_completion/verification.py),
+    which exists specifically because wf.working_directory going missing
+    is a worktree-tracking gap, not evidence work never happened.
+    Arbitration was excluded from that recovery entirely (verify_output_
+    artifact returns None outright for any arbitration task, before ever
+    reaching its own AgentWorktree fallback), so an arbitration agent
+    dispatched while wf.working_directory was empty got a prompt telling
+    it its own working directory was "(unknown)" and had nowhere reliable
+    to read gate outputs from or write arbitration_result.json to --
+    see GitHub issue #16 for the live consequence (two independent
+    exhausted-retry-budget failures, both misdiagnosed as "the arbiter
+    ran and didn't decide" when the real problem was upstream of that).
+
+    Does not write the recovered path back to wf.working_directory (only
+    verify_output_artifact's own completion-time recovery does that);
+    this is arbitration reading a best-effort value for one dispatch, not
+    an authoritative repair of the workflow row.
+    """
+    if wf and wf.working_directory:
+        return wf.working_directory
+    from src.core.database import AgentWorktree
+
+    record = (
+        db.query(AgentWorktree)
+        .join(Task, Task.assigned_agent_id == AgentWorktree.agent_id)
+        .filter(Task.workflow_id == workflow_id)
+        .order_by(AgentWorktree.created_at.asc())
+        .first()
+    )
+    if record and record.worktree_path and Path(record.worktree_path).is_dir():
+        return record.worktree_path
+    return None
+
+
 def _phase_currently_passes(
     workflow_id: str,
     phase_name: str,
@@ -466,7 +503,7 @@ def _trigger_arbitration(
             )
 
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
-        working_directory = wf.working_directory if wf else None
+        working_directory = _resolve_workflow_working_directory(db, workflow_id, wf)
         if wf:
             wf.status_reason = f"Awaiting arbiter decision for {phase_name}: {reason}"
         db.commit()
@@ -912,7 +949,7 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: "OrchestratorLogger") -
             if t:
                 arb_tasks[phase_id] = t
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
-        working_directory = wf.working_directory if wf else None
+        working_directory = _resolve_workflow_working_directory(db, workflow_id, wf)
         phase_names = {p.id: p.name for p in phases}
 
     for phase_id, task in arb_tasks.items():
@@ -929,14 +966,33 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: "OrchestratorLogger") -
 
         decision, target_phase, dec_reason = _read_arbitration_result(working_directory)
         if decision is None:
-            logger.error(f"[ARBITRATE] {phase_name}: arbitration task marked done but arbitration_result.json is missing/invalid -- treating as fail")
+            # NOT necessarily "the agent ran and forgot to write the
+            # file" -- task.status=="done" here only means SOMETHING
+            # closed the task; a dispatch that silently failed before a
+            # real agent ever launched (see GitHub issue #16 -- e.g. a
+            # working_directory that couldn't be resolved at all, even
+            # after _resolve_workflow_working_directory's AgentWorktree
+            # fallback above) can reach this same state with no agent
+            # having read a single instruction. Worded to not presume
+            # which one happened -- misdiagnosing a dispatch failure as
+            # "the arbiter declined to decide" wasted real debugging time
+            # on that issue.
+            logger.error(
+                f"[ARBITRATE] {phase_name}: arbitration task {task.id[:8]} is 'done' but "
+                f"no arbitration_result.json was found at working_directory="
+                f"{working_directory!r} -- treating as fail (this can mean the agent ran "
+                "and failed to write the file, OR that it never actually launched, e.g. a "
+                "missing/unresolvable working directory)"
+            )
             _resolve_arbitration_outcome(
                 workflow_id,
                 phase_id,
                 phase_name,
                 "fail",
                 None,
-                "Arbitration agent finished without writing a valid decision file",
+                "Arbitration task closed with no decision file at its working directory "
+                "-- could mean the agent ran without writing one, or that it never "
+                "actually launched (e.g. no resolvable working directory)",
                 logger,
             )
             continue
