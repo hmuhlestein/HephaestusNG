@@ -13,6 +13,7 @@ import pytest
 
 from src.core.database import (
     Agent,
+    AgentWorktree,
     AutopilotProject,
     DatabaseManager,
     Phase,
@@ -5765,6 +5766,137 @@ class TestTriggerArbitration:
             assert task.status == "failed"
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status_reason is not None
+
+
+class TestResolveWorkflowWorkingDirectory:
+    """GitHub issue #16: wf.working_directory going empty is a worktree-
+    tracking gap, not evidence nothing ran -- verify_output_artifact
+    already recovers from it via the workflow's AgentWorktree records,
+    but arbitration never did, so an arbiter dispatched while
+    wf.working_directory was empty had nowhere reliable to read gate
+    outputs from or write arbitration_result.json to."""
+
+    def test_returns_the_workflow_value_when_set(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.arbitration import (
+            _resolve_workflow_working_directory,
+        )
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.working_directory = "/tmp/real-working-dir"
+            session.commit()
+
+            result = _resolve_workflow_working_directory(session, "wf-1", wf)
+            assert result == "/tmp/real-working-dir"
+
+    def test_falls_back_to_an_agent_worktree_when_empty(
+        self, db_manager, sample_workflow, tmp_path
+    ):
+        from src.autopilot.orchestrator.arbitration import (
+            _resolve_workflow_working_directory,
+        )
+
+        recovered_dir = tmp_path / "recovered-worktree"
+        recovered_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id="dev-agent-1",
+                    system_prompt="test",
+                    status="working",
+                    cli_type="claude",
+                )
+            )
+            session.add(
+                Task(
+                    id="dev-task-1",
+                    raw_description="do the thing",
+                    done_definition="done",
+                    workflow_id="wf-1",
+                    assigned_agent_id="dev-agent-1",
+                )
+            )
+            session.add(
+                AgentWorktree(
+                    agent_id="dev-agent-1",
+                    worktree_path=str(recovered_dir),
+                    branch_name="feature/wf-1",
+                    parent_commit_sha="abc123",
+                    base_commit_sha="abc123",
+                )
+            )
+            session.commit()
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert not wf.working_directory  # sample_workflow never sets it
+
+            result = _resolve_workflow_working_directory(session, "wf-1", wf)
+            assert result == str(recovered_dir)
+
+    def test_returns_none_when_neither_source_has_it(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.arbitration import (
+            _resolve_workflow_working_directory,
+        )
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            result = _resolve_workflow_working_directory(session, "wf-1", wf)
+            assert result is None
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_trigger_arbitration_prompt_uses_the_recovered_working_directory(
+        self, mock_create_agent, db_manager, sample_workflow, tmp_path
+    ):
+        """End-to-end: _trigger_arbitration's own arbiter prompt must
+        carry the recovered path, not "(unknown)", when wf.working_
+        directory is empty but a real AgentWorktree exists for this
+        workflow -- this is the actual live consequence GitHub issue #16
+        reported (arbiter dispatched with nowhere reliable to look)."""
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
+
+        recovered_dir = tmp_path / "recovered-worktree"
+        recovered_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id="dev-agent-1",
+                    system_prompt="test",
+                    status="working",
+                    cli_type="claude",
+                )
+            )
+            session.add(
+                Task(
+                    id="dev-task-1",
+                    raw_description="do the thing",
+                    done_definition="done",
+                    workflow_id="wf-1",
+                    assigned_agent_id="dev-agent-1",
+                )
+            )
+            session.add(
+                AgentWorktree(
+                    agent_id="dev-agent-1",
+                    worktree_path=str(recovered_dir),
+                    branch_name="feature/wf-1",
+                    parent_commit_sha="abc123",
+                    base_commit_sha="abc123",
+                )
+            )
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted 5 attempts", MagicMock()
+        )
+
+        assert result is True
+        _, kwargs = mock_create_agent.call_args
+        prompt = kwargs["enriched_data_override"]["validation_prompt"]
+        assert str(recovered_dir) in prompt
+        assert "(unknown)" not in prompt
 
 
 class TestTriggerArbitrationAlreadyClaimed:
