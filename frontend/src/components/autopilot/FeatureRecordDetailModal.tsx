@@ -5,7 +5,7 @@ import { X, FileText, Copy, Clock, CheckCircle2, XCircle, Loader2, Layers, Trash
 import toast from 'react-hot-toast';
 import { MarkdownRenderer } from '@/utils/markdown';
 import { apiService } from '@/services/api';
-import { FeatureStatusBadge } from './DesignQueuePanel';
+import { FeatureStatusBadge } from './SpecQueuePanel';
 
 interface FeatureRecordDetailModalProps {
   feature: any;

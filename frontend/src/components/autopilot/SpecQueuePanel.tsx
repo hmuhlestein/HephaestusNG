@@ -38,7 +38,7 @@ import { DESIGN_FEATURE_STATUS_CONFIG, TASK_STATUS_CONFIG } from './statusConfig
 import { useProject } from '@/context/ProjectContext';
 import BaseStatusBadge from '../StatusBadge';
 
-interface DesignQueuePanelProps {
+interface SpecQueuePanelProps {
   projectId: string | null;
   onAddDesign: (type: 'feature' | 'bugfix') => void;
   currentDesign?: string | null;
@@ -46,7 +46,7 @@ interface DesignQueuePanelProps {
   onRefreshStatus?: () => void;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, currentDesign, onReviewFeature, onRefreshStatus }) => {
+const SpecQueuePanel: React.FC<SpecQueuePanelProps> = ({ projectId, onAddDesign, currentDesign, onReviewFeature, onRefreshStatus }) => {
   const queryClient = useQueryClient();
   // Whether the project LIST itself is still loading -- projectId is
   // null both while that's in flight (too early to say "no project
@@ -1295,10 +1295,16 @@ const TaskRow: React.FC<{
   // re-parsing it back out of the "Execute {phase}: ..." task text.
   // Collapsed to one line -- a multi-line reason/description would
   // otherwise wrap oddly in this compact, single-line-truncated row.
+  //
+  // A 'pending' task can also carry a failure_reason left over from a
+  // prior attempt (e.g. a session-limit hit queued for retry once its
+  // workflow un-pauses) -- show that too, instead of silently reverting
+  // to the original prompt/goto-reason as if nothing had gone wrong.
+  const isPendingRetry = task.status === 'pending' && !!task.failure_reason;
   const finishedMessage =
     task.status === 'done'
       ? task.completion_notes
-      : task.status === 'failed'
+      : task.status === 'failed' || isPendingRetry
         ? task.failure_reason
         : null;
   const whatItsDoing = (
@@ -1403,9 +1409,12 @@ const TaskRow: React.FC<{
           )}
         </div>
         <p
-          className="text-xs text-gray-500 dark:text-gray-400 truncate leading-relaxed"
+          className={`text-xs truncate leading-relaxed ${
+            isPendingRetry ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'
+          }`}
           title={task.description || undefined}
         >
+          {isPendingRetry && <span className="font-semibold">Last attempt failed: </span>}
           {whatItsDoing || task.id.substring(0, 8)}
         </p>
       </div>
@@ -1440,4 +1449,4 @@ const TaskRow: React.FC<{
   );
 };
 
-export default DesignQueuePanel;
+export default SpecQueuePanel;

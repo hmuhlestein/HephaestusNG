@@ -1,7 +1,7 @@
 import React from 'react';
 import { Clock, Loader2, Pause, CheckCircle2, XCircle, PauseCircle } from 'lucide-react';
 
-// SOLID review 5.2: DesignQueuePanel.tsx used to define STATUS_CONFIG
+// SOLID review 5.2: SpecQueuePanel.tsx used to define STATUS_CONFIG
 // (design-level) and FEATURE_STATUS_CONFIG separately, even though they
 // were identical {color, icon, label} maps for every key they shared --
 // FEATURE_STATUS_CONFIG just added 'skipped'. A new status required
