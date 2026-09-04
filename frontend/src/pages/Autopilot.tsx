@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import PipelineStatusCard from '@/components/autopilot/PipelineStatusCard';
-import DesignQueuePanel from '@/components/autopilot/DesignQueuePanel';
+import SpecQueuePanel from '@/components/autopilot/SpecQueuePanel';
 import ArchivedDesignsPanel from '@/components/autopilot/ArchivedDesignsPanel';
 import FeatureGallery from '@/components/autopilot/FeatureGallery';
 import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
@@ -77,6 +77,21 @@ const Autopilot: React.FC = () => {
     queryKey: ['autopilot-pending-tasks', projectId],
     queryFn: () => apiService.getTasks(0, 500, 'pending', undefined, projectId || undefined),
     refetchInterval: 3000,
+    enabled: !!projectId,
+  });
+
+  // Declared right after status/pendingTasks (not further down with the
+  // other tab-badge-only queries below) -- this is the third and last
+  // piece of data PipelineStatusCard itself needs (costTotal/costLimit).
+  // useQuery fires its fetch in hook-declaration order on mount, so
+  // leaving this query below several tab-badge queries the hero card
+  // doesn't use (messages, pendingInput, promptProposals, ...) made the
+  // page's own most prominent element -- the Pipeline bar -- populate
+  // its cost figures last instead of first.
+  const { data: projectCosts } = useQuery({
+    queryKey: ['project-costs', projectId],
+    queryFn: () => apiService.getProjectCosts(projectId!),
+    refetchInterval: 30000,
     enabled: !!projectId,
   });
 
@@ -275,12 +290,6 @@ const Autopilot: React.FC = () => {
     enabled: !!projectId,
   });
 
-  const { data: projectCosts } = useQuery({
-    queryKey: ['project-costs', projectId],
-    queryFn: () => apiService.getProjectCosts(projectId!),
-    refetchInterval: 30000,
-    enabled: !!projectId,
-  });
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [reviewFeatureId, setReviewFeatureId] = useState<string | null>(null);
   const [reviewFeature, setReviewFeature] = useState<any | null>(null);
@@ -431,7 +440,7 @@ const Autopilot: React.FC = () => {
           transition={{ duration: 0.2 }}
         >
           {activeTab === 'queue' && (
-            <DesignQueuePanel
+            <SpecQueuePanel
               projectId={projectId}
               onAddDesign={(type) => { setAddDesignType(type); setShowAddDesign(true); }}
               currentDesign={status?.current_design}

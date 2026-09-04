@@ -5,14 +5,14 @@ interface StatusBadgeProps {
   status: string;
   size?: 'sm' | 'md' | 'lg';
   // Optional icon rendered before the label -- lets config-driven callers
-  // (e.g. DesignQueuePanel's design/feature rows) keep their icon without
+  // (e.g. SpecQueuePanel's design/feature rows) keep their icon without
   // a separate badge component.
   icon?: React.ReactNode;
-  // Override the computed label -- e.g. DesignQueuePanel's
+  // Override the computed label -- e.g. SpecQueuePanel's
   // "Paused: budget limit reached" variant on the plain "Paused" status.
   label?: string;
   // Override the computed color/background classes -- lets callers with
-  // their own status vocabulary and palette (DesignQueuePanel's
+  // their own status vocabulary and palette (SpecQueuePanel's
   // DESIGN_FEATURE_STATUS_CONFIG) reuse this component's layout/sizing
   // without adopting this component's color choices for every status.
   colorClassName?: string;
