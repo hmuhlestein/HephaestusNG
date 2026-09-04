@@ -148,13 +148,14 @@ export const apiService = {
   },
 
   // Tasks
-  getTasks: async (skip = 0, limit = 50, status?: string, workflowId?: string, projectId?: string): Promise<Task[]> => {
+  getTasks: async (skip = 0, limit = 50, status?: string, workflowId?: string, projectId?: string, phaseId?: string): Promise<Task[]> => {
     const params = new URLSearchParams();
     params.append('skip', skip.toString());
     params.append('limit', limit.toString());
     if (status) params.append('status', status);
     if (workflowId) params.append('workflow_id', workflowId);
     if (projectId) params.append('project_id', projectId);
+    if (phaseId) params.append('phase_id', phaseId);
 
     const { data } = await api.get(`/tasks?${params}`);
     return data;

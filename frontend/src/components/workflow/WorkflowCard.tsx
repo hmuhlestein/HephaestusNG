@@ -136,11 +136,19 @@ export default function WorkflowCard({
       >
         {/* Status badge */}
         <div className="flex justify-between items-start mb-3">
-          <span
-            className={`px-2 py-1 rounded text-xs font-medium ${statusColors[execution.status]} text-white`}
-          >
-            {getStatusLabel(execution)}
-          </span>
+          <div>
+            <span
+              className={`px-2 py-1 rounded text-xs font-medium ${statusColors[execution.status]} text-white`}
+              title={execution.status_reason || undefined}
+            >
+              {getStatusLabel(execution)}
+            </span>
+            {execution.status === 'paused' && execution.status_reason && (
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 max-w-md">
+                {execution.status_reason}
+              </p>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <span className="text-gray-500 dark:text-gray-400 text-sm">{execution.definition_name}</span>
             {execution.status === 'active' && (

@@ -21,9 +21,10 @@ async def get_tasks(
     status: Optional[str] = None,
     workflow_id: Optional[str] = None,
     project_id: Optional[str] = None,
+    phase_id: Optional[str] = None,
 ):
     """Get tasks with pagination."""
-    return await _shared.task_service.get_tasks(skip, limit, status, workflow_id, project_id)
+    return await _shared.task_service.get_tasks(skip, limit, status, workflow_id, project_id, phase_id)
 
 
 @router.get("/tasks/{task_id}")

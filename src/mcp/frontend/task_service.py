@@ -64,6 +64,7 @@ class TaskService:
         status: Optional[str] = None,
         workflow_id: Optional[str] = None,
         project_id: Optional[str] = None,
+        phase_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get all tasks with pagination."""
 
@@ -76,6 +77,8 @@ class TaskService:
                     query = query.filter(Task.status == status)
                 if workflow_id:
                     query = query.filter(Task.workflow_id == workflow_id)
+                if phase_id:
+                    query = query.filter(Task.phase_id == phase_id)
                 if project_id:
                     # Filter through workflow -> project_id
                     query = query.join(
@@ -96,6 +99,7 @@ class TaskService:
                         "description": task.enriched_description or task.raw_description,
                         "done_definition": task.done_definition,
                         "status": task.status,
+                        "failure_reason": task.failure_reason,
                         "priority": task.priority,
                         "assigned_agent_id": task.assigned_agent_id,
                         "created_by_agent_id": task.created_by_agent_id,
@@ -151,6 +155,7 @@ class TaskService:
                 "description": task.enriched_description or task.raw_description,
                 "done_definition": task.done_definition,
                 "status": task.status,
+                "failure_reason": task.failure_reason,
                 "priority": task.priority,
                 "assigned_agent_id": task.assigned_agent_id,
                 "created_by_agent_id": task.created_by_agent_id,
