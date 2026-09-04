@@ -147,8 +147,8 @@ WHAT TO DO:
 
 
 def _resolve_workflow_working_directory(db, workflow_id: str, wf: Optional["Workflow"]) -> Optional[str]:
-    """wf.working_directory, falling back to the workflow's earliest
-    AgentWorktree record when it's empty -- mirrors verify_output_
+    """wf.working_directory, falling back to one of the workflow's
+    AgentWorktree records when it's empty -- mirrors verify_output_
     artifact's own recovery (src/services/task_completion/verification.py),
     which exists specifically because wf.working_directory going missing
     is a worktree-tracking gap, not evidence work never happened.
@@ -162,6 +162,23 @@ def _resolve_workflow_working_directory(db, workflow_id: str, wf: Optional["Work
     exhausted-retry-budget failures, both misdiagnosed as "the arbiter
     ran and didn't decide" when the real problem was upstream of that).
 
+    Newest-first, not verify_output_artifact's earliest-first default:
+    that function's own comment documents why "always prefer earliest"
+    broke down once a workflow can legitimately gain several
+    DISCONNECTED isolated worktrees across redo rounds -- it only
+    defaults to earliest as a last resort, AFTER first trying the
+    specific completing task's own worktree. Arbitration has no
+    equivalent "this one specific task" to prefer (it's evaluating a
+    stuck PHASE, not one completing task), so between two candidates with
+    no other signal to break the tie, the most recently created worktree
+    is the far safer default -- it's what the phase is actually stuck on
+    right now, not some earlier redo round's already-abandoned attempt.
+
+    Tries every candidate in that order, not just the first: a worktree
+    can be merged and cleaned up from disk while its DB row still exists,
+    and the newest DB row is not guaranteed to be the newest one still
+    present on disk.
+
     Does not write the recovered path back to wf.working_directory (only
     verify_output_artifact's own completion-time recovery does that);
     this is arbitration reading a best-effort value for one dispatch, not
@@ -171,15 +188,16 @@ def _resolve_workflow_working_directory(db, workflow_id: str, wf: Optional["Work
         return wf.working_directory
     from src.core.database import AgentWorktree
 
-    record = (
+    records = (
         db.query(AgentWorktree)
         .join(Task, Task.assigned_agent_id == AgentWorktree.agent_id)
         .filter(Task.workflow_id == workflow_id)
-        .order_by(AgentWorktree.created_at.asc())
-        .first()
+        .order_by(AgentWorktree.created_at.desc())
+        .all()
     )
-    if record and record.worktree_path and Path(record.worktree_path).is_dir():
-        return record.worktree_path
+    for record in records:
+        if record.worktree_path and Path(record.worktree_path).is_dir():
+            return record.worktree_path
     return None
 
 
