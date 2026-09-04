@@ -3170,13 +3170,21 @@ class TestSessionLimitPause:
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
         """The usage-limit banner is only left alone when it's the ONLY
-        thing matched -- if session-limit-shaped text (e.g. a "rate limit"
-        mention) also appears in the same pane, that's still a genuine
-        hard blocker and must terminate + redispatch as before."""
+        thing matched -- if session-limit-shaped text (Claude Code's own
+        confirmed "you've hit your session limit" phrase) also appears in
+        the same pane, that's still a genuine hard blocker and must
+        terminate + redispatch as before.
+
+        Uses the confirmed exact phrase, not a generic fragment like "rate
+        limit" -- _SESSION_LIMIT_RE no longer matches bare fragments after
+        a live incident where an agent reading its own target repo's
+        source code (containing an unrelated "rate limit exceeded"
+        application error string) was killed by this exact false
+        positive. See _SESSION_LIMIT_RE's own comment in patterns.py."""
         agent = Agent(id="a1", cli_type="claude")
         pane_text = (
             "Usage limit reached · continuing automatically at 3:10pm · esc or type to cancel\n"
-            "rate limit exceeded, please retry later"
+            "You've hit your session limit, please try again later"
         )
         mock_agent_manager.get_agent_output.return_value = pane_text
         self._wire_tmux_pane_output(mock_agent_manager, mock_db, "a1", pane_text)
@@ -3209,6 +3217,47 @@ class TestSessionLimitPause:
         assert workflow.status == "active"
         assert workflow.paused_by is None
         mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_app_error_mentioning_rate_limit_is_not_a_hard_blocker(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression for a live incident: a healthy, working agent reading
+        its own target repository's source code (which happened to contain
+        an application-level "rate limit exceeded" error-class string, e.g.
+        `super('Applinator backend rate limit exceeded', {...})`) must NOT
+        be treated as the CLI itself hitting a session/rate limit. Only
+        Claude Code's own confirmed "you've hit your session limit" phrase
+        (_SESSION_LIMIT_RE) is trusted -- generic fragments like "rate
+        limit" are exactly the kind of text any real backend codebase's
+        own error handling can legitimately contain."""
+        agent = Agent(id="a1", cli_type="claude")
+        pane_text = (
+            "  ⏺ Read(src/errors.ts)\n"
+            "  ⎿  export class BackendRateLimitError extends Error {\n"
+            "       constructor() {\n"
+            "         super('Applinator backend rate limit exceeded', {\n"
+            "       }\n"
+            "     }\n"
+        )
+        mock_agent_manager.get_agent_output.return_value = pane_text
+        self._wire_tmux_pane_output(mock_agent_manager, mock_db, "a1", pane_text)
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.create_agent_for_task = AsyncMock()
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
+        )
+        phase = Mock(fallback_cli_tool="pi", fallback_cli_model=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        mock_agent_manager.create_agent_for_task.assert_not_called()
+        mock_agent_manager.terminate_agent.assert_not_called()
+        assert task.status == "in_progress"
 
     @pytest.mark.asyncio
     async def test_session_limit_fires_before_frozen_nudge_when_both_patterns_match(
