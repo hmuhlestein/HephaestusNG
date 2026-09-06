@@ -823,16 +823,15 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
         handler's own comment). started_at must survive untouched: this
         reopens the SAME already-running execution, not a fresh start.
 
-        Seeds status="completed", not "in_progress" -- this handler's own
-        comment documents the real precondition: "the phase whose gate
-        fired this arbitrate decision closes its own execution to
-        'completed' before handing off". "in_progress" was never a real
-        state this fires from; it only passed before because the old
-        direct-mutation reopen_phase_execution never validated the
-        from-status at all -- transition_phase_execution's atomic
-        UPDATE (Step 3) correctly rejects "in_progress" -> "in_progress"
-        as invalid, which this test's original fixture would have
-        silently masked as a passing false-negative."""
+        Seeds status="completed": the real precondition for the
+        _escalate_unresolvable_goto call path, where a goto handler closes
+        the execution to "completed" moments earlier in the same
+        evaluation before re-entering here. (A second, equally real call
+        path seeds "in_progress" instead -- see
+        test_arbitrate_is_a_noop_when_already_in_progress below; a prior
+        pass at this test incorrectly asserted "in_progress" was never a
+        real precondition and dropped that case, which is exactly the gap
+        that let the live regression through.)"""
         from datetime import datetime
 
         from src.core.database import Phase, PhaseExecution
@@ -861,6 +860,66 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
             assert execution.status == "in_progress"
             assert execution.task_creation_claimed_at is None
             assert execution.started_at == original_started_at
+
+    def test_arbitrate_clears_the_task_creation_claim_when_already_in_progress(self, seeded_workflow):
+        """WorkflowOrchestrator.evaluate() can route straight to "arbitrate"
+        on its own -- no goto handler involved -- when a phase's own
+        retry/goto budget is exhausted (max_retries/on_budget_exhausted:
+        arbitrate in the workflow config). No handler closed the execution
+        to "completed" first in that path; it is still "in_progress" from
+        whatever retry/goto cycle just ran, and the sweep that led here
+        already claimed task_creation_claimed_at before evaluate() decided
+        to arbitrate. Forcing another in_progress transition there is a
+        same-state call _VALID_TRANSITIONS rejects (phase_transitions.py)
+        -- transition_phase_execution logs and returns None instead of
+        raising, and the whole UPDATE (including the (completed,
+        in_progress) field-reset that normally clears the claim) never
+        runs. _handle_evaluation_arbitrate used to ignore that outcome and
+        proceed as if it had succeeded, leaving the claim held.
+
+        That stale claim is the actual failure mode, not just a wrong
+        status: _case_in_progress_now_complete (phase_transitions.py:2458)
+        skips ANY phase whose task_creation_claimed_at is non-NULL,
+        reading it as "owned elsewhere, mid-arbitration" -- so a held
+        claim here means no arbitration task is ever dispatched and the
+        phase is invisible to advancement forever. Confirmed live:
+        workflow fa51faca's design_review phase exhausted its retry budget
+        exactly this way and stayed permanently stuck with no successor
+        ever starting."""
+        from datetime import datetime
+
+        from src.core.database import Phase, PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+        from src.workflow_engine.orchestrator import EvaluationResult, OrchestrationAction
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        with seeded_workflow.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-dev").first()
+            execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
+            execution.status = "in_progress"
+            original_started_at = datetime.utcnow()
+            execution.started_at = original_started_at
+            execution.task_creation_claimed_at = datetime.utcnow()
+            session.flush()
+
+            evaluation = EvaluationResult(
+                action=OrchestrationAction.ARBITRATE,
+                reason="budget exhausted",
+                metadata={},
+            )
+            result = pm._handle_evaluation_arbitrate(session, phase, execution, "summary", evaluation)
+
+            assert execution.status == "in_progress", (
+                "must stay in_progress, not silently stall on a rejected self-transition"
+            )
+            assert execution.started_at == original_started_at
+            assert execution.task_creation_claimed_at is None, (
+                "a held claim makes every future sweep skip this phase forever -- "
+                "this is the actual live-incident failure mode, not just a wrong status"
+            )
+            assert result["action"] == "arbitrate"
 
 
 class TestPhaseRolePreviouslyCompleted:

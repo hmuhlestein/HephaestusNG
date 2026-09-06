@@ -1218,15 +1218,51 @@ class PhaseManager:
         # in_progress)] already leaves it untouched (Step 3.2's own
         # gap-check fix). Deferred import: see _close_execution's own
         # note on why.
+        #
+        # The "closes its own execution to completed before handing off"
+        # assumption above only holds for the _escalate_unresolvable_goto
+        # call path (a goto handler closes to "completed" moments earlier
+        # in the SAME evaluation, then re-enters here). WorkflowOrchestrator
+        # .evaluate() can also route straight to this handler on its own,
+        # with no prior handler involved, when a phase's retry/goto budget
+        # is exhausted (config: max_retries/on_budget_exhausted: arbitrate)
+        # -- in that case the execution is still whatever state the last
+        # goto/retry cycle left it (already "in_progress"), and forcing
+        # another in_progress transition is a same-state call that
+        # _VALID_TRANSITIONS deliberately excludes: transition_phase_
+        # execution logs and returns None rather than raising, which this
+        # handler used to ignore and proceed as if it had succeeded -- and
+        # crucially left task_creation_claimed_at holding whatever claim
+        # the sweep had just taken before evaluate() returned arbitrate,
+        # since the (completed, in_progress) field-reset that would
+        # normally clear it never ran (the whole UPDATE was rejected
+        # up front). A held task_creation_claimed_at reads as "owned
+        # elsewhere, mid-arbitration" to every future sweep
+        # (_case_in_progress_now_complete, phase_transitions.py:2458) and
+        # is skipped unconditionally -- so the phase, and the arbitration
+        # task that was supposed to get created for it, never happens.
+        #
+        # Confirmed live: workflow fa51faca's design_review phase exhausted
+        # its 4-retry budget, got routed here while already "in_progress"
+        # with a live claim from the sweep that just ran; the rejected
+        # transition went unnoticed, the claim was never cleared, and the
+        # phase stayed permanently invisible to advancement -- development
+        # (its successor) never started, and no arbitration agent was ever
+        # dispatched. Skip the no-op transition, but still clear the claim
+        # directly (same pattern as arbitration.py's own post-dispatch
+        # clear) so a later sweep tick can pick this phase up again.
         from src.autopilot.orchestrator.phase_transitions import (
             transition_phase_execution,
         )
 
-        transition_phase_execution(
-            session, execution.phase_id, "in_progress",
-            reason="_handle_evaluation_arbitrate",
-            extra_fields={"started_at": execution.started_at},
-        )
+        if execution.status == "in_progress":
+            execution.task_creation_claimed_at = None
+        else:
+            transition_phase_execution(
+                session, execution.phase_id, "in_progress",
+                reason="_handle_evaluation_arbitrate",
+                extra_fields={"started_at": execution.started_at},
+            )
         logger.warning(
             f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
         )
