@@ -1278,4 +1278,47 @@ class WorktreeManager:
         return reclaimed, preserved, rows_fixed
 
 
+def sync_local_main_checkout(project_base_dir: str, lock_scope: str) -> None:
+    """Pull --rebase then push the LOCAL main checkout at project_base_dir
+    against its remote's base branch.
+
+    A GitHub-side merge (`gh pr merge`, whether it lands immediately or
+    later via an armed --auto merge) is a remote-only operation -- it
+    never touches this local checkout, which is what every other consumer
+    of this repo (WorktreeManager itself, other agents' worktrees, this
+    same process's own git operations) actually reads. Without this,
+    local main silently drifts behind origin/main the moment a review
+    approval merges via gh. Confirmed live: approved a feature, gh pr
+    merge succeeded, local main stayed 4+ commits behind origin/main with
+    no indication anything was wrong until a later git command in this
+    same checkout surfaced the divergence.
+
+    Locked via WorktreeManager's own per-repo merge lock (same one
+    merge_to_main uses) so this can't race a concurrent merge/sync
+    against the same main_repo -- confirmed live as a real collision
+    during the investigation that added this function.
+
+    Shared by two callers: review_feature's approval-time sync (the
+    merge landed immediately) and the background sweep that re-checks a
+    --auto-armed merge and syncs once it lands later, asynchronously.
+    """
+    from src.core.database import get_default_db_manager
+
+    wt_mgr = WorktreeManager(
+        db_manager=get_default_db_manager(),
+        repo_path=project_base_dir,
+    )
+    main_repo = wt_mgr.main_repo
+    remote_name = main_repo.remotes[0].name if main_repo.remotes else None
+    if not remote_name:
+        return
+    base_branch = wt_mgr.config.git.base_branch
+    lock_file = wt_mgr._merge_lock.acquire(lock_scope)
+    try:
+        main_repo.git.pull("--rebase", remote_name, base_branch)
+        main_repo.git.push(remote_name, base_branch)
+    finally:
+        wt_mgr._merge_lock.release(lock_file, lock_scope)
+
+
 # Backward-compatible alias for call sites that still import WorktreeManager.

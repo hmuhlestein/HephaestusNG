@@ -416,6 +416,16 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                             merged = True
                         else:
                             auto_merge_queued = True
+                            # This request returns before the merge actually
+                            # lands, so the local-main sync below (gated on
+                            # `merged`) won't run for it. Flag it so the
+                            # background sweep (_sync_local_main_for_landed_
+                            # auto_merges) can re-check and sync once GitHub
+                            # actually completes the merge -- without this,
+                            # local main silently never syncs for any
+                            # approval whose PR wasn't immediately mergeable.
+                            feature.auto_merge_sync_pending = True
+                            db.commit()
                             logger.info(
                                 f"[REVIEW] Auto-merge armed for PR {pr_url} -- "
                                 "will land once required checks pass"
@@ -565,35 +575,16 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 # indication anything was wrong until a later git command
                 # in this same checkout surfaced the divergence.
                 try:
-                    from src.core.database import (
-                        AutopilotProject,
-                        get_default_db_manager,
-                        resolve_project_for_workflow,
-                    )
-                    from src.core.worktree_manager import WorktreeManager
+                    from src.core.database import AutopilotProject, resolve_project_for_workflow
+                    from src.core.worktree_manager import sync_local_main_checkout
 
                     sync_project_id, _ = resolve_project_for_workflow(wf.id)
                     sync_project = db.query(AutopilotProject).get(sync_project_id) if sync_project_id else None
                     if sync_project and sync_project.base_dir:
-                        def _sync_local_main():
-                            wt_mgr = WorktreeManager(
-                                db_manager=get_default_db_manager(),
-                                repo_path=sync_project.base_dir,
-                            )
-                            main_repo = wt_mgr.main_repo
-                            remote_name = main_repo.remotes[0].name if main_repo.remotes else None
-                            if not remote_name:
-                                return
-                            base_branch = wt_mgr.config.git.base_branch
-                            lock_file = wt_mgr._merge_lock.acquire(f"review-approval-sync:{wf.id}")
-                            try:
-                                main_repo.git.pull("--rebase", remote_name, base_branch)
-                                main_repo.git.push(remote_name, base_branch)
-                            finally:
-                                wt_mgr._merge_lock.release(lock_file, f"review-approval-sync:{wf.id}")
-
                         loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(None, _sync_local_main)
+                        await loop.run_in_executor(
+                            None, sync_local_main_checkout, sync_project.base_dir, f"review-approval-sync:{wf.id}"
+                        )
                         logger.info(f"[REVIEW] Synced local main checkout at {sync_project.base_dir} with remote after merge")
                 except Exception as e:
                     logger.warning(f"[REVIEW] Failed to sync local main after merge: {e}")

@@ -1341,6 +1341,16 @@ class Feature(Base):
     # Pull request URL — populated by git_expert phase after creating PR
     pr_url = Column(Text, nullable=True)
 
+    # True while a review approval has armed `gh pr merge --auto` for
+    # pr_url but the merge hasn't landed yet (required checks still
+    # running) -- the immediate local-main sync review_feature performs
+    # on a merge that lands right away doesn't run for this case, so the
+    # background sweep (_sync_local_main_for_landed_auto_merges) re-checks
+    # PRs flagged here and syncs local main once the merge actually
+    # completes. Cleared once synced (or once the PR closes without
+    # merging).
+    auto_merge_sync_pending = Column(Boolean, nullable=False, default=False)
+
     # Denormalized copy of the parent AutopilotDesign.workflow_type at
     # decomposition time -- not a join, since this feature's pipeline can be
     # resumed long after the parent design row's own lifecycle is otherwise
