@@ -885,7 +885,18 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
         phase is invisible to advancement forever. Confirmed live:
         workflow fa51faca's design_review phase exhausted its retry budget
         exactly this way and stayed permanently stuck with no successor
-        ever starting."""
+        ever starting.
+
+        Asserts against a POST-ROLLBACK re-query, not the same in-memory
+        `execution` object the handler mutated: mark_phase_complete's only
+        commit choke-point (_tag_completing_task) no-ops for every action
+        except goto/retry, and its caller's finally-block closes the
+        session without committing otherwise. A same-object assertion (or
+        one relying on session_scope's own commit-on-exit) reads back
+        whatever this test itself wrote, whether or not the handler
+        actually persisted anything -- exactly the false-negative that let
+        the real bug (the clear living only in memory, discarded when the
+        real caller's session closed) ship in the first place."""
         from datetime import datetime
 
         from src.core.database import Phase, PhaseExecution
@@ -902,7 +913,7 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
             original_started_at = datetime.utcnow()
             execution.started_at = original_started_at
             execution.task_creation_claimed_at = datetime.utcnow()
-            session.flush()
+            session.commit()
 
             evaluation = EvaluationResult(
                 action=OrchestrationAction.ARBITRATE,
@@ -911,13 +922,20 @@ class TestHandleEvaluationRetryAndArbitrateReopenExecution:
             )
             result = pm._handle_evaluation_arbitrate(session, phase, execution, "summary", evaluation)
 
+            # Discard anything the handler mutated but did not itself
+            # commit, then re-query fresh -- this is what distinguishes
+            # "persisted" from "just sitting on the Python object".
+            session.rollback()
+            execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
+
             assert execution.status == "in_progress", (
                 "must stay in_progress, not silently stall on a rejected self-transition"
             )
             assert execution.started_at == original_started_at
             assert execution.task_creation_claimed_at is None, (
-                "a held claim makes every future sweep skip this phase forever -- "
-                "this is the actual live-incident failure mode, not just a wrong status"
+                "a held claim makes every future sweep skip this phase forever, and "
+                "_trigger_arbitration's own claim attempt fails against a stale non-NULL "
+                "value -- the clear must actually be committed, not just set in memory"
             )
             assert result["action"] == "arbitrate"
 

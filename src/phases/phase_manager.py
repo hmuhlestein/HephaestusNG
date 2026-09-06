@@ -1251,12 +1251,26 @@ class PhaseManager:
         # dispatched. Skip the no-op transition, but still clear the claim
         # directly (same pattern as arbitration.py's own post-dispatch
         # clear) so a later sweep tick can pick this phase up again.
+        #
+        # Must commit immediately: _tag_completing_task, mark_phase_complete's
+        # only commit choke-point, no-ops for every action except goto/retry
+        # (see its own body), and the caller's finally-block closes this
+        # session without committing otherwise -- an uncommitted clear here
+        # is silently discarded, _trigger_arbitration's own claim attempt
+        # (arbitration.py) then fails against the still-non-NULL claim, and
+        # the identical broken cycle repeats forever. Confirmed live: this
+        # exact gap left fa51faca's design_review claim visibly NULL in one
+        # read and the cycle still repeating on the next -- the in-memory
+        # clear never survived past this function returning. Same pattern
+        # as the retry_count write just above, which commits immediately
+        # for the same reason.
         from src.autopilot.orchestrator.phase_transitions import (
             transition_phase_execution,
         )
 
         if execution.status == "in_progress":
             execution.task_creation_claimed_at = None
+            session.commit()
         else:
             transition_phase_execution(
                 session, execution.phase_id, "in_progress",
