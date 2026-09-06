@@ -748,6 +748,23 @@ def migrate_review_mode_columns(engine):
         logger.warning(f"Review mode columns migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_feature_auto_merge_sync_pending_column(engine):
+    """Add features.auto_merge_sync_pending for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE features ADD COLUMN auto_merge_sync_pending BOOLEAN NOT NULL DEFAULT 0"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated features.auto_merge_sync_pending column")
+    except Exception as e:
+        logger.warning(f"features.auto_merge_sync_pending migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_agent_pending_message_column(engine):
     """Add agents.pending_message_sent_at for existing databases.
 
@@ -1580,6 +1597,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_design_spec_key", migrate_design_spec_key),
     ("_migrate_phase_execution_phase_id_unique", migrate_phase_execution_phase_id_unique),
     ("_migrate_verify_tests_command_column", migrate_verify_tests_command_column),
+    ("_migrate_feature_auto_merge_sync_pending_column", migrate_feature_auto_merge_sync_pending_column),
     # Last: repairs damage the rebuild-and-swap migrations above can do, so it
     # always sees their final state within the same startup pass.
     ("_repair_dangling_autopilot_designs_fk", repair_dangling_autopilot_designs_fk),

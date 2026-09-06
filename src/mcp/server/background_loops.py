@@ -487,6 +487,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     exercise the pipeline-resync path don't need to fake one up.
     """
     from src.autopilot.orchestrator import _resync_pipeline_registry
+    from src.autopilot.orchestrator.auto_merge_sync import _sync_local_main_for_landed_auto_merges
     from src.autopilot.orchestrator.features import (
         _clean_stale_assigned_tasks,
         _pause_stale_completed_workflows_for_review,
@@ -528,6 +529,14 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         _sync_stale_feature_statuses(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Feature-status sync error: {e}")
+
+    # Feature-table-wide -- catches a review approval whose PR wasn't
+    # immediately mergeable (gh pr merge --auto only armed it) once
+    # GitHub actually completes the merge later. See its own docstring.
+    try:
+        _sync_local_main_for_landed_auto_merges(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Auto-merge local-sync error: {e}")
 
     # Design-table-wide, same reasoning as the feature-status sync above --
     # a design whose last feature just finished has nothing left to ever

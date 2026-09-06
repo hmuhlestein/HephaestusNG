@@ -24,6 +24,60 @@ def orch_db_env(tmp_path, monkeypatch):
     return db
 
 
+@pytest.fixture
+def git_project_with_remote(tmp_path):
+    """Like TestReviewFeatureApproveLocalMergeFallback's
+    git_project_with_feature_branch, but project_dir has a real git
+    remote (a bare repo) -- lets a test simulate "a commit landed on
+    the remote's main that the local checkout doesn't have yet",
+    which is exactly what gh pr merge does: a GitHub-side, remote-only
+    operation local git never sees on its own. Module-level so it's
+    shared by TestReviewFeatureApproveSyncsLocalMainAfterMerge and
+    TestSyncLocalMainForLandedAutoMerges."""
+    import subprocess
+
+    remote_dir = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(remote_dir)], check=True, capture_output=True)
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    def _git(*args, cwd):
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    _git("init", "-b", "main", cwd=project_dir)
+    _git("config", "user.email", "t@t.com", cwd=project_dir)
+    _git("config", "user.name", "t", cwd=project_dir)
+    _git("remote", "add", "origin", str(remote_dir), cwd=project_dir)
+    (project_dir / "README.md").write_text("hello\n")
+    _git("add", "-A", cwd=project_dir)
+    _git("commit", "-m", "init", cwd=project_dir)
+    _git("push", "-u", "origin", "main", cwd=project_dir)
+
+    worktree_dir = tmp_path / "worktree"
+    _git("worktree", "add", "-b", "feature/test-branch", str(worktree_dir), cwd=project_dir)
+    (worktree_dir / "new_file.txt").write_text("feature work\n")
+    _git("add", "-A", cwd=worktree_dir)
+    _git("commit", "-m", "feature work", cwd=worktree_dir)
+    _git("push", "-u", "origin", "feature/test-branch", cwd=worktree_dir)
+
+    # Simulate gh pr merge happening remotely on GitHub: merge the
+    # feature branch into the REMOTE's main directly, through a
+    # separate clone -- project_dir's own local checkout never
+    # participates, exactly like a real gh pr merge.
+    remote_clone_dir = tmp_path / "remote_clone"
+    _git("clone", str(remote_dir), str(remote_clone_dir), cwd=tmp_path)
+    _git("config", "user.email", "t@t.com", cwd=remote_clone_dir)
+    _git("config", "user.name", "t", cwd=remote_clone_dir)
+    _git("fetch", "origin", cwd=remote_clone_dir)
+    _git("checkout", "-b", "feature/test-branch", "origin/feature/test-branch", cwd=remote_clone_dir)
+    _git("checkout", "main", cwd=remote_clone_dir)
+    _git("merge", "--no-ff", "feature/test-branch", "-m", "merge PR", cwd=remote_clone_dir)
+    _git("push", "origin", "main", cwd=remote_clone_dir)
+
+    return project_dir, worktree_dir
+
+
 def _make_workflow(
     db, wf_id, status="active", paused_by=None, paused_at=None, status_reason=None,
     paused_retry_count=0,
@@ -1460,57 +1514,6 @@ class TestReviewFeatureApproveSyncsLocalMainAfterMerge:
     live: approved a feature, gh pr merge succeeded, local main stayed 4+
     commits behind origin/main with no indication anything was wrong."""
 
-    @pytest.fixture
-    def git_project_with_remote(self, tmp_path):
-        """Like TestReviewFeatureApproveLocalMergeFallback's
-        git_project_with_feature_branch, but project_dir has a real git
-        remote (a bare repo) -- lets a test simulate "a commit landed on
-        the remote's main that the local checkout doesn't have yet",
-        which is exactly what gh pr merge does: a GitHub-side, remote-only
-        operation local git never sees on its own."""
-        import subprocess
-
-        remote_dir = tmp_path / "remote.git"
-        subprocess.run(["git", "init", "--bare", "-b", "main", str(remote_dir)], check=True, capture_output=True)
-
-        project_dir = tmp_path / "project"
-        project_dir.mkdir()
-
-        def _git(*args, cwd):
-            subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
-
-        _git("init", "-b", "main", cwd=project_dir)
-        _git("config", "user.email", "t@t.com", cwd=project_dir)
-        _git("config", "user.name", "t", cwd=project_dir)
-        _git("remote", "add", "origin", str(remote_dir), cwd=project_dir)
-        (project_dir / "README.md").write_text("hello\n")
-        _git("add", "-A", cwd=project_dir)
-        _git("commit", "-m", "init", cwd=project_dir)
-        _git("push", "-u", "origin", "main", cwd=project_dir)
-
-        worktree_dir = tmp_path / "worktree"
-        _git("worktree", "add", "-b", "feature/test-branch", str(worktree_dir), cwd=project_dir)
-        (worktree_dir / "new_file.txt").write_text("feature work\n")
-        _git("add", "-A", cwd=worktree_dir)
-        _git("commit", "-m", "feature work", cwd=worktree_dir)
-        _git("push", "-u", "origin", "feature/test-branch", cwd=worktree_dir)
-
-        # Simulate gh pr merge happening remotely on GitHub: merge the
-        # feature branch into the REMOTE's main directly, through a
-        # separate clone -- project_dir's own local checkout never
-        # participates, exactly like a real gh pr merge.
-        remote_clone_dir = tmp_path / "remote_clone"
-        _git("clone", str(remote_dir), str(remote_clone_dir), cwd=tmp_path)
-        _git("config", "user.email", "t@t.com", cwd=remote_clone_dir)
-        _git("config", "user.name", "t", cwd=remote_clone_dir)
-        _git("fetch", "origin", cwd=remote_clone_dir)
-        _git("checkout", "-b", "feature/test-branch", "origin/feature/test-branch", cwd=remote_clone_dir)
-        _git("checkout", "main", cwd=remote_clone_dir)
-        _git("merge", "--no-ff", "feature/test-branch", "-m", "merge PR", cwd=remote_clone_dir)
-        _git("push", "origin", "main", cwd=remote_clone_dir)
-
-        return project_dir, worktree_dir
-
     @pytest.mark.asyncio
     async def test_syncs_local_main_after_gh_pr_merge(self, orch_db_env, git_project_with_remote):
         project_dir, worktree_dir = git_project_with_remote
@@ -1554,3 +1557,102 @@ class TestReviewFeatureApproveSyncsLocalMainAfterMerge:
         assert (project_dir / "new_file.txt").exists(), (
             "local main must be pulled up to date after gh pr merge succeeds remotely"
         )
+
+
+class TestSyncLocalMainForLandedAutoMerges:
+    """gh pr merge --auto can ARM a merge instead of landing it immediately
+    (required checks still running) -- review_feature's own immediate-merge
+    sync (tested above) never runs for that request, since the merge hasn't
+    happened yet when it returns. Feature.auto_merge_sync_pending flags
+    that case; this sweep re-checks flagged PRs each tick and performs the
+    same local-main sync once the merge actually lands."""
+
+    def _seed(self, orch_db_env, project_dir, worktree_dir, pending=True):
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+                pr_url="https://github.com/org/repo/pull/1",
+                auto_merge_sync_pending=pending,
+            ))
+
+    def _flag(self, orch_db_env):
+        from src.core.database import Feature
+
+        with orch_db_env.session_scope() as session:
+            return session.query(Feature).filter_by(id="feat-1").first().auto_merge_sync_pending
+
+    def test_syncs_and_clears_flag_once_merge_lands(self, orch_db_env, git_project_with_remote):
+        project_dir, worktree_dir = git_project_with_remote
+        self._seed(orch_db_env, project_dir, worktree_dir)
+        assert not (project_dir / "new_file.txt").exists()
+
+        from unittest.mock import MagicMock, patch
+
+        from src.autopilot.orchestrator.auto_merge_sync import _sync_local_main_for_landed_auto_merges
+        from src.services.github_pr_status import PRStatus
+
+        landed = PRStatus(url="https://github.com/org/repo/pull/1", state="MERGED", ci_conclusion="passing", review_decision="APPROVED")
+        with patch("src.services.github_pr_status.get_pr_status", return_value=landed):
+            _sync_local_main_for_landed_auto_merges(MagicMock())
+
+        assert (project_dir / "new_file.txt").exists(), (
+            "sweep must pull the now-landed merge into local main"
+        )
+        assert self._flag(orch_db_env) is False
+
+    def test_leaves_flag_set_while_pr_still_open(self, orch_db_env, git_project_with_remote):
+        project_dir, worktree_dir = git_project_with_remote
+        self._seed(orch_db_env, project_dir, worktree_dir)
+
+        from unittest.mock import MagicMock, patch
+
+        from src.autopilot.orchestrator.auto_merge_sync import _sync_local_main_for_landed_auto_merges
+        from src.services.github_pr_status import PRStatus
+
+        still_open = PRStatus(url="https://github.com/org/repo/pull/1", state="OPEN", ci_conclusion="pending", review_decision=None)
+        with patch("src.services.github_pr_status.get_pr_status", return_value=still_open):
+            _sync_local_main_for_landed_auto_merges(MagicMock())
+
+        assert not (project_dir / "new_file.txt").exists()
+        assert self._flag(orch_db_env) is True, "still-pending merges must be re-checked next tick, not dropped"
+
+    def test_clears_flag_without_syncing_when_pr_closed_unmerged(self, orch_db_env, git_project_with_remote):
+        project_dir, worktree_dir = git_project_with_remote
+        self._seed(orch_db_env, project_dir, worktree_dir)
+
+        from unittest.mock import MagicMock, patch
+
+        from src.autopilot.orchestrator.auto_merge_sync import _sync_local_main_for_landed_auto_merges
+        from src.services.github_pr_status import PRStatus
+
+        abandoned = PRStatus(url="https://github.com/org/repo/pull/1", state="CLOSED", ci_conclusion="failing", review_decision=None)
+        with patch("src.services.github_pr_status.get_pr_status", return_value=abandoned):
+            _sync_local_main_for_landed_auto_merges(MagicMock())
+
+        assert not (project_dir / "new_file.txt").exists()
+        assert self._flag(orch_db_env) is False, "an abandoned PR must stop being polled, not sync"
+
+    def test_leaves_flag_set_for_retry_when_sync_fails(self, orch_db_env, git_project_with_remote):
+        project_dir, worktree_dir = git_project_with_remote
+        self._seed(orch_db_env, project_dir, worktree_dir)
+
+        from unittest.mock import MagicMock, patch
+
+        from src.autopilot.orchestrator.auto_merge_sync import _sync_local_main_for_landed_auto_merges
+        from src.services.github_pr_status import PRStatus
+
+        landed = PRStatus(url="https://github.com/org/repo/pull/1", state="MERGED", ci_conclusion="passing", review_decision="APPROVED")
+        with patch("src.services.github_pr_status.get_pr_status", return_value=landed), \
+             patch("src.core.worktree_manager.sync_local_main_checkout", side_effect=RuntimeError("git push rejected")):
+            _sync_local_main_for_landed_auto_merges(MagicMock())
+
+        assert self._flag(orch_db_env) is True, "a failed sync must retry next tick, not silently give up"
