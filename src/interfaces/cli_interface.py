@@ -685,7 +685,29 @@ class ClaudeCodeAgent(CLIAgentInterface):
             return False
 
     def get_health_check_pattern(self) -> str:
-        return r"(Assistant:|Human:|›)"
+        # Claude Code's own input prompt (U+276F) and tool-call bullet
+        # (U+23FA). Measured against a live v2.1.263 pane: 3 and 28
+        # occurrences respectively, against ZERO for every marker this
+        # pattern used to carry -- "Assistant:", "Human:" and U+203A are a
+        # different CLI's vocabulary (see the pi/opencode/droid patterns,
+        # where U+203A is genuinely correct) and none of them has ever
+        # appeared in Claude Code output.
+        #
+        # So _wait_for_cli_ready could never match, with three consequences
+        # that all looked like something else: every claude launch burned
+        # the full 25s ready timeout; cli_ready was permanently False, which
+        # left _detect_launch_failure running on EVERY launch instead of
+        # being skipped as its own docstring intends ("Callers MUST skip
+        # this entirely once _wait_for_cli_ready has already confirmed the
+        # CLI is ready") -- so a stray "no such file or directory" anywhere
+        # in 15 lines of a working agent's output could kill it; and the
+        # launch-success hook that records which CLI version works never
+        # fired, so a real binary swap had nothing to be compared against.
+        #
+        # The old markers are kept rather than replaced: they cost nothing
+        # and a pattern this cheap should not also be a compatibility
+        # decision. IDB-2482.
+        return r"(Assistant:|Human:|❯|⏺|›)"
 
     def format_goal_command(self, condition: str) -> str:
         return f"/goal {condition}"
