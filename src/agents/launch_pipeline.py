@@ -523,8 +523,27 @@ class LaunchPipeline:
                         f"{_clean(launch_check_text)}"
                     )
                     continue
-                logger.error(f"{cli_type} launch command failed in tmux session {session_name}: {_clean(launch_check_text)}")
-                raise Exception(f"{cli_type} CLI failed to start -- shell reported the launch command was not found")
+                # Capture what was true of the CLI's binary right now,
+                # before anything else moves. This failure is most often a
+                # binary swap (the CLI replacing itself in place), and that
+                # is invisible after the fact -- by the time anyone reads
+                # the log the binary works perfectly again and nothing
+                # recorded that it had changed. Four runs were lost to
+                # exactly this with no log line able to say so. The same
+                # call also starts the cooldown that stops the next
+                # attempts landing inside the same window; see
+                # src/agents/cli_launch_backoff.py and IDB-2482.
+                from src.agents.cli_launch_backoff import note_launch_failure
+
+                facts = note_launch_failure(cli_type)
+                logger.error(
+                    f"{cli_type} launch command failed in tmux session {session_name} "
+                    f"[{facts.describe()}]: {_clean(launch_check_text)}"
+                )
+                raise Exception(
+                    f"{cli_type} CLI failed to start -- shell reported the launch "
+                    f"command was not found ({facts.describe()})"
+                )
 
     # Foreground process names that mean "nothing but the login shell is
     # running in this pane" -- see _pane_has_returned_to_shell.
@@ -2476,6 +2495,23 @@ class LaunchPipeline:
 
             try:
                 cli_ready = await self._wait_for_cli_ready(pane, cli_agent, restart_cli_type, agent_id)
+                if cli_ready:
+                    # Symmetric with the _detect_launch_failure call below,
+                    # which records a failure and starts the launch
+                    # cooldown: a restart that came up is equally good
+                    # evidence that the CLI is healthy again, so it clears
+                    # that cooldown and seeds the version baseline a later
+                    # failure gets compared against. Without this the
+                    # restart path could only ever add to the cooldown,
+                    # never retire it. See src/agents/cli_launch_backoff.py.
+                    # Offloaded to a thread for the same reason as the
+                    # create path's identical call: the first probe per CLI
+                    # shells out to `<cli> --version`.
+                    from src.agents.cli_launch_backoff import note_launch_success
+
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, note_launch_success, restart_cli_type
+                    )
                 term_race_result = await self._check_termination_race(
                     agent_id,
                     restart_task_id,

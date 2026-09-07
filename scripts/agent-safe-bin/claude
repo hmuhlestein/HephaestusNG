@@ -19,24 +19,66 @@
 # touching the user's own interactive `claude` sessions elsewhere -- this
 # directory is only ever prepended to PATH for that one launch command, not
 # the user's shell rc files or global PATH.
+#
+# This wrapper is now the SECOND line of defence, not the first: the
+# orchestrator sets DISABLE_AUTOUPDATER=1 in the launch command itself
+# (AGENT_LAUNCH_ENV_PREFIX, src/interfaces/cli_interface.py), which does
+# not depend on this file being present or on this directory really being
+# on PATH. What this still adds is coverage for `claude` invocations the
+# agent makes for ITSELF, downstream of its own launch. IDB-2482.
 
 set -euo pipefail
 
+# How long to keep looking for the real binary before giving up. A swap
+# replaces a ~200 MB binary, so the name can be unresolvable for seconds
+# at a time; exiting the instant it isn't found turns a transient window
+# into a hard launch failure. Waiting here is the cheapest possible place
+# to ride one out -- the alternative costs a whole agent launch.
+: "${CLAUDE_WRAPPER_RESOLVE_TIMEOUT:=60}"
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Find the real claude binary, skipping past this wrapper's own directory
 # so we don't recurse into ourselves.
+resolve_real_claude() {
+    local dir
+    local -a path_dirs
+    IFS=':' read -ra path_dirs <<< "$PATH"
+    for dir in "${path_dirs[@]}"; do
+        [[ "$dir" == "$self_dir" ]] && continue
+        if [[ -x "$dir/claude" ]]; then
+            printf '%s\n' "$dir/claude"
+            return 0
+        fi
+    done
+    return 1
+}
+
 real_claude=""
-IFS=':' read -ra path_dirs <<< "$PATH"
-for dir in "${path_dirs[@]}"; do
-    if [[ "$dir" == "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" ]]; then
-        continue
-    fi
-    if [[ -x "$dir/claude" ]]; then
-        real_claude="$dir/claude"
+deadline=$(( SECONDS + CLAUDE_WRAPPER_RESOLVE_TIMEOUT ))
+while :; do
+    if real_claude="$(resolve_real_claude)"; then
         break
     fi
+    (( SECONDS >= deadline )) && break
+    # Re-scan rather than trusting one miss: the binary is being replaced
+    # in place, so the same PATH directory that has nothing in it now will
+    # have the new binary in it shortly.
+    sleep 1
 done
+
 if [[ -z "$real_claude" ]]; then
-    real_claude="/usr/local/bin/claude"
+    # Deliberately NOT a fallback to a guessed path. This used to exec
+    # /usr/local/bin/claude, which does not exist on a Homebrew or npm
+    # global install -- so on the very machines that hit the swap, the
+    # "fallback" produced the exact "command not found" this wrapper was
+    # written to prevent, from a path that was never right. Say what
+    # actually happened instead, and exit 127 so the orchestrator's
+    # _detect_launch_failure still classifies it as a launch failure and
+    # applies its retry spacing (src/agents/cli_launch_backoff.py).
+    echo "claude: command not found after waiting ${CLAUDE_WRAPPER_RESOLVE_TIMEOUT}s for it to resolve on PATH" >&2
+    echo "claude: no executable named 'claude' on PATH outside $self_dir -- if this is not a mid-update binary swap, Claude Code is not installed" >&2
+    exit 127
 fi
 
 export DISABLE_AUTOUPDATER=1

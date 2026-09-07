@@ -3316,3 +3316,111 @@ class TestCreateAgentForTaskHandlesNullEnrichedDescription:
 # that actually shipped (see design_docs/multi_repo_project_design.md).
 # REQ-19/20 (feature_architect hard-rule prompt text) remain
 # unimplemented -- out of scope here until they land with their own spec.
+
+
+class TestLaunchFailureRecordsTheCliVersion:
+    """A launch failure must carry the CLI version captured at failure
+    time, and must start the launch-retry cooldown.
+
+    Both halves close the same gap. A CLI that replaces its own binary
+    mid-run leaves no trace: by the time anyone reads the log the binary
+    works perfectly again and nothing recorded that it had changed, so four
+    lost runs all looked like unexplained launch failures. And with the
+    orchestrator's sweep ticking every 15s, the retries that followed all
+    landed inside the same swap window -- the phase reported itself
+    exhausted for a cause that had already resolved. IDB-2482.
+    """
+
+    @staticmethod
+    def _dead_pane():
+        """A pane back at a bare shell with "command not found" in its
+        scrollback -- a real launch failure, not a healthy CLI whose own
+        output happens to contain the phrase."""
+        pane = MagicMock()
+
+        def _pane_cmd(cmd, *args, **kwargs):
+            if cmd == "capture-pane":
+                return MagicMock(stdout=["zsh: command not found: claude"])
+            return MagicMock(stdout=["zsh"])
+
+        pane.cmd.side_effect = _pane_cmd
+        return pane
+
+    @staticmethod
+    def _cli_agent():
+        cli_agent = MagicMock()
+        cli_agent.get_launch_rejection_patterns.return_value = [
+            r"command not found",
+            r"No such file or directory",
+        ]
+        return cli_agent
+
+    def test_the_raised_error_names_the_version_seen_at_failure(
+        self, mock_agent_manager, monkeypatch
+    ):
+        """"Identifiable from the logs alone" is the whole point -- the
+        version has to be in the message the failure carries, not only in a
+        separate line someone has to think to go looking for."""
+        from src.agents import cli_launch_backoff
+
+        cli_launch_backoff.reset_for_tests()
+        monkeypatch.setattr(
+            cli_launch_backoff, "capture_cli_version", lambda _c: "2.1.259 (Claude Code)"
+        )
+        monkeypatch.setattr(
+            "src.interfaces.cli_interface.is_cli_tool_available", lambda _c: True
+        )
+        try:
+            with pytest.raises(Exception, match="2.1.259"):
+                mock_agent_manager._launch._detect_launch_failure(
+                    self._dead_pane(), self._cli_agent(), "claude", "session-z"
+                )
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+    def test_a_launch_failure_starts_the_retry_cooldown(
+        self, mock_agent_manager, monkeypatch
+    ):
+        from src.agents import cli_launch_backoff
+
+        cli_launch_backoff.reset_for_tests()
+        monkeypatch.setattr(cli_launch_backoff, "cooldown_seconds", lambda: 90)
+        monkeypatch.setattr(
+            cli_launch_backoff, "capture_cli_version", lambda _c: "2.1.259 (Claude Code)"
+        )
+        try:
+            assert cli_launch_backoff.cooldown_remaining() == 0.0
+            with pytest.raises(Exception, match="failed to start"):
+                mock_agent_manager._launch._detect_launch_failure(
+                    self._dead_pane(), self._cli_agent(), "claude", "session-z"
+                )
+            assert cli_launch_backoff.cooldown_remaining("claude") > 0
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+    def test_a_confirmation_dialog_does_not_start_the_cooldown(
+        self, mock_agent_manager, monkeypatch
+    ):
+        """The first-run confirmation dialog is a launch that got FURTHER
+        than the binary -- the CLI started fine and is sitting on a prompt.
+        Treating it as a binary swap would hold every later launch for a
+        cooldown that has nothing to do with the fault, and would hide a
+        problem that needs a different fix entirely."""
+        from src.agents import cli_launch_backoff
+
+        cli_launch_backoff.reset_for_tests()
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(stdout=["Bypass Permissions mode?"])
+        cli_agent = MagicMock()
+        cli_agent.get_launch_rejection_patterns.return_value = [
+            r"command not found",
+            r"Bypass Permissions mode",
+        ]
+        try:
+            with pytest.raises(Exception, match="confirmation dialog"):
+                mock_agent_manager._launch._detect_launch_failure(
+                    pane, cli_agent, "claude", "session-z"
+                )
+            assert cli_launch_backoff.cooldown_remaining() == 0.0
+        finally:
+            cli_launch_backoff.reset_for_tests()

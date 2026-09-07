@@ -304,6 +304,18 @@ class AgentConfig(_ConfigSection):
         self.max_health_check_failures = agents.get("max_health_failures", 3)
         self.agent_termination_delay = agents.get("termination_delay", 5)
 
+        # Gap enforced between agent-launch attempts once a launch has
+        # failed in a way consistent with the CLI having replaced its own
+        # binary mid-run. The orchestrator's own sweep ticks every 15s
+        # (POLL_INTERVAL, phase_transitions.py), which is short enough
+        # that a task's entire retry budget lands inside one ~200 MB
+        # binary swap and the phase exhausts it without a single attempt
+        # ever being made outside the window. See
+        # src/agents/cli_launch_backoff.py and IDB-2482.
+        self.cli_launch_retry_cooldown_seconds = agents.get(
+            "cli_launch_retry_cooldown_seconds", 90
+        )
+
         self.agent_max_retries = 3
         self.tmux_output_lines = (
             200  # Used by Guardian/monitoring for performance (UI uses 2000)
@@ -324,6 +336,10 @@ class AgentConfig(_ConfigSection):
         if os.getenv("MAX_HEALTH_CHECK_FAILURES"):
             self.max_health_check_failures = int(
                 os.getenv("MAX_HEALTH_CHECK_FAILURES")
+            )
+        if os.getenv("CLI_LAUNCH_RETRY_COOLDOWN_SECONDS"):
+            self.cli_launch_retry_cooldown_seconds = int(
+                os.getenv("CLI_LAUNCH_RETRY_COOLDOWN_SECONDS")
             )
 
 
