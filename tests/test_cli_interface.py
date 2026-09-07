@@ -1,6 +1,7 @@
 """Tests for CLI agent interface command construction."""
 
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -421,3 +422,50 @@ class TestAgentLaunchDisablesTheAutoUpdater:
         assert completed.returncode == 0, completed.stderr
         assert "DISABLE_AUTOUPDATER=1" in completed.stdout
         assert "unset" not in completed.stdout
+
+
+class TestClaudeReadyPatternMatchesRealOutput:
+    """ClaudeCodeAgent's health-check pattern has to match what Claude Code
+    actually renders, or _wait_for_cli_ready can never succeed.
+
+    It previously carried "Assistant:", "Human:" and U+203A -- a different
+    CLI's vocabulary (U+203A is genuinely correct for pi/opencode/droid).
+    None has ever appeared in Claude Code output, so the pattern never
+    matched, and that failure was silent in three separate ways: every
+    launch burned the full 25s ready timeout; cli_ready stayed False, so
+    _detect_launch_failure ran on every launch rather than being skipped as
+    its own docstring intends, leaving any stray "no such file or
+    directory" in a working agent's output able to kill it; and the
+    launch-success hook that records the working CLI version never fired,
+    so a real binary swap had no baseline to be compared against.
+    IDB-2482.
+    """
+
+    # Verbatim from a live Claude Code v2.1.263 pane during an agent launch.
+    LIVE_PANE = (
+        "▐▛███▛█   Claude Code v2.1.263\n"
+        "▝▜██████▀  Sonnet 5 with medium effort · Claude Team\n"
+        "  ▝▝ ▝▝    ~/Projects/ic-heph-trial/.worktrees/wt_feature_architect\n"
+        "\n"
+        "❯ Task ID: aa6e0e7b-b895-4a52-bb20-5046de97bc18\n"
+        "\n"
+        "⏺ Read(/tmp/x/.hephaestus/tasks/aa6e0e7b.md)\n"
+        "  ⎿ Read 229 lines\n"
+    )
+
+    def test_matches_a_real_claude_code_pane(self):
+        pattern = ClaudeCodeAgent().get_health_check_pattern()
+        assert re.search(pattern, self.LIVE_PANE)
+
+    def test_the_old_markers_alone_would_not_have_matched(self):
+        """Characterizes the bug: this is what the pattern used to be, and
+        it finds nothing in the pane above."""
+        assert not re.search(r"(Assistant:|Human:|›)", self.LIVE_PANE)
+
+    def test_does_not_match_a_bare_shell_prompt(self):
+        """The pattern gates whether launch-failure detection is skipped, so
+        matching a shell prompt would suppress detection for a launch that
+        never started the CLI at all."""
+        pattern = ClaudeCodeAgent().get_health_check_pattern()
+        assert not re.search(pattern, "tresic@Justuss-MacBook-Pro vcon-pipeline % ")
+        assert not re.search(pattern, "user@host ~/project $ ")
