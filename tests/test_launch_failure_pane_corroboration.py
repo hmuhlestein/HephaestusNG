@@ -18,9 +18,15 @@ dead-pane case (the shell really did reject the command) is still
 detected correctly.
 """
 
+import shutil
+import subprocess
+import time
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
+
+from src.agents.launch_pipeline import LaunchPipeline
 
 from src.core.database import DatabaseManager
 
@@ -228,3 +234,106 @@ class TestPaneHasReturnedToShell:
         pane = MagicMock()
         pane.cmd.side_effect = RuntimeError("boom")
         assert launch_pipeline._pane_has_returned_to_shell(pane) is True
+
+
+class TestSubshellLaunchShapeDoesNotReadAsABareShell:
+    """_pane_has_returned_to_shell must not call a `(a || b)` subshell
+    wrapper "back at the shell" while the CLI runs underneath it.
+
+    ClaudeCodeAgent emits `(claude --session-id X ... || claude --resume X
+    ...)` whenever a session_id is set -- essentially every phase agent. A
+    shell cannot exec-optimize a subshell whose second branch it may still
+    need to run, so it stays in the foreground and tmux reports the SHELL
+    as pane_current_command for the whole life of a healthy agent. This
+    check therefore returned True unconditionally for that shape, reducing
+    itself to the bare substring match it exists to corroborate.
+
+    Observed live, twice in one run: an agent that had read its task file
+    and set its own goal was killed as "failed to start" because Claude
+    Code printed a failing MCP server's ENOENT ("no such file or
+    directory") into the pane. IDB-2482.
+    """
+
+    @staticmethod
+    def _pane(current_command, pane_pid="4242"):
+        pane = MagicMock()
+
+        def _cmd(*args, **kwargs):
+            fmt = args[-1] if args else ""
+            if "pane_current_command" in fmt:
+                return MagicMock(stdout=[current_command])
+            if "pane_pid" in fmt:
+                return MagicMock(stdout=[pane_pid])
+            return MagicMock(stdout=[])
+
+        pane.cmd.side_effect = _cmd
+        return pane
+
+    def test_a_shell_with_a_live_child_has_not_returned_to_a_prompt(self, monkeypatch):
+        monkeypatch.setattr(
+            LaunchPipeline, "_pane_shell_has_live_children", staticmethod(lambda _p: True)
+        )
+        assert LaunchPipeline._pane_has_returned_to_shell(self._pane("zsh")) is False
+
+    def test_a_shell_with_no_children_is_a_bare_prompt(self, monkeypatch):
+        monkeypatch.setattr(
+            LaunchPipeline, "_pane_shell_has_live_children", staticmethod(lambda _p: False)
+        )
+        assert LaunchPipeline._pane_has_returned_to_shell(self._pane("zsh")) is True
+
+    def test_a_non_shell_foreground_still_short_circuits(self, monkeypatch):
+        """The pre-existing fast path: a CLI in the foreground under its own
+        name never needs the child probe at all."""
+        def _boom(_p):
+            raise AssertionError("must not probe children when the CLI is in the foreground")
+
+        monkeypatch.setattr(
+            LaunchPipeline, "_pane_shell_has_live_children", staticmethod(_boom)
+        )
+        assert LaunchPipeline._pane_has_returned_to_shell(self._pane("node")) is False
+
+    def test_a_broken_child_probe_defers_to_the_substring_match(self):
+        """Bias has to match the caller's: a failed probe may fail to rescue
+        a false positive, but must never suppress a real launch failure."""
+        pane = self._pane("zsh", pane_pid="not-a-pid")
+        assert LaunchPipeline._pane_shell_has_live_children(pane) is False
+        assert LaunchPipeline._pane_has_returned_to_shell(pane) is True
+
+    @pytest.mark.skipif(
+        shutil.which("tmux") is None, reason="tmux not installed"
+    )
+    def test_against_real_tmux_the_two_launch_shapes_differ(self):
+        """The measurement this whole fix rests on, run for real rather than
+        asserted from memory: the subshell shape reports a shell with a live
+        child, a bare command reports itself."""
+        session = f"heptest_{uuid.uuid4().hex[:8]}"
+
+        def _tmux(*args):
+            return subprocess.run(
+                ["tmux", *args], capture_output=True, text=True, timeout=10
+            )
+
+        def _foreground():
+            return _tmux(
+                "display-message", "-p", "-t", session, "#{pane_current_command}"
+            ).stdout.strip()
+
+        try:
+            _tmux("new-session", "-d", "-s", session, "sh")
+            time.sleep(1)
+            _tmux("send-keys", "-t", session, "(sleep 30 || sleep 1)", "Enter")
+            time.sleep(2)
+            subshell_fg = _foreground()
+            pane_pid = _tmux(
+                "display-message", "-p", "-t", session, "#{pane_pid}"
+            ).stdout.strip()
+            children = subprocess.run(
+                ["pgrep", "-P", pane_pid], capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+        finally:
+            _tmux("kill-session", "-t", session)
+
+        # The foreground is the shell -- which is exactly why the old check
+        # was useless here -- but the shell has a live child.
+        assert subshell_fg in LaunchPipeline._SHELL_PROCESS_NAMES, subshell_fg
+        assert children, "expected a live child under the subshell wrapper"

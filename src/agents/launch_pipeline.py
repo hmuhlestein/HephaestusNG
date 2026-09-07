@@ -562,6 +562,30 @@ class LaunchPipeline:
         substrings can't trip this -- its own process name (or its
         interpreter's, e.g. "node"/"python3") would show instead of a shell.
 
+        That last sentence holds only for a launch command that is a single
+        command. It is FALSE for the `(a || b)` shape ClaudeCodeAgent's
+        get_launch_command emits whenever a session_id is set -- i.e. for
+        essentially every phase agent. A shell cannot exec-optimize a
+        subshell whose second branch it may still need to run, so it stays
+        in the foreground with the CLI as its child, and
+        `pane_current_command` reports the SHELL for the entire life of a
+        perfectly healthy agent. Measured directly: `(sleep 120 || sleep 1)`
+        reports "zsh" with a live child, where a bare `sleep 120` reports
+        "sleep". For the launch shape that matters most, this check
+        therefore returned True unconditionally -- silently reducing itself
+        to the bare substring match it exists to corroborate.
+
+        Observed live, twice in one run: an agent that had already read its
+        task file, listed its worktree and set its own goal was killed as
+        "failed to start" because Claude Code had printed a failing MCP
+        server's ENOENT ("no such file or directory") into the pane. The
+        agent was working. The phrase was in someone else's error message.
+
+        So a foreground shell only counts as "back at a bare prompt" when it
+        has no live children. A shell still parenting something has regained
+        nothing -- whatever it spawned is exactly what this is trying to
+        detect the absence of.
+
         This is the closest equivalent available here to checking the
         launch command's own exit status: the command runs inside a tmux
         pane's shell via send_keys, not as a Python subprocess this code
@@ -584,9 +608,45 @@ class LaunchPipeline:
             name = (current_command[0] if current_command else "").strip().lower()
             if not name:
                 return True
-            return name in cls._SHELL_PROCESS_NAMES
+            if name not in cls._SHELL_PROCESS_NAMES:
+                return False
+            return not cls._pane_shell_has_live_children(pane)
         except Exception:
             return True
+
+    @staticmethod
+    def _pane_shell_has_live_children(pane) -> bool:
+        """Whether the pane's foreground shell still has a child process.
+
+        Distinguishes a shell sitting at a bare prompt (no children) from a
+        shell that is the `(a || b)` subshell wrapper with the CLI running
+        underneath it -- see _pane_has_returned_to_shell for why
+        pane_current_command alone cannot tell those apart.
+
+        Errs toward False (no children -> the caller concludes "back at the
+        shell" and defers to the substring match) on any probe failure,
+        matching its caller's own bias: a broken probe must never be able to
+        suppress a genuine launch failure, only fail to rescue a false
+        positive. pgrep + a tmux format read, the same shell-out idiom
+        terminator.py already uses on #{pane_pid}.
+        """
+        import subprocess
+
+        try:
+            pid_out = pane.cmd("display-message", "-p", "#{pane_pid}").stdout
+            pane_pid = (pid_out[0] if pid_out else "").strip()
+            if not pane_pid.isdigit():
+                return False
+            result = subprocess.run(
+                ["pgrep", "-P", pane_pid],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception as e:
+            logger.debug(f"Could not check pane shell's children: {e}")
+            return False
+        # pgrep exits 1 with no output when there are simply no matches --
+        # that is the "bare prompt" answer, not an error.
+        return bool((result.stdout or "").strip())
 
     async def _wait_for_cli_ready(
         self,
