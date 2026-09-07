@@ -9,7 +9,14 @@ from unittest.mock import patch
 
 import pytest
 
-from src.interfaces.cli_interface import AGENT_SAFE_BIN_DIR, ClaudeCodeAgent, CodexAgent, LaunchResult
+from src.interfaces.cli_interface import (
+    AGENT_LAUNCH_ENV_PREFIX,
+    AGENT_LAUNCH_ENV_STATEMENT,
+    CLI_AGENTS,
+    ClaudeCodeAgent,
+    CodexAgent,
+    LaunchResult,
+)
 
 
 class TestClaudeSessionExists:
@@ -71,7 +78,7 @@ class TestGetLaunchCommandSessionOrdering:
                 session_id="hephaestus-proj-design-role-abcd1234",
                 working_directory="/tmp/some/worktree",
             )
-        assert result.command.startswith('(PATH="')
+        assert result.command.startswith(f"({AGENT_LAUNCH_ENV_PREFIX} claude ")
         assert '" claude --resume ' in result.command
         assert '" claude --session-id ' in result.command
         assert " || " in result.command
@@ -87,7 +94,7 @@ class TestGetLaunchCommandSessionOrdering:
                 session_id="hephaestus-proj-design-role-abcd1234",
                 working_directory="/tmp/some/worktree",
             )
-        assert result.command.startswith('(PATH="')
+        assert result.command.startswith(f"({AGENT_LAUNCH_ENV_PREFIX} claude ")
         assert '" claude --session-id ' in result.command
         assert '" claude --resume ' in result.command
         assert " || " in result.command
@@ -106,7 +113,7 @@ class TestGetLaunchCommandSessionOrdering:
                 session_id="hephaestus-proj-design-role-abcd1234",
             )
         mock_exists.assert_not_called()
-        assert result.command.startswith('(PATH="')
+        assert result.command.startswith(f"({AGENT_LAUNCH_ENV_PREFIX} claude ")
         assert '" claude --session-id ' in result.command
 
 
@@ -215,7 +222,7 @@ class TestCodexAgent:
         )
 
         assert "codex resume 019ff292-2164-74b2-8f9a-01b68469cd99" in result.command
-        assert result.command.startswith(f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH"; (')
+        assert result.command.startswith(f"{AGENT_LAUNCH_ENV_STATEMENT} (")
         assert "|| codex --dangerously-bypass-approvals-and-sandbox" in result.command
         subprocess.run(["bash", "-n", "-c", result.command], check=True)
 
@@ -278,3 +285,139 @@ class TestCodexAgent:
         CodexAgent().record_session("heph-session", str(working_directory), time.time())
 
         assert CodexAgent._saved_session_id("heph-session", str(working_directory)) is None
+
+
+class TestAgentLaunchDisablesTheAutoUpdater:
+    """Every agent Hephaestus launches must run with DISABLE_AUTOUPDATER=1,
+    set by the orchestrator in the launch command itself.
+
+    A CLI that updates itself mid-run replaces its own binary in place, and
+    for the few seconds that takes its name doesn't resolve -- any agent
+    launching in that window dies on the shell's "command not found"
+    (_detect_launch_failure, launch_pipeline.py). Observed live ending four
+    separate runs across CLI versions 2.1.258 -> .259 -> .260, one of them
+    4.5 hours in.
+
+    scripts/agent-safe-bin/claude also sets this and is kept as a second
+    line of defence, but it cannot be the primary mechanism: it only fires
+    if AGENT_SAFE_BIN_DIR is genuinely on PATH and genuinely contains the
+    wrapper, and `scripts/` is not part of the built package (pyproject.toml
+    ships `src` only) -- so on a non-editable install that directory does
+    not exist, the PATH prefix is inert, and `claude` resolves straight to
+    the real binary with the wrapper never running. A variable assignment
+    in front of the command has no such failure mode. IDB-2482.
+    """
+
+    @pytest.mark.parametrize("cli_type", sorted(CLI_AGENTS))
+    def test_every_registered_cli_launches_with_the_updater_disabled(self, cli_type):
+        """Parametrized over the registry rather than a hand-written list,
+        so a CLI added to CLI_AGENTS without the shared prefix fails here
+        instead of shipping a launch path that can still be swapped out
+        from under itself."""
+        result = CLI_AGENTS[cli_type]().get_launch_command(
+            system_prompt="do the thing", task_id="task-1"
+        )
+        assert "DISABLE_AUTOUPDATER=1" in result.command
+
+    def test_the_statement_form_exports_rather_than_assigning(self):
+        """The `(a || b)` launch shapes set their environment up front
+        instead of prefixing one command, and there a bare assignment is
+        not enough: PATH survives because it is already exported, but
+        DISABLE_AUTOUPDATER would be a shell-local variable the CLI process
+        never sees -- silently leaving the auto-updater on for exactly the
+        CLIs that use this form."""
+        assert AGENT_LAUNCH_ENV_STATEMENT.startswith("export DISABLE_AUTOUPDATER=1;")
+
+    def _stub_cli(self, bin_dir, name):
+        """A fake CLI that reports the env var it was actually launched
+        with, so these tests assert on what reaches the process rather than
+        on the text of the command string."""
+        stub = bin_dir / name
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'echo "DISABLE_AUTOUPDATER=${DISABLE_AUTOUPDATER:-unset}"\n'
+        )
+        stub.chmod(0o755)
+        return stub
+
+    def _run(self, command, bin_dir):
+        return subprocess.run(
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
+            env={"PATH": f"{bin_dir}:/bin:/usr/bin"},
+        )
+
+    def test_the_env_var_reaches_the_launched_claude_process(self, tmp_path):
+        self._stub_cli(tmp_path, "claude")
+        with patch.object(
+            ClaudeCodeAgent, "_claude_session_exists", return_value=False
+        ):
+            result = ClaudeCodeAgent().get_launch_command(
+                system_prompt="do the thing",
+                task_id="task-1",
+                session_id="hephaestus-proj-design-role-abcd1234",
+                working_directory=str(tmp_path),
+            )
+
+        completed = self._run(result.command, tmp_path)
+        assert completed.returncode == 0, completed.stderr
+        assert "DISABLE_AUTOUPDATER=1" in completed.stdout
+
+    def test_the_env_var_reaches_both_halves_of_the_session_fallback(self, tmp_path):
+        """Claude's launch command is `(--session-id … || --resume …)`. The
+        second half runs precisely when the first has already failed, which
+        is the retry that most needs the updater off -- a prefix applied to
+        only one of the two would leave that attempt exposed."""
+        failing_first = tmp_path / "claude"
+        failing_first.write_text(
+            "#!/usr/bin/env bash\n"
+            'echo "DISABLE_AUTOUPDATER=${DISABLE_AUTOUPDATER:-unset}"\n'
+            'for arg in "$@"; do\n'
+            '    if [[ "$arg" == "--session-id" ]]; then exit 1; fi\n'
+            "done\n"
+        )
+        failing_first.chmod(0o755)
+
+        with patch.object(
+            ClaudeCodeAgent, "_claude_session_exists", return_value=False
+        ):
+            result = ClaudeCodeAgent().get_launch_command(
+                system_prompt="do the thing",
+                task_id="task-1",
+                session_id="hephaestus-proj-design-role-abcd1234",
+                working_directory=str(tmp_path),
+            )
+
+        completed = self._run(result.command, tmp_path)
+        assert completed.returncode == 0, completed.stderr
+        # Both attempts ran, and both were told not to auto-update.
+        assert completed.stdout.count("DISABLE_AUTOUPDATER=1") == 2
+        assert "unset" not in completed.stdout
+
+    def test_the_env_var_reaches_a_codex_resume_pair(self, tmp_path, monkeypatch):
+        """Codex uses the statement form, which is the shape a bare
+        assignment would have broken."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        working_directory = tmp_path / "worktree"
+        working_directory.mkdir()
+        session_map = tmp_path / ".hephaestus" / "codex_sessions.json"
+        session_map.parent.mkdir(parents=True)
+        session_map.write_text(
+            json.dumps({"heph-session": "019ff292-2164-74b2-8f9a-01b68469cd99"})
+        )
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        self._stub_cli(bin_dir, "codex")
+
+        result = CodexAgent().get_launch_command(
+            system_prompt="system prompt",
+            task_id="task-1",
+            session_id="heph-session",
+            working_directory=str(working_directory),
+        )
+
+        completed = self._run(result.command, bin_dir)
+        assert completed.returncode == 0, completed.stderr
+        assert "DISABLE_AUTOUPDATER=1" in completed.stdout
+        assert "unset" not in completed.stdout

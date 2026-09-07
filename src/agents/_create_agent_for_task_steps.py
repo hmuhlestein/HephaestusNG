@@ -545,6 +545,25 @@ async def _deliver_initial_prompt_flow(
 
     logger.info(f"Initial message length: {len(initial_message)} characters")
     cli_ready = await pipeline._wait_for_cli_ready(pane, prep.cli_agent, cli_type, agent_id)
+    if cli_ready:
+        # A CLI that came up is the only moment there is to learn which
+        # version currently works -- that reading is what a later launch
+        # failure gets compared against to say "the binary was replaced"
+        # rather than just "the launch failed". It also clears any
+        # outstanding launch cooldown, so a swap that has since resolved
+        # doesn't keep spacing out attempts that no longer need it.
+        # See src/agents/cli_launch_backoff.py and IDB-2482.
+        #
+        # Offloaded to a thread: the first call per CLI per process shells
+        # out to `<cli> --version`, and a CLI slow to answer (or hung, up
+        # to the probe's own 10s timeout) would otherwise block the event
+        # loop for every other agent. Same reason as
+        # _wait_for_shell_ready's call above.
+        from src.agents.cli_launch_backoff import note_launch_success
+
+        await asyncio.get_event_loop().run_in_executor(
+            None, note_launch_success, cli_type
+        )
 
     # Termination race check
     term_race_result = await pipeline._check_termination_race(

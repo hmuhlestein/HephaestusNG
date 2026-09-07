@@ -7309,3 +7309,193 @@ class TestMarkSkippedOverPhases:
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
+
+
+class TestMaybeRetryFailedTasksHoldsForACliBinarySwap:
+    """The all-failed retry path must also refuse to dispatch into a CLI
+    binary swap -- and must gate BEFORE it resets anything.
+
+    This is a genuinely separate retry path from _retry_failed_tasks (it
+    fires when every task in the phase is failed, rather than on any single
+    failed task), so it needs the hold independently. The gate placement is
+    the subtle part: this function's dispatch loop runs over tasks it has
+    already reset to "pending", and a task left pending with no agent is
+    the unrecoverable dead end that loop's own comment describes. Bailing
+    out before the reset leaves everything "failed", which is exactly the
+    state this function re-triggers from on the next sweep tick. IDB-2482.
+    """
+
+    def _make_all_failed_phase(self, db_manager):
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-swap-1",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="failed",
+                failure_reason="claude CLI failed to start",
+            ))
+
+    def test_holds_and_leaves_every_task_failed(
+        self, db_manager, sample_workflow, monkeypatch
+    ):
+        from src.agents import cli_launch_backoff
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+
+        self._make_all_failed_phase(db_manager)
+        cli_launch_backoff.reset_for_tests()
+        monkeypatch.setattr(cli_launch_backoff, "cooldown_seconds", lambda: 90)
+        monkeypatch.setattr(
+            cli_launch_backoff, "capture_cli_version", lambda _c: "2.1.259"
+        )
+        logger = MagicMock()
+        try:
+            cli_launch_backoff.note_launch_failure("claude")
+            with patch(
+                "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            ) as dispatch:
+                with db_manager.session_scope() as session:
+                    phase = session.query(Phase).filter_by(id="phase-1").first()
+                    # None means "no retry needed" to the caller, which is
+                    # the right answer for this tick: nothing was touched.
+                    assert _maybe_retry_failed_tasks(session, phase, logger) is None
+                dispatch.assert_not_called()
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-swap-1").first()
+            assert task.status == "failed"
+            assert task.retry_count == 0
+
+    def test_retries_normally_once_the_cooldown_has_passed(
+        self, db_manager, sample_workflow, monkeypatch
+    ):
+        from src.agents import cli_launch_backoff
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+
+        self._make_all_failed_phase(db_manager)
+        cli_launch_backoff.reset_for_tests()
+        monkeypatch.setattr(cli_launch_backoff, "cooldown_seconds", lambda: 0)
+        monkeypatch.setattr(
+            cli_launch_backoff, "capture_cli_version", lambda _c: "2.1.259"
+        )
+        logger = MagicMock()
+        try:
+            cli_launch_backoff.note_launch_failure("claude")
+            with patch(
+                "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+                side_effect=_agent_row_side_effect("swap-agent"),
+            ) as dispatch:
+                with db_manager.session_scope() as session:
+                    phase = session.query(Phase).filter_by(id="phase-1").first()
+                    assert _maybe_retry_failed_tasks(session, phase, logger) is True
+                dispatch.assert_called_once()
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+
+class TestArbitrationWaitsOutACliBinarySwap:
+    """Arbitration must not spend its one dispatch inside a CLI binary
+    swap.
+
+    This is the fault that turned a recoverable run into a lost one. When a
+    phase exhausts its retries, arbitration is what decides whether to
+    continue, retry differently, or give up -- but the arbiter is itself a
+    CLI process, and _trigger_arbitration gets exactly ONE dispatch: its
+    "if not agent_data" branch fails the whole workflow. So when a binary
+    swap was what exhausted the phase's retries in the first place,
+    dispatching straight into the same window spent the recovery path on a
+    failure already known to be transient, and the thing meant to rescue
+    the run became the thing that ended it. Observed across four runs; the
+    arbitration log line could only say the decision file was missing and
+    that this "could mean the agent ran without writing one, or that it
+    never actually launched". IDB-2482.
+
+    Blocking here is the deliberate exception to the deferral used
+    everywhere else: the sweep retry paths leave their tasks "failed" and
+    come back, but arbitration has no such state to come back from.
+    """
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_waits_for_the_cooldown_before_dispatching(
+        self, mock_create_agent, db_manager, sample_workflow, monkeypatch
+    ):
+        from src.agents import cli_launch_backoff
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
+
+        # Ordering is the property under test: the hold has to happen
+        # BEFORE the one dispatch arbitration gets, not after it has
+        # already been spent. Asserted via ordering rather than a real
+        # 90-second sleep.
+        order = []
+
+        def _dispatch(task_id, workflow_id, phase_id, **kwargs):
+            order.append("dispatch")
+            return _agent_row_side_effect("arb-agent")(
+                task_id, workflow_id, phase_id, **kwargs
+            )
+
+        mock_create_agent.side_effect = _dispatch
+
+        cli_launch_backoff.reset_for_tests()
+        monkeypatch.setattr(cli_launch_backoff, "cooldown_seconds", lambda: 90)
+        monkeypatch.setattr(
+            cli_launch_backoff, "capture_cli_version", lambda _c: "2.1.259"
+        )
+        holds = []
+
+        def _fake_wait(*_a, **_k):
+            order.append("waited")
+            holds.append(cli_launch_backoff.cooldown_remaining())
+            return 90.0
+
+        monkeypatch.setattr(cli_launch_backoff, "wait_out_cooldown", _fake_wait)
+        try:
+            cli_launch_backoff.note_launch_failure("claude")
+            result = _trigger_arbitration(
+                "wf-1", "phase-1", "requirements", "exhausted retries",
+                MagicMock(),
+            )
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+        assert result is True
+        assert order == ["waited", "dispatch"]
+        # And it waited because there really was an outstanding cooldown.
+        assert holds and holds[0] > 0
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_does_not_wait_when_no_launch_has_failed(
+        self, mock_create_agent, db_manager, sample_workflow, monkeypatch
+    ):
+        """The normal case has to stay free: with nothing outstanding the
+        wait returns immediately, so arbitration on a phase that exhausted
+        its retries for any other reason is not delayed at all."""
+        from src.agents import cli_launch_backoff
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        waited_for = []
+        real_wait = cli_launch_backoff.wait_out_cooldown
+
+        def _recording_wait(*args, **kwargs):
+            held = real_wait(*args, **kwargs)
+            waited_for.append(held)
+            return held
+
+        monkeypatch.setattr(cli_launch_backoff, "wait_out_cooldown", _recording_wait)
+        cli_launch_backoff.reset_for_tests()
+        try:
+            result = _trigger_arbitration(
+                "wf-1", "phase-1", "requirements", "exhausted retries",
+                MagicMock(),
+            )
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+        assert result is True
+        assert waited_for == [0.0]
+        mock_create_agent.assert_called_once()
