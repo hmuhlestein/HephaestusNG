@@ -26,12 +26,56 @@ class PRStatus:
     state: str  # OPEN, MERGED, CLOSED
     ci_conclusion: str  # "passing", "failing", "pending"
     review_decision: Optional[str]  # APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or None
+    # GitHub's mergeStateStatus: CLEAN, BEHIND, BLOCKED, DIRTY, UNSTABLE,
+    # HAS_HOOKS, DRAFT, UNKNOWN. Distinct from the `mergeable` field, which
+    # reports merge CONFLICTS ONLY -- a PR can be mergeable=MERGEABLE and
+    # still be unmergeable in practice.
+    merge_state: Optional[str] = None
     failing_checks: List[str] = field(default_factory=list)
     summary: str = ""
 
+    # mergeStateStatus values that the agent itself can resolve, and the
+    # instruction for each. Both are things git_expert.yaml's prompt already
+    # mandates ("Merge main into the feature branch and resolve conflicts
+    # BEFORE pushing -- mandatory"), so this hands back work it knows how to
+    # do rather than a state nobody acts on.
+    _AGENT_FIXABLE_MERGE_STATES = {
+        "BEHIND": (
+            "the branch is behind its base and this repository requires branches "
+            "to be up to date before merging -- merge the base branch into this "
+            "one and push"
+        ),
+        "DIRTY": (
+            "the branch has merge conflicts with its base -- merge the base branch "
+            "into this one, resolve the conflicts and push"
+        ),
+    }
+
     @property
     def needs_work(self) -> bool:
-        return self.ci_conclusion == "failing" or self.review_decision == "CHANGES_REQUESTED"
+        return (
+            self.ci_conclusion == "failing"
+            or self.review_decision == "CHANGES_REQUESTED"
+            or (self.merge_state or "") in self._AGENT_FIXABLE_MERGE_STATES
+        )
+
+    @property
+    def ready_to_merge(self) -> bool:
+        """Whether this PR could actually be merged right now.
+
+        Deliberately NOT the same question as "are the checks green".
+        `mergeable` reports merge conflicts only, so a PR reads
+        mergeable=MERGEABLE while mergeStateStatus=BEHIND and the merge
+        button is disabled -- which is exactly how a PR came to be reported
+        as finished while its base branch had moved three commits ahead
+        under a strict required-status-checks policy.
+        """
+        return (
+            self.state == "OPEN"
+            and self.ci_conclusion == "passing"
+            and self.review_decision != "CHANGES_REQUESTED"
+            and (self.merge_state or "UNKNOWN") == "CLEAN"
+        )
 
     @property
     def is_pending(self) -> bool:
@@ -97,7 +141,7 @@ def get_pr_status(ref: str, cwd: Optional[str] = None) -> Optional[PRStatus]:
         result = subprocess.run(
             [
                 "gh", "pr", "view", ref,
-                "--json", "url,state,statusCheckRollup,reviewDecision,headRefOid",
+                "--json", "url,state,statusCheckRollup,reviewDecision,headRefOid,mergeStateStatus",
             ],
             capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS,
             cwd=cwd,
@@ -121,6 +165,7 @@ def get_pr_status(ref: str, cwd: Optional[str] = None) -> Optional[PRStatus]:
     url = data.get("url")
     state = data.get("state") or "OPEN"
     review_decision = data.get("reviewDecision") or None
+    merge_state = (data.get("mergeStateStatus") or "").upper() or None
 
     checks = data.get("statusCheckRollup") or []
     failing_checks = [
@@ -169,6 +214,8 @@ def get_pr_status(ref: str, cwd: Optional[str] = None) -> Optional[PRStatus]:
         summary_parts.append(f"CI check(s) failed: {', '.join(failing_checks)}")
     if review_decision == "CHANGES_REQUESTED":
         summary_parts.append("a reviewer requested changes on this PR")
+    if merge_state in PRStatus._AGENT_FIXABLE_MERGE_STATES:
+        summary_parts.append(PRStatus._AGENT_FIXABLE_MERGE_STATES[merge_state])
     if not summary_parts:
         summary_parts.append(
             "CI is still running" if ci_conclusion == "pending" else "CI passing, no changes requested"
@@ -179,6 +226,7 @@ def get_pr_status(ref: str, cwd: Optional[str] = None) -> Optional[PRStatus]:
         state=state,
         ci_conclusion=ci_conclusion,
         review_decision=review_decision,
+        merge_state=merge_state,
         failing_checks=failing_checks,
         summary="; ".join(summary_parts) + f" (PR {url})" if url else "; ".join(summary_parts),
     )
