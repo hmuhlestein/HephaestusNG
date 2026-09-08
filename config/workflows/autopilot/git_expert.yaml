@@ -275,11 +275,24 @@ additional_notes: |
     also safe to just re-run unchanged.
   - Fix the actual problem the RETRY banner describes (a failing check, a
     reviewer's specific comment) and push a follow-up commit to this SAME
-    branch. The banner names failing CHECKS, but for a review it says only
-    that changes were requested -- it does not carry the comments
-    themselves. Re-read them the way STEP 5b does (`gh pr view --json
-    reviews` plus the inline-comments API) rather than guessing at what a
-    reviewer meant — you have full read/write access to the worktree, this is not
+    branch. The banner names the failing CHECK, not the error inside it --
+    "Backend: Lint & Format" does not tell you which rule tripped. Get the
+    actual output before changing anything:
+    ```bash
+    # The failing run's own logs, errors only.
+    gh pr checks --json name,bucket,link | \
+      jq -r '.[] | select(.bucket=="fail") | .link'
+    gh run view <run-id> --log-failed | tail -60
+    ```
+    A repo's CI often enforces gates that are not in its own docs -- a
+    file-size cap, a coverage floor, a custom linter under `scripts/`.
+    Read the failing step's command out of the log and run that exact
+    command locally, rather than assuming a green local `go test`/`pytest`
+    means the check will pass.
+  - For a review, the banner says only that changes were requested and does
+    not carry the comments themselves. Re-read them the way STEP 5b does
+    (`gh pr view --json reviews` plus the inline-comments API) rather than
+    guessing at what a reviewer meant — you have full read/write access to the worktree, this is not
     limited to git commands. Small, direct fixes (a lint error, a flaky-
     looking test, a straightforward review nit) belong here. If the fix
     genuinely requires reopening development's own work, say so plainly in
