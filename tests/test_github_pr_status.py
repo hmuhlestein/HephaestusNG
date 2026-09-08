@@ -211,3 +211,76 @@ class TestEmptyRollupIsNotAPass:
         with patch("subprocess.run", return_value=_gh_result(stdout=stdout)) as mock_run:
             assert get_pr_status("my-branch").ci_conclusion == "passing"
         assert mock_run.call_count == 1
+
+
+class TestMergeStateIsNotTheMergeableField:
+    """`mergeable` reports merge CONFLICTS ONLY. mergeStateStatus is what
+    answers "can this actually be merged".
+
+    A PR read mergeable=MERGEABLE with 30 green checks and was reported as
+    finished -- while mergeStateStatus was BEHIND, its base had moved three
+    commits ahead, and the repository enforces
+    strict_required_status_checks_policy (branches must be up to date).
+    Nothing in this module looked at that field, so "CI passing, no changes
+    requested" was returned for a PR whose merge button was disabled.
+    IDB-2482.
+    """
+
+    @staticmethod
+    def _json(merge_state, checks='[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]',
+              review="", state="OPEN"):
+        return (
+            '{"reviewDecision": "%s", "state": "%s", "url": "https://github.com/o/r/pull/1",'
+            ' "statusCheckRollup": %s, "mergeStateStatus": "%s"}' % (review, state, checks, merge_state)
+        )
+
+    def test_behind_is_needs_work_with_an_actionable_reason(self):
+        with patch("subprocess.run", return_value=_gh_result(stdout=self._json("BEHIND"))):
+            status = get_pr_status("b")
+
+        assert status.merge_state == "BEHIND"
+        assert status.needs_work is True
+        assert status.ready_to_merge is False
+        assert "up to date" in status.summary and "merge the base branch" in status.summary
+
+    def test_dirty_is_needs_work_and_says_resolve_conflicts(self):
+        with patch("subprocess.run", return_value=_gh_result(stdout=self._json("DIRTY"))):
+            status = get_pr_status("b")
+
+        assert status.needs_work is True
+        assert "conflicts" in status.summary
+
+    def test_clean_with_green_checks_is_the_only_ready_to_merge_state(self):
+        with patch("subprocess.run", return_value=_gh_result(stdout=self._json("CLEAN"))):
+            status = get_pr_status("b")
+
+        assert status.needs_work is False
+        assert status.ready_to_merge is True
+
+    def test_green_checks_alone_are_not_ready_to_merge(self):
+        """The exact false positive: every check green, no conflicts, and
+        still not mergeable."""
+        with patch("subprocess.run", return_value=_gh_result(stdout=self._json("BEHIND"))):
+            assert get_pr_status("b").ready_to_merge is False
+
+    def test_a_blocked_pr_is_not_ready_but_is_not_the_agents_problem(self):
+        """BLOCKED means missing reviews or required checks -- not something
+        pushing another commit fixes, so it must not burn retries."""
+        with patch("subprocess.run", return_value=_gh_result(stdout=self._json("BLOCKED"))):
+            status = get_pr_status("b")
+
+        assert status.ready_to_merge is False
+        assert status.needs_work is False
+
+    def test_an_absent_merge_state_is_not_assumed_mergeable(self):
+        older = '{"reviewDecision": "", "state": "OPEN", "url": "u", "statusCheckRollup": [{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}'
+        with patch("subprocess.run", return_value=_gh_result(stdout=older)):
+            status = get_pr_status("b")
+
+        assert status.merge_state is None
+        assert status.ready_to_merge is False, "unknown must not read as mergeable"
+        assert status.needs_work is False
+
+    def test_a_merged_pr_is_not_ready_to_merge(self):
+        with patch("subprocess.run", return_value=_gh_result(stdout=self._json("CLEAN", state="MERGED"))):
+            assert get_pr_status("b").ready_to_merge is False
