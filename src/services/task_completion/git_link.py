@@ -81,13 +81,48 @@ async def commit_and_link_ticket(session, agent_id: str, task, summary: str) -> 
             # -- confirmed live 2026-08-19 investigating intermittent
             # multi-second /health stalls, one of three call sites found
             # via a systematic audit.
-            loop = asyncio.get_event_loop()
-            merge_commit_sha = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    _do_git_commit, wt_path, phase_label, agent_id, task.id, summary,
-                ),
-            )
+            if phase_label == "git_expert":
+                # The one phase this must NOT run for. git_expert's entire
+                # contract is that it has already committed, pushed, and (in
+                # review_mode) opened a PR before it reports done -- so a
+                # `git add -A` commit created here lands AFTER that push, and
+                # verify_git_expert_merged_and_pushed's very next check
+                # ("the feature branch has commits not yet pushed") then
+                # rejects the completion over a commit this code just made.
+                #
+                # That rejection precedes the same floor's PR/CI check, so
+                # get_pr_status is never called: Feature.pr_url is never
+                # populated, the task lands "failed" instead of parking
+                # in_progress, and _resolve_pending_pr_status -- which needs
+                # an in_progress git_expert task AND a non-null pr_url --
+                # can never resolve the PR. A red CI check then goes
+                # unnoticed forever.
+                #
+                # Observed live: the agent pushed and opened PR #1097, called
+                # done at 20:39:17, this hook swept up three stray
+                # *.go.bak files the agent had left behind into commit
+                # abbd12be, and the floor rejected 12s later citing unpushed
+                # commits. The PR went red on a lint gate with nothing
+                # watching it.
+                #
+                # Nothing is lost by skipping: that same floor already
+                # rejects on `repo.is_dirty(untracked_files=True)` and names
+                # the offending files, which is the actionable message for
+                # leftover residue -- strictly better than silently
+                # committing it. Every other phase keeps this safety net.
+                logger.info(
+                    f"[COMMIT] phase(git_expert) agent {agent_id[:8]}: skipping the "
+                    "completion commit -- this phase pushes its own work, and a "
+                    "commit created after that push would fail its own push check"
+                )
+            else:
+                loop = asyncio.get_event_loop()
+                merge_commit_sha = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        _do_git_commit, wt_path, phase_label, agent_id, task.id, summary,
+                    ),
+                )
     except Exception as e:
         logger.warning(f"Failed to commit after task done for agent {agent_id[:8]}: {e}")
 
