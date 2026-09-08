@@ -59,11 +59,34 @@ def _resolve_pending_pr_status(workflow_id: str, sweep_logger: "OrchestratorLogg
         # exclusively) and try to resolve ITS completion from PR/CI status
         # -- corrupting the separate arbitration_result.json-driven
         # resolution _maybe_resolve_arbitration owns.
+        # assigned_agent_id IS NULL is the discriminator, not an
+        # optimisation. The "parked awaiting CI" state this function exists
+        # to resolve is created by verify_git_expert_merged_and_pushed's
+        # pending branch, which deliberately sets status=in_progress AND
+        # clears assigned_agent_id (see its own long comment on why). A
+        # task that is in_progress WITH a live agent is the opposite
+        # situation: _retry_failed_tasks already re-dispatched git_expert
+        # over this very PR and that agent is mid-fix.
+        #
+        # Without this, a red PR is re-failed on every sweep tick -- and
+        # every re-fail increments retry_count. Measured live against a PR
+        # failing one lint gate: six PR-STATUS observations in 2m17s took
+        # retry_count from 0 to its cap of 5 while the agent dispatched by
+        # the first one was still working. CI needs minutes to re-run after
+        # a push, so the budget was gone long before the fix could be
+        # verified, and the phase then escalated to arbitration over a
+        # failure that was actively being repaired.
+        #
+        # Each PUSH gets one retry, which is the correct granularity: the
+        # agent finishes, the completion floor re-runs, CI goes pending,
+        # the task parks again with no agent, and this function picks it up
+        # on the next real outcome. IDB-2482.
         task = (
             db.query(Task)
             .filter(
                 Task.phase_id == phase.id,
                 Task.status == "in_progress",
+                Task.assigned_agent_id.is_(None),
                 # != is not NULL-safe in SQL (NULL != 'arbitration' is NULL,
                 # not TRUE, so a plain != would also exclude every ordinary
                 # task -- created_by_agent_id is unset/NULL for most of

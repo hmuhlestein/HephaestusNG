@@ -265,3 +265,83 @@ class TestPendingPRStateSurvivesStaleAssignedTaskCleanup:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.status == "failed"
             assert "terminated unexpectedly" in task.failure_reason
+
+
+class TestDoesNotRaceAnAgentAlreadyFixingThePR:
+    """A red PR must be re-failed once per PUSH, not once per sweep tick.
+
+    The parked state this resolver exists for is created by
+    verify_git_expert_merged_and_pushed's pending branch, which sets
+    status=in_progress AND clears assigned_agent_id. A task that is
+    in_progress WITH a live agent is the opposite situation:
+    _retry_failed_tasks has already re-dispatched git_expert over this very
+    PR and that agent is mid-fix.
+
+    Without the assigned_agent_id filter, every sweep tick re-failed the
+    task and every re-fail incremented retry_count. Measured live against a
+    PR failing one lint gate: six PR-STATUS observations in 2m17s took
+    retry_count from 0 to its cap of 5 while the agent dispatched by the
+    first observation was still working. CI needs minutes to re-run after a
+    push, so the budget was gone before the fix could ever be verified, and
+    the phase escalated to arbitration over a failure that was actively
+    being repaired. IDB-2482.
+    """
+
+    FAILING = PRStatus(
+        url="https://github.com/o/r/pull/1", state="OPEN", ci_conclusion="failing",
+        review_decision=None, failing_checks=["Backend: Lint & Format"],
+        summary="CI check(s) failed: Backend: Lint & Format",
+    )
+
+    def _assign_a_live_agent(self, db_manager):
+        from src.core.database import Agent
+        with db_manager.session_scope() as session:
+            session.add(Agent(id="agent-live", system_prompt="p", status="working", cli_type="claude"))
+            session.query(Task).filter_by(id="task-1").first().assigned_agent_id = "agent-live"
+
+    def test_a_task_with_a_live_agent_is_left_alone(self, db_manager):
+        from src.autopilot.orchestrator.pr_resolution import _resolve_pending_pr_status
+
+        _seed(db_manager)
+        self._assign_a_live_agent(db_manager)
+
+        with patch("src.services.github_pr_status.get_pr_status", return_value=self.FAILING):
+            _resolve_pending_pr_status("wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "in_progress", "must not re-fail a task an agent is fixing"
+            assert task.retry_count == 0, "must not burn a retry per sweep tick"
+
+    def test_the_parked_task_with_no_agent_is_still_resolved(self, db_manager):
+        """The carve-out must not disable the resolver itself -- the parked
+        state (in_progress, assigned_agent_id cleared) is exactly what this
+        function exists to act on."""
+        from src.autopilot.orchestrator.pr_resolution import _resolve_pending_pr_status
+
+        _seed(db_manager)
+
+        with patch("src.services.github_pr_status.get_pr_status", return_value=self.FAILING):
+            _resolve_pending_pr_status("wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert "Backend: Lint & Format" in task.failure_reason
+            assert "this SAME branch/PR" in task.failure_reason
+
+    def test_repeated_ticks_while_an_agent_works_never_accumulate_retries(self, db_manager):
+        """The measured failure was cumulative: six ticks, six increments."""
+        from src.autopilot.orchestrator.pr_resolution import _resolve_pending_pr_status
+
+        _seed(db_manager)
+        self._assign_a_live_agent(db_manager)
+
+        with patch("src.services.github_pr_status.get_pr_status", return_value=self.FAILING):
+            for _ in range(6):
+                _resolve_pending_pr_status("wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "in_progress"
+            assert task.retry_count == 0
