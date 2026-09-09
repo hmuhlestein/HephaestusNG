@@ -138,7 +138,7 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
         # verification checked a completely different, stale worktree.
         recovered = False
         from src.core.database import AgentWorktree
-        from src.core.database import Task as _Task
+        from src.core.worktree_manager import agent_ids_ever_associated_with_workflow
 
         wt_candidates = []
         if task.assigned_agent_id:
@@ -149,13 +149,19 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
             )
             if own_wt_record:
                 wt_candidates.append(own_wt_record)
-        wt_candidates.append(
-            session.query(AgentWorktree)
-            .join(_Task, _Task.assigned_agent_id == AgentWorktree.agent_id)
-            .filter(_Task.workflow_id == task.workflow_id)
-            .order_by(AgentWorktree.created_at.asc())
-            .first()
-        )
+        # Task.assigned_agent_id-only would miss a workflow's only
+        # remaining worktree once its owning task is superseded/marked
+        # duplicated (assigned_agent_id cleared) -- see
+        # agent_ids_ever_associated_with_workflow's own docstring for the
+        # live incident this fixes for arbitration's identical fallback.
+        fallback_agent_ids = agent_ids_ever_associated_with_workflow(session, task.workflow_id)
+        if fallback_agent_ids:
+            wt_candidates.append(
+                session.query(AgentWorktree)
+                .filter(AgentWorktree.agent_id.in_(fallback_agent_ids))
+                .order_by(AgentWorktree.created_at.asc())
+                .first()
+            )
 
         for wt_record in wt_candidates:
             if wt_record and wt_record.worktree_path and _Path(wt_record.worktree_path).is_dir():

@@ -1321,4 +1321,42 @@ def sync_local_main_checkout(project_base_dir: str, lock_scope: str) -> None:
         wt_mgr._merge_lock.release(lock_file, lock_scope)
 
 
+def agent_ids_ever_associated_with_workflow(db, workflow_id: str) -> set:
+    """Every agent_id that has EVER been assigned to one of workflow_id's
+    tasks, not just the ones currently pointed at by Task.assigned_agent_id.
+
+    That column only reflects the CURRENT assignment -- a task marked
+    "duplicated"/superseded, or a terminated agent, gets it cleared. A
+    worktree-recovery search scoped to Task.assigned_agent_id alone then
+    misses an agent's otherwise perfectly valid, on-disk worktree the
+    moment its task's assignment is cleared, even though the agent
+    genuinely worked on this workflow. AgentLog's "created" record
+    (details["task_id"]) survives that clearing -- the same signal
+    _authorize_agent_for_task already relies on for its own "was-ever-
+    assigned" tier (src/mcp/server/_update_task_status_steps.py).
+
+    Confirmed live: workflow fa51faca's only remaining on-disk worktree
+    belonged to an agent whose task had been marked "duplicated"
+    (assigned_agent_id=None) -- a Task.assigned_agent_id-only search found
+    zero candidates for a directory that was genuinely still there.
+
+    Shared by _resolve_workflow_working_directory (arbitration.py) and
+    verify_output_artifact's own AgentWorktree fallback
+    (task_completion/verification.py) -- both need "every agent this
+    workflow has ever had," not just the currently-assigned ones.
+    """
+    from src.core.database import AgentLog, Task
+
+    task_ids = db.query(Task.id).filter(Task.workflow_id == workflow_id)
+    current_agent_ids = db.query(Task.assigned_agent_id).filter(
+        Task.workflow_id == workflow_id, Task.assigned_agent_id.isnot(None)
+    )
+    ever_assigned_agent_ids = db.query(AgentLog.agent_id).filter(
+        AgentLog.log_type == "created",
+        AgentLog.agent_id.isnot(None),
+        AgentLog.details["task_id"].as_string().in_(task_ids),
+    )
+    return {row[0] for row in current_agent_ids.union(ever_assigned_agent_ids).all()}
+
+
 # Backward-compatible alias for call sites that still import WorktreeManager.

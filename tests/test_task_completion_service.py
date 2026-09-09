@@ -174,16 +174,17 @@ class TestVerifyOutputArtifact:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory=None)
-        # AgentWorktree recovery's own query chain (.join().filter().order_by().first())
-        # is a separate auto-mocked branch from the plain .filter_by().first()
-        # above -- must be pinned to None too, or its default (an
-        # auto-generated Mock whose .worktree_path is itself a Mock, not a
-        # real path string) reaches _Path(wt_record.worktree_path) and
-        # raises a TypeError instead of exercising the "recovery also
-        # failed" path this test means to assert.
-        mock_session.query.return_value.join.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]):
+        with (
+            patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]),
+            # agent_ids_ever_associated_with_workflow returning empty is
+            # what "no recovery candidate exists" looks like now (see its
+            # own docstring/agent_ids_ever_associated_with_workflow in
+            # worktree_manager.py) -- pinning it directly, rather than the
+            # raw query chain it replaced, so this test doesn't have to
+            # track that function's own internal SQLAlchemy shape.
+            patch("src.core.worktree_manager.agent_ids_ever_associated_with_workflow", return_value=set()),
+        ):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
             )
@@ -735,6 +736,81 @@ class TestVerifyOutputArtifactWorktreeRecovery:
             from src.core.database import Workflow as _Workflow
             wf = session.query(_Workflow).filter_by(id="wf-1").first()
             assert wf.working_directory == str(fresh_wt)
+        finally:
+            session.close()
+
+    def test_earliest_fallback_finds_a_worktree_whose_task_was_superseded(self, real_db, tmp_path):
+        """The "workflow's earliest worktree" fallback used to join
+        strictly through Task.assigned_agent_id -- but that column only
+        reflects the CURRENT assignment. A task later marked "duplicated"
+        (superseded by a sibling, see _case_in_progress_no_tasks) gets it
+        cleared, which used to hide that agent's otherwise perfectly valid
+        worktree from this fallback even though the directory is still on
+        disk. Mirrors the identical gap and fix already shipped for
+        arbitration's own copy of this fallback (see
+        agent_ids_ever_associated_with_workflow's docstring)."""
+        from src.core.database import Agent, AgentLog, AgentWorktree, Task, Workflow
+
+        orphaned_wt = tmp_path / "orphaned-worktree"
+        (orphaned_wt / ".hephaestus" / "architectural_review").mkdir(parents=True)
+        (orphaned_wt / ".hephaestus" / "architectural_review" / "review-task-com.md").write_text(
+            "---\ntype: architectural_review_result\n---\n\n# Review"
+        )
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="active", working_directory=None,
+            ))
+            # The completing task itself has no agent worktree of its own
+            # (shared-worktree agent), and no working_directory recorded on
+            # the workflow either -- the only real signal left is this
+            # orphaned worktree from a superseded sibling task.
+            session.add(Agent(id="agent-completing", system_prompt="p", status="working", cli_type="claude"))
+            session.add(Task(
+                id="task-completing", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="d", done_definition="d", status="in_progress",
+                assigned_agent_id="agent-completing",
+            ))
+
+            session.add(Agent(id="agent-orphaned", system_prompt="p", status="idle", cli_type="claude"))
+            session.add(Task(
+                id="task-duplicated", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="d", done_definition="d", status="duplicated",
+                assigned_agent_id=None,  # cleared when marked duplicated
+            ))
+            session.add(AgentLog(
+                agent_id="agent-orphaned", log_type="created",
+                message="Agent created for task",
+                details={"cli_type": "claude", "task_id": "task-duplicated"},
+            ))
+            session.add(AgentWorktree(
+                agent_id="agent-orphaned", worktree_path=str(orphaned_wt), branch_name="b-orphaned",
+                parent_commit_sha="x", base_commit_sha="x",
+            ))
+
+        phase = Mock(name="architectural_review", id="phase-1")
+        phase.name = "architectural_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-completing", assigned_agent_id="agent-completing")
+
+        session = real_db.get_session()
+        try:
+            with patch(
+                "src.autopilot.spec.get_phase_required_files", return_value=["review.md"]
+            ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+                result = TaskCompletionService.verify_output_artifact(
+                    session=session, task=task, phase=phase
+                )
+            assert result is None, (
+                f"expected pass via the orphaned worktree's recovered review.md, got: {result}"
+            )
+
+            from src.core.database import Workflow as _Workflow
+            wf = session.query(_Workflow).filter_by(id="wf-1").first()
+            assert wf.working_directory == str(orphaned_wt), (
+                "a cleared assigned_agent_id on the sibling task must not hide "
+                "an otherwise-valid, on-disk worktree from the fallback"
+            )
         finally:
             session.close()
 
