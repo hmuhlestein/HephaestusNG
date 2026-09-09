@@ -40,7 +40,12 @@ const TYPE_COPY = {
     title: 'Design Spec',
     subtitle: 'Select or drag & drop design documents describing what to build.',
     accent: 'blue',
-    defaultFolder: 'docs/specs',
+    // Spec Kit's own convention directory (specs/NNN-feature-name/,
+    // see SPEC_FOLDER_PATH_RE below) -- Spec Kit-authored designs already
+    // live here, so this is where both the destination-folder default and
+    // the remote browser's starting path point, instead of making users
+    // navigate here manually from the project root every time.
+    defaultFolder: 'specs',
   },
   bugfix: {
     icon: Bug,
@@ -140,7 +145,10 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       // hiding the option entirely).
       setBrowsingForFolder(false);
       setRemoteOpen(true);
-      loadRemoteDir('');
+      // Design Spec (feature) opens straight into specs/ -- Bug Spec and
+      // the plain "Load Design" entry point are untouched, keeping their
+      // existing project-root starting view.
+      loadRemoteDir(workflowType === 'feature' ? defaultFolder : '');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, workflowType]);
