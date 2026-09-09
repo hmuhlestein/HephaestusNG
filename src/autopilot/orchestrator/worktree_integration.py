@@ -986,6 +986,60 @@ def _ensure_git_excluded(repo_path: Path, patterns: Dict[str, str], logger: Any)
         logger.warning(f"Could not update git exclude at {repo_path}: {e}")
 
 
+# Cap on findings appended to ash_results.txt -- a legitimate, heavily
+# false-positive-prone diff (e.g. touching a lockfile) could still produce
+# a large finding count even scoped to --changed-files-only; this is a
+# summary for an agent's context window, not a full report dump.
+_MAX_DETECT_SECRETS_FINDINGS = 50
+
+
+def _extract_detect_secrets_findings(worktree: Path) -> Optional[str]:
+    """detect-secrets' own SARIF output (written by ash under .ash/, deleted
+    by _run_ash_scan's finally block right after this runs) has real
+    per-finding file:line detail -- unlike its console output, which only
+    contributes a bare pass/fail count to ash's summary table. Read it while
+    it still exists and return a compact block naming each finding, or None
+    if the scanner didn't run, found nothing, or its output isn't in the
+    shape this expects (a version bump changing ash's own layout must not
+    break the scan itself -- this is best-effort enrichment, not required
+    output; results_path already has ash's own full console output either
+    way).
+    """
+    import json
+
+    sarif_path = worktree / ".ash" / "ash_output" / "scanners" / "detect-secrets" / "source" / "results_sarif.sarif"
+    if not sarif_path.is_file():
+        return None
+    try:
+        data = json.loads(sarif_path.read_text())
+        results = data["runs"][0]["results"]
+    except Exception:
+        return None
+    if not results:
+        return None
+
+    lines = [f"[detect-secrets] {len(results)} finding(s) in this diff:"]
+    for result in results[:_MAX_DETECT_SECRETS_FINDINGS]:
+        text = (result.get("message") or {}).get("text")
+        if text:
+            lines.append(f"  - {text}")
+            continue
+        # Fallback if a future ash/detect-secrets version drops message.text:
+        # reconstruct the same "type in file at line" shape from the raw
+        # location fields instead of silently dropping the finding.
+        rule_id = result.get("ruleId", "unknown")
+        try:
+            loc = result["locations"][0]["physicalLocation"]
+            uri = loc["artifactLocation"]["uri"]
+            line = loc["region"]["startLine"]
+            lines.append(f"  - {rule_id} in file '{uri}' at line {line}")
+        except (KeyError, IndexError):
+            lines.append(f"  - {rule_id} (location unavailable)")
+    if len(results) > _MAX_DETECT_SECRETS_FINDINGS:
+        lines.append(f"  ... and {len(results) - _MAX_DETECT_SECRETS_FINDINGS} more (see full SARIF, not retained after this scan)")
+    return "\n".join(lines)
+
+
 def _run_ash_scan(worktree: Path, logger: "OrchestratorLogger") -> None:
     """Run the AWS Automated Security Helper against a feature's worktree.
 
@@ -1041,6 +1095,22 @@ def _run_ash_scan(worktree: Path, logger: "OrchestratorLogger") -> None:
             text=True,
         )
         output = (result.stdout or "") + (result.stderr or "")
+        # ASH's own console output gives every scanner a per-severity COUNT
+        # in its summary table, but no per-finding detail (which file, which
+        # line) for any of them -- that only exists in each scanner's own
+        # SARIF file under .ash/, which the finally block below deletes.
+        # Harmless for bandit/checkov/npm-audit, whose console output
+        # already includes file:line detail inline -- but detect-secrets'
+        # own CLI output doesn't, so security_review agents had a count with
+        # nowhere to look, and fell back to re-running detect-secrets
+        # themselves against the whole repo every single dispatch (observed
+        # live: 8/8 dispatches, identical 472-finding unscoped result,
+        # dominated by lockfile hashes and unrelated files). Append the
+        # real, already-scoped (--changed-files-only) findings here instead,
+        # while the SARIF file this run produced still exists.
+        secrets_detail = _extract_detect_secrets_findings(worktree)
+        if secrets_detail:
+            output += "\n\n" + secrets_detail
         results_path.write_text(output or "(no output)")
         logger.info(f"[ASH] Automated security scan complete (exit code {result.returncode}), results written to {results_path}")
     except subprocess.TimeoutExpired:
