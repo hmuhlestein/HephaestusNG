@@ -13,6 +13,7 @@ import pytest
 
 from src.core.database import (
     Agent,
+    AgentLog,
     AgentWorktree,
     AutopilotProject,
     DatabaseManager,
@@ -5932,6 +5933,76 @@ class TestResolveWorkflowWorkingDirectory:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             result = _resolve_workflow_working_directory(session, "wf-1", wf)
             assert result == str(surviving_dir)
+
+    def test_finds_a_worktree_whose_task_assignment_was_since_cleared(
+        self, db_manager, sample_workflow, tmp_path
+    ):
+        """The plain assigned_agent_id join only sees the CURRENT
+        assignment -- a task later marked "duplicated"/superseded (see
+        _case_in_progress_no_tasks) or an agent that was terminated gets
+        assigned_agent_id cleared, which used to make its otherwise
+        perfectly valid worktree invisible to this resolver even though
+        the directory is still sitting on disk.
+
+        Confirmed live: workflow fa51faca's only remaining on-disk
+        worktree belonged to an agent whose task had been marked
+        "duplicated" (assigned_agent_id=None); the old assigned_agent_id-
+        only join found zero candidates and arbitration reported "no
+        resolvable working directory" despite this directory being right
+        there. AgentLog's "created" record (details["task_id"]) survives
+        that clearing -- same signal _authorize_agent_for_task already
+        relies on for its "was-ever-assigned" tier."""
+        from src.autopilot.orchestrator.arbitration import (
+            _resolve_workflow_working_directory,
+        )
+
+        orphaned_dir = tmp_path / "orphaned-worktree"
+        orphaned_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id="orphaned-agent-1",
+                    system_prompt="test",
+                    status="idle",
+                    cli_type="claude",
+                )
+            )
+            session.add(
+                Task(
+                    id="duplicated-task-1",
+                    raw_description="do the thing",
+                    done_definition="done",
+                    workflow_id="wf-1",
+                    status="duplicated",
+                    assigned_agent_id=None,  # cleared when marked duplicated
+                )
+            )
+            session.add(
+                AgentLog(
+                    agent_id="orphaned-agent-1",
+                    log_type="created",
+                    message="Agent created for task",
+                    details={"cli_type": "claude", "task_id": "duplicated-task-1"},
+                )
+            )
+            session.add(
+                AgentWorktree(
+                    agent_id="orphaned-agent-1",
+                    worktree_path=str(orphaned_dir),
+                    branch_name="feature/wf-1-orphaned",
+                    parent_commit_sha="abc123",
+                    base_commit_sha="abc123",
+                )
+            )
+            session.commit()
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            result = _resolve_workflow_working_directory(session, "wf-1", wf)
+            assert result == str(orphaned_dir), (
+                "a cleared assigned_agent_id must not hide an otherwise-valid, "
+                "on-disk worktree from the fallback"
+            )
 
     @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_trigger_arbitration_prompt_uses_the_recovered_working_directory(
