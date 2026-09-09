@@ -271,6 +271,42 @@ def test_commit_for_validation(worktree_manager, test_db):
     worktree_manager.cleanup_worktree(agent_id)
 
 
+def test_commit_refuses_when_conflict_markers_present(worktree_manager, test_db):
+    """Regression: _commit_in_worktree's blind `git add -A && git commit
+    --no-verify` used to commit whatever was on disk unconditionally --
+    including, in a real incident, the literal unresolved markers left by
+    a `git stash pop` that was still conflicted when the agent got force-
+    terminated mid-task. A later phase's own commit had to manually strip
+    them back out. Must refuse to commit here instead, leaving the
+    conflicted state for a human/ticketed look."""
+    agent_id = str(uuid.uuid4())
+
+    session = test_db.get_session()
+    agent = Agent(id=agent_id, system_prompt="Test", status="working", cli_type="test")
+    session.add(agent)
+    session.commit()
+    session.close()
+
+    result = worktree_manager.create_agent_worktree(agent_id)
+    worktree_path = Path(result["working_directory"])
+    repo = Repo(worktree_path)
+    head_before = repo.head.commit.hexsha
+
+    conflicted_file = worktree_path / "conflicted.py"
+    conflicted_file.write_text(
+        "line one\n<<<<<<< Updated upstream\nold\n=======\nnew\n>>>>>>> Stashed changes\n"
+    )
+
+    commit_result = worktree_manager.commit_changes(agent_id, "[WIP] Auto-saved on terminate")
+
+    assert commit_result["files_changed"] == 0
+    assert "refused" in commit_result["message"].lower()
+    assert repo.head.commit.hexsha == head_before, "must not create a commit over unresolved conflict markers"
+    assert conflicted_file.exists(), "the conflicted file itself must be left untouched for manual cleanup"
+
+    worktree_manager.cleanup_worktree(agent_id)
+
+
 def test_cleanup_worktree(worktree_manager, test_db):
     """Test worktree cleanup."""
     agent_id = str(uuid.uuid4())
@@ -398,6 +434,107 @@ class TestCleanupAllStaleBranchesPrefixFilter:
 
         remaining = [b.name for b in temp_repo.branches]
         assert "totally-unrelated-branch" in remaining
+
+
+class TestWorktreeUnresolvedConflictReason:
+    """Direct unit tests of the pure conflict-detection function, using
+    real git repos (not mocks) -- git's own conflict-marker/index
+    behavior is exactly what's under test here."""
+
+    @pytest.fixture
+    def repo_with_commit(self):
+        temp_dir = tempfile.mkdtemp()
+        repo = Repo.init(temp_dir, initial_branch="main")
+        with repo.config_writer() as cw:
+            cw.set_value("user", "email", "t@t.com")
+            cw.set_value("user", "name", "t")
+        (Path(temp_dir) / "file.py").write_text("line1\n")
+        repo.index.add(["file.py"])
+        repo.index.commit("init")
+        yield repo
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_clean_worktree_returns_none(self, repo_with_commit):
+        from src.core.worktree_manager import worktree_unresolved_conflict_reason
+
+        (Path(repo_with_commit.working_dir) / "file.py").write_text("line1\nline2\n")
+
+        assert worktree_unresolved_conflict_reason(repo_with_commit) is None
+
+    def test_detects_full_conflict_markers_in_a_changed_file(self, repo_with_commit):
+        """The real live incident: a conflicted `git stash pop` left
+        <<<<<<< Updated upstream / ======= / >>>>>>> Stashed changes in
+        the working tree."""
+        from src.core.worktree_manager import worktree_unresolved_conflict_reason
+
+        (Path(repo_with_commit.working_dir) / "file.py").write_text(
+            "line1\n<<<<<<< Updated upstream\nold\n=======\nnew\n>>>>>>> Stashed changes\n"
+        )
+
+        reason = worktree_unresolved_conflict_reason(repo_with_commit)
+
+        assert reason is not None
+        assert "file.py" in reason
+
+    def test_detects_conflict_markers_in_a_new_untracked_file(self, repo_with_commit):
+        """Same detection for an untracked file, not just a modified
+        tracked one -- git add -A stages both identically."""
+        from src.core.worktree_manager import worktree_unresolved_conflict_reason
+
+        (Path(repo_with_commit.working_dir) / "new_file.py").write_text(
+            "<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> branch\n"
+        )
+
+        reason = worktree_unresolved_conflict_reason(repo_with_commit)
+
+        assert reason is not None
+        assert "new_file.py" in reason
+
+    def test_a_lone_separator_line_is_not_a_false_positive(self, repo_with_commit):
+        """A bare ======= (or a single <<<<<<< /  >>>>>>> alone) is not
+        enough to flag -- a legitimate file could contain a line like
+        that as its own section divider. Only BOTH the opening and
+        closing markers together, in the same file, count as a real
+        conflict."""
+        from src.core.worktree_manager import worktree_unresolved_conflict_reason
+
+        (Path(repo_with_commit.working_dir) / "notes.md").write_text(
+            "Section A\n=======\nSection B\n"
+        )
+
+        assert worktree_unresolved_conflict_reason(repo_with_commit) is None
+
+    def test_detects_unmerged_index_entries_before_any_add(self, repo_with_commit):
+        """The other signal: a path git's own index already considers
+        conflicted (unmerged), independent of file content -- this is
+        the signal `git add -A` itself destroys the instant it runs, which
+        is exactly why this check must run first."""
+        from src.core.worktree_manager import worktree_unresolved_conflict_reason
+
+        repo_with_commit.index.add(["file.py"])
+        repo_with_commit.index.commit("second commit")
+        base_sha = repo_with_commit.head.commit.parents[0].hexsha
+
+        (Path(repo_with_commit.working_dir) / "file.py").write_text("branch content\n")
+        repo_with_commit.index.add(["file.py"])
+        repo_with_commit.index.commit("branch commit")
+        branch = repo_with_commit.create_head("side", base_sha)
+        repo_with_commit.head.reference = branch
+        repo_with_commit.head.reset(index=True, working_tree=True)
+        (Path(repo_with_commit.working_dir) / "file.py").write_text("side content\n")
+        repo_with_commit.index.add(["file.py"])
+        repo_with_commit.index.commit("side commit")
+
+        repo_with_commit.heads.main.checkout()
+        try:
+            repo_with_commit.git.merge("side")
+        except Exception:
+            pass  # expected -- the merge conflicts, leaving unmerged index entries
+
+        reason = worktree_unresolved_conflict_reason(repo_with_commit)
+
+        assert reason is not None
+        assert "file.py" in reason
 
 
 if __name__ == "__main__":

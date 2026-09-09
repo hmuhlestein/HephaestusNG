@@ -15,6 +15,7 @@ task framing) is copied into a git-excluded ``<worktree>/.hephaestus/`` director
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -376,6 +377,23 @@ class WorktreeManager:
     ) -> Dict[str, Any]:
         """Stage and commit all changes in the agent's worktree."""
         repo = self._agent_repo(agent_id)
+
+        # Checked BEFORE git add -A -- see worktree_unresolved_conflict_
+        # reason's own docstring for why the order matters and the live
+        # incident this closes. A conflicted working tree needs a human/
+        # ticketed look, not a commit baking the conflict markers in.
+        conflict_reason = worktree_unresolved_conflict_reason(repo)
+        if conflict_reason:
+            logger.error(
+                f"[WORKTREE] Refusing to auto-commit for agent {agent_id}: {conflict_reason} "
+                "-- leaving the working tree as-is instead of committing over it"
+            )
+            return {
+                "commit_sha": repo.head.commit.hexsha,
+                "files_changed": 0,
+                "message": f"Refused: {conflict_reason}",
+            }
+
         repo.git.add("-A")
 
         if not repo.is_dirty() and not repo.untracked_files:
@@ -1357,6 +1375,58 @@ def agent_ids_ever_associated_with_workflow(db, workflow_id: str) -> set:
         AgentLog.details["task_id"].as_string().in_(task_ids),
     )
     return {row[0] for row in current_agent_ids.union(ever_assigned_agent_ids).all()}
+
+
+def worktree_unresolved_conflict_reason(repo) -> Optional[str]:
+    """Whether repo's current working tree has an unresolved merge/stash-
+    pop conflict, checked BEFORE `git add -A` -- `git add -A` itself marks
+    conflicted paths as resolved in the index the instant it runs, erasing
+    the one signal (unmerged index blobs) that would otherwise catch this
+    after the fact. Returns a human-readable reason naming the offending
+    path(s), or None if clean.
+
+    Confirmed live: an agent was force-terminated mid a conflicted `git
+    stash pop`, and the blind `git add -A && git commit --no-verify` this
+    guards (_commit_in_worktree, _commit_wip_in_shared_worktree) committed
+    the literal unresolved conflict markers ('<<<<<<< Updated upstream' /
+    '=======' / '>>>>>>> Stashed changes') straight into the feature
+    branch -- discovered only when a later phase's own commit had to
+    manually remove them.
+
+    Two independent signals, since either alone can miss a real conflict:
+    unmerged index entries (git's own live view, gone the moment
+    `git add -A` runs) and literal marker text in changed files (still
+    catches a conflict that already looks "resolved" to git -- e.g. an
+    earlier blind `git add -A` already ran once before this check existed
+    -- by reading what's actually on disk). Requires BOTH the opening
+    <<<<<<< and closing >>>>>>> markers in the same file, not a bare
+    ======= alone, which a legitimate file could contain as an unrelated
+    section divider.
+    """
+    unmerged = repo.index.unmerged_blobs()
+    if unmerged:
+        return f"unresolved merge conflict (unmerged index entries) in: {', '.join(sorted(unmerged.keys()))}"
+
+    open_marker_re = re.compile(rb"^<{7}(?:\s|$)", re.MULTILINE)
+    close_marker_re = re.compile(rb"^>{7}(?:\s|$)", re.MULTILINE)
+    changed_paths = set()
+    try:
+        changed_paths.update(repo.git.diff("HEAD", "--name-only").splitlines())
+    except git.GitCommandError:
+        pass  # no HEAD yet (a brand-new repo) -- nothing to diff against
+    changed_paths.update(repo.untracked_files)
+
+    for rel_path in changed_paths:
+        full_path = Path(repo.working_tree_dir) / rel_path
+        try:
+            if not full_path.is_file():
+                continue
+            content = full_path.read_bytes()
+        except OSError:
+            continue
+        if open_marker_re.search(content) and close_marker_re.search(content):
+            return f"unresolved conflict markers in: {rel_path}"
+    return None
 
 
 # Backward-compatible alias for call sites that still import WorktreeManager.

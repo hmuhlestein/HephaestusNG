@@ -600,7 +600,25 @@ class Terminator:
 
             import git as _git
 
+            from src.core.worktree_manager import worktree_unresolved_conflict_reason
+
             repo = _git.Repo(working_directory)
+
+            # Checked BEFORE git add -A -- see worktree_unresolved_conflict_
+            # reason's own docstring for why the order matters and the live
+            # incident this closes (a force-terminate mid a conflicted
+            # `git stash pop` got its literal conflict markers committed
+            # straight into the feature branch, discovered only when a
+            # later phase's own commit had to manually remove them).
+            conflict_reason = worktree_unresolved_conflict_reason(repo)
+            if conflict_reason:
+                logger.error(
+                    f"[TERMINATE] Refusing WIP auto-commit for agent {agent_id[:8]}: "
+                    f"{conflict_reason} -- leaving the working tree as-is instead of "
+                    "committing over it"
+                )
+                return
+
             repo.git.add("-A")
             if not repo.is_dirty() and not repo.untracked_files:
                 return
