@@ -570,6 +570,34 @@ def _trigger_arbitration(
         db.add(task)
         db.commit()
 
+    # Arbitration gets exactly ONE dispatch, and the "if not agent_data"
+    # branch below fails the entire workflow when it doesn't take. So this
+    # is the one dispatcher that must not simply try its luck: the agent it
+    # is about to launch is itself a CLI process, and if a CLI binary swap
+    # is what exhausted the phase's retries in the first place, dispatching
+    # into that same window spends the recovery path on a failure that was
+    # already known to be transient -- which is precisely how the thing
+    # meant to rescue a run became the thing that ended it. Observed live
+    # across four runs; see IDB-2482.
+    #
+    # Blocking here rather than deferring to the next sweep is deliberate
+    # and is the exception, not the pattern: the sweep sites in
+    # phase_transitions.py leave their tasks "failed" and come back, but
+    # arbitration has no such state to come back from. One cooldown of a
+    # held sweep thread against a workflow that would otherwise be failed
+    # outright is a trade worth making. wait_out_cooldown caps itself at a
+    # single cooldown window and returns immediately when there is nothing
+    # outstanding, which is the normal case.
+    from src.agents.cli_launch_backoff import wait_out_cooldown
+
+    held = wait_out_cooldown()
+    if held:
+        logger.warning(
+            f"[ARBITRATE] Held {held:.0f}s before dispatching arbitration for "
+            f"{phase_name} -- a CLI launch had just failed and its binary may "
+            "still have been mid-replacement"
+        )
+
     agent_data = create_agent_for_task_direct(
         task_id,
         workflow_id,

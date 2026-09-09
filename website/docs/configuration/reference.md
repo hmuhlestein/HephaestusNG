@@ -37,6 +37,7 @@ agents:
   cli_model: sonnet
   default_fallback_cli_tool: pi
   default_fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+  cli_launch_retry_cooldown_seconds: 90
 
 vector_store:
   backend: turbovec        # or qdrant
@@ -53,7 +54,7 @@ autopilot:
 The sections that matter most day to day:
 
 - **`llm`** — provider credentials (as env var *names*, never literal keys), the default model, and `model_assignments` — per-purpose model overrides (e.g. `task_enrichment`, `guardian_analysis`) so cheap mechanical calls don't run on your most expensive model.
-- **`agents`** — the default CLI tool/model every phase launches under (`default_cli_tool`, `cli_model`) and the fallback tool/model used when the primary is unavailable or saturated (`default_fallback_cli_tool`/`default_fallback_cli_model`). A workflow's `workflow.yaml` (below) or an individual phase can override these.
+- **`agents`** — the default CLI tool/model every phase launches under (`default_cli_tool`, `cli_model`) and the fallback tool/model used when the primary is unavailable or saturated (`default_fallback_cli_tool`/`default_fallback_cli_model`). A workflow's `workflow.yaml` (below) or an individual phase can override these. `cli_launch_retry_cooldown_seconds` is the gap enforced between launch attempts after a launch failed in a way consistent with the CLI having replaced its own binary mid-run — every agent CLI self-updates in place, and for the seconds that takes its own name doesn't resolve, so without a gap the orchestrator's 15-second sweep spends a task's whole retry budget inside one swap window.
 - **`vector_store`** — `turbovec` (local, in-process, default) or `qdrant` (requires Docker, set `VECTOR_STORE_BACKEND=qdrant`).
 - **`monitoring`** — thresholds Guardian/Conductor use to decide an agent is stuck and needs a nudge or restart.
 - **`autopilot`** — pipeline-wide limits: how many projects run concurrently, per-workflow timeouts, retry cooldowns.

@@ -3,6 +3,7 @@
 import asyncio
 import functools
 import logging
+import os
 import shlex
 import sys
 import time
@@ -523,8 +524,27 @@ class LaunchPipeline:
                         f"{_clean(launch_check_text)}"
                     )
                     continue
-                logger.error(f"{cli_type} launch command failed in tmux session {session_name}: {_clean(launch_check_text)}")
-                raise Exception(f"{cli_type} CLI failed to start -- shell reported the launch command was not found")
+                # Capture what was true of the CLI's binary right now,
+                # before anything else moves. This failure is most often a
+                # binary swap (the CLI replacing itself in place), and that
+                # is invisible after the fact -- by the time anyone reads
+                # the log the binary works perfectly again and nothing
+                # recorded that it had changed. Four runs were lost to
+                # exactly this with no log line able to say so. The same
+                # call also starts the cooldown that stops the next
+                # attempts landing inside the same window; see
+                # src/agents/cli_launch_backoff.py and IDB-2482.
+                from src.agents.cli_launch_backoff import note_launch_failure
+
+                facts = note_launch_failure(cli_type)
+                logger.error(
+                    f"{cli_type} launch command failed in tmux session {session_name} "
+                    f"[{facts.describe()}]: {_clean(launch_check_text)}"
+                )
+                raise Exception(
+                    f"{cli_type} CLI failed to start -- shell reported the launch "
+                    f"command was not found ({facts.describe()})"
+                )
 
     # Foreground process names that mean "nothing but the login shell is
     # running in this pane" -- see _pane_has_returned_to_shell.
@@ -542,6 +562,30 @@ class LaunchPipeline:
         printing unrelated text which happens to contain one of those
         substrings can't trip this -- its own process name (or its
         interpreter's, e.g. "node"/"python3") would show instead of a shell.
+
+        That last sentence holds only for a launch command that is a single
+        command. It is FALSE for the `(a || b)` shape ClaudeCodeAgent's
+        get_launch_command emits whenever a session_id is set -- i.e. for
+        essentially every phase agent. A shell cannot exec-optimize a
+        subshell whose second branch it may still need to run, so it stays
+        in the foreground with the CLI as its child, and
+        `pane_current_command` reports the SHELL for the entire life of a
+        perfectly healthy agent. Measured directly: `(sleep 120 || sleep 1)`
+        reports "zsh" with a live child, where a bare `sleep 120` reports
+        "sleep". For the launch shape that matters most, this check
+        therefore returned True unconditionally -- silently reducing itself
+        to the bare substring match it exists to corroborate.
+
+        Observed live, twice in one run: an agent that had already read its
+        task file, listed its worktree and set its own goal was killed as
+        "failed to start" because Claude Code had printed a failing MCP
+        server's ENOENT ("no such file or directory") into the pane. The
+        agent was working. The phrase was in someone else's error message.
+
+        So a foreground shell only counts as "back at a bare prompt" when it
+        has no live children. A shell still parenting something has regained
+        nothing -- whatever it spawned is exactly what this is trying to
+        detect the absence of.
 
         This is the closest equivalent available here to checking the
         launch command's own exit status: the command runs inside a tmux
@@ -565,9 +609,78 @@ class LaunchPipeline:
             name = (current_command[0] if current_command else "").strip().lower()
             if not name:
                 return True
-            return name in cls._SHELL_PROCESS_NAMES
+            if name not in cls._SHELL_PROCESS_NAMES:
+                return False
+            return not cls._pane_shell_has_live_children(pane)
         except Exception:
             return True
+
+    @staticmethod
+    def _pane_shell_has_live_children(pane) -> bool:
+        """Whether the pane's foreground shell still has a child process.
+
+        Distinguishes a shell sitting at a bare prompt (no children) from a
+        shell that is the `(a || b)` subshell wrapper with the CLI running
+        underneath it -- see _pane_has_returned_to_shell for why
+        pane_current_command alone cannot tell those apart.
+
+        Errs toward False (no children -> the caller concludes "back at the
+        shell" and defers to the substring match) on any probe failure,
+        matching its caller's own bias: a broken probe must never be able to
+        suppress a genuine launch failure, only fail to rescue a false
+        positive. pgrep + a tmux format read, the same shell-out idiom
+        terminator.py already uses on #{pane_pid}.
+        """
+        import subprocess
+
+        try:
+            pid_out = pane.cmd("display-message", "-p", "#{pane_pid}").stdout
+            pane_pid = (pid_out[0] if pid_out else "").strip()
+            if not pane_pid.isdigit():
+                return False
+            result = subprocess.run(
+                ["pgrep", "-P", pane_pid],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception as e:
+            logger.debug(f"Could not check pane shell's children: {e}")
+            return False
+        # pgrep exits 1 with no output when there are simply no matches --
+        # that is the "bare prompt" answer, not an error.
+        return bool((result.stdout or "").strip())
+
+    @staticmethod
+    def _ready_wait_timeout(cli_type: str) -> float:
+        """Ceiling for _wait_for_cli_ready -- 25s for every CLI except
+        claude, which needs to stay coupled to how long
+        scripts/agent-safe-bin/claude will silently retry resolving the
+        real binary during a swap (CLAUDE_WRAPPER_RESOLVE_TIMEOUT, default
+        60s there).
+
+        Before this, the two ceilings were independent hard-coded numbers
+        in two different languages: _wait_for_cli_ready gave up at 25s and
+        _detect_launch_failure ran right after, but the wrapper is still
+        silently looping between second 25 and 60 -- it hasn't printed its
+        "command not found" text yet, so the substring match finds
+        nothing either, and the code falls through to
+        _deliver_initial_prompt (verify_delivery=False at every real call
+        site) against a pane where claude has not actually started. That
+        is a version of the exact race this whole CLI-swap fix exists to
+        close, reopened by the wrapper's own new retry window. Reading the
+        SAME env var the wrapper honors (rather than a second hard-coded
+        60) means the two can't drift apart again if it's ever tuned.
+
+        The margin is deliberate slack, not a second ceiling to keep in
+        sync: it only has to outlast the wrapper's own deadline, not match
+        it exactly.
+        """
+        if cli_type != "claude":
+            return 25.0
+        try:
+            wrapper_timeout = float(os.environ.get("CLAUDE_WRAPPER_RESOLVE_TIMEOUT", "60"))
+        except ValueError:
+            wrapper_timeout = 60.0
+        return wrapper_timeout + 10.0
 
     async def _wait_for_cli_ready(
         self,
@@ -2475,7 +2588,27 @@ class LaunchPipeline:
             session.commit()
 
             try:
-                cli_ready = await self._wait_for_cli_ready(pane, cli_agent, restart_cli_type, agent_id)
+                cli_ready = await self._wait_for_cli_ready(
+                    pane, cli_agent, restart_cli_type, agent_id,
+                    timeout=self._ready_wait_timeout(restart_cli_type),
+                )
+                if cli_ready:
+                    # Symmetric with the _detect_launch_failure call below,
+                    # which records a failure and starts the launch
+                    # cooldown: a restart that came up is equally good
+                    # evidence that the CLI is healthy again, so it clears
+                    # that cooldown and seeds the version baseline a later
+                    # failure gets compared against. Without this the
+                    # restart path could only ever add to the cooldown,
+                    # never retire it. See src/agents/cli_launch_backoff.py.
+                    # Offloaded to a thread for the same reason as the
+                    # create path's identical call: the first probe per CLI
+                    # shells out to `<cli> --version`.
+                    from src.agents.cli_launch_backoff import note_launch_success
+
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, note_launch_success, restart_cli_type
+                    )
                 term_race_result = await self._check_termination_race(
                     agent_id,
                     restart_task_id,
