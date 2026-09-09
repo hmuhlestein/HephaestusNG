@@ -544,7 +544,10 @@ async def _deliver_initial_prompt_flow(
         initial_message = prep.initial_message
 
     logger.info(f"Initial message length: {len(initial_message)} characters")
-    cli_ready = await pipeline._wait_for_cli_ready(pane, prep.cli_agent, cli_type, agent_id)
+    cli_ready = await pipeline._wait_for_cli_ready(
+        pane, prep.cli_agent, cli_type, agent_id,
+        timeout=pipeline._ready_wait_timeout(cli_type),
+    )
     if cli_ready:
         # A CLI that came up is the only moment there is to learn which
         # version currently works -- that reading is what a later launch

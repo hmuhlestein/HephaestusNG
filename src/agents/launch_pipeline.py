@@ -3,6 +3,7 @@
 import asyncio
 import functools
 import logging
+import os
 import shlex
 import sys
 import time
@@ -647,6 +648,39 @@ class LaunchPipeline:
         # pgrep exits 1 with no output when there are simply no matches --
         # that is the "bare prompt" answer, not an error.
         return bool((result.stdout or "").strip())
+
+    @staticmethod
+    def _ready_wait_timeout(cli_type: str) -> float:
+        """Ceiling for _wait_for_cli_ready -- 25s for every CLI except
+        claude, which needs to stay coupled to how long
+        scripts/agent-safe-bin/claude will silently retry resolving the
+        real binary during a swap (CLAUDE_WRAPPER_RESOLVE_TIMEOUT, default
+        60s there).
+
+        Before this, the two ceilings were independent hard-coded numbers
+        in two different languages: _wait_for_cli_ready gave up at 25s and
+        _detect_launch_failure ran right after, but the wrapper is still
+        silently looping between second 25 and 60 -- it hasn't printed its
+        "command not found" text yet, so the substring match finds
+        nothing either, and the code falls through to
+        _deliver_initial_prompt (verify_delivery=False at every real call
+        site) against a pane where claude has not actually started. That
+        is a version of the exact race this whole CLI-swap fix exists to
+        close, reopened by the wrapper's own new retry window. Reading the
+        SAME env var the wrapper honors (rather than a second hard-coded
+        60) means the two can't drift apart again if it's ever tuned.
+
+        The margin is deliberate slack, not a second ceiling to keep in
+        sync: it only has to outlast the wrapper's own deadline, not match
+        it exactly.
+        """
+        if cli_type != "claude":
+            return 25.0
+        try:
+            wrapper_timeout = float(os.environ.get("CLAUDE_WRAPPER_RESOLVE_TIMEOUT", "60"))
+        except ValueError:
+            wrapper_timeout = 60.0
+        return wrapper_timeout + 10.0
 
     async def _wait_for_cli_ready(
         self,
@@ -2554,7 +2588,10 @@ class LaunchPipeline:
             session.commit()
 
             try:
-                cli_ready = await self._wait_for_cli_ready(pane, cli_agent, restart_cli_type, agent_id)
+                cli_ready = await self._wait_for_cli_ready(
+                    pane, cli_agent, restart_cli_type, agent_id,
+                    timeout=self._ready_wait_timeout(restart_cli_type),
+                )
                 if cli_ready:
                     # Symmetric with the _detect_launch_failure call below,
                     # which records a failure and starts the launch
