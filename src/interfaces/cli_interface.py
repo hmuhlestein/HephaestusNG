@@ -26,6 +26,48 @@ logger = logging.getLogger(__name__)
 # safety net anymore. See that script's own header for the full rationale.
 AGENT_SAFE_BIN_DIR = str(Path(__file__).parent.parent.parent / "scripts" / "agent-safe-bin")
 
+# Prepended to every launched CLI agent's command. Two things, one string,
+# so no CLI's get_launch_command can be written without both:
+#
+#   PATH puts AGENT_SAFE_BIN_DIR first, for the `rm`/`git` guardrail
+#   wrappers described above.
+#
+#   DISABLE_AUTOUPDATER=1 stops the agent's own CLI from replacing its
+#   binary in place while the pipeline is running. A CLI that self-updates
+#   mid-run makes its own name briefly unresolvable, and any agent
+#   launching in that window dies on the shell's "command not found"
+#   (_detect_launch_failure, launch_pipeline.py) -- observed live ending
+#   four separate runs, one of them 4.5 hours in.
+#
+# The env var is set HERE, by the orchestrator, in the launch command
+# itself. scripts/agent-safe-bin/claude also sets it, and that wrapper is
+# kept as a second line of defence for anything the agent spawns for
+# itself -- but it cannot be the primary mechanism: it only takes effect
+# if this directory really is on PATH and really does contain the wrapper,
+# and `scripts/` is not part of the built package (pyproject.toml ships
+# `src` only), so on a non-editable install AGENT_SAFE_BIN_DIR resolves to
+# a directory that does not exist, the PATH prefix is inert, and `claude`
+# resolves straight to the real binary with the wrapper never running.
+# A variable assignment in front of the command has no such failure mode.
+#
+# Note this cannot prevent every swap -- the user's own interactive CLI
+# sessions, a package manager, or a manual re-install will still replace
+# the binary from outside (one observed occurrence was a re-install of the
+# same version). Spacing the launch retries is what covers those; see
+# src/agents/cli_launch_backoff.py. IDB-2482.
+AGENT_LAUNCH_ENV_PREFIX = f'DISABLE_AUTOUPDATER=1 PATH="{AGENT_SAFE_BIN_DIR}:$PATH"'
+
+# Statement form of the same thing, for a launch command that sets its
+# environment up front rather than prefixing a single command -- a
+# `(a || b)` pair, where a prefix would only ever apply to `a`. `export`
+# is required and a bare assignment is not enough: PATH is already
+# exported so re-assigning it stays visible to children, but
+# DISABLE_AUTOUPDATER would otherwise be a shell-local variable the CLI
+# process never sees.
+AGENT_LAUNCH_ENV_STATEMENT = (
+    f'export DISABLE_AUTOUPDATER=1; PATH="{AGENT_SAFE_BIN_DIR}:$PATH";'
+)
+
 
 class LaunchResult:
     """Result of get_launch_command — the CLI command plus metadata about
@@ -610,13 +652,13 @@ class ClaudeCodeAgent(CLIAgentInterface):
                 working_directory, session_uuid
             ):
                 first, second = "--resume", "--session-id"
-            claude_cmd = f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" claude'
+            claude_cmd = f'{AGENT_LAUNCH_ENV_PREFIX} claude'
             command = (
                 f"({claude_cmd} {first} {session_uuid} {base_flags} || "
                 f"{claude_cmd} {second} {session_uuid} {base_flags})"
             )
         else:
-            command = f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" claude {base_flags}'
+            command = f'{AGENT_LAUNCH_ENV_PREFIX} claude {base_flags}'
 
         return LaunchResult(command, delivery)
 
@@ -643,7 +685,29 @@ class ClaudeCodeAgent(CLIAgentInterface):
             return False
 
     def get_health_check_pattern(self) -> str:
-        return r"(Assistant:|Human:|›)"
+        # Claude Code's own input prompt (U+276F) and tool-call bullet
+        # (U+23FA). Measured against a live v2.1.263 pane: 3 and 28
+        # occurrences respectively, against ZERO for every marker this
+        # pattern used to carry -- "Assistant:", "Human:" and U+203A are a
+        # different CLI's vocabulary (see the pi/opencode/droid patterns,
+        # where U+203A is genuinely correct) and none of them has ever
+        # appeared in Claude Code output.
+        #
+        # So _wait_for_cli_ready could never match, with three consequences
+        # that all looked like something else: every claude launch burned
+        # the full 25s ready timeout; cli_ready was permanently False, which
+        # left _detect_launch_failure running on EVERY launch instead of
+        # being skipped as its own docstring intends ("Callers MUST skip
+        # this entirely once _wait_for_cli_ready has already confirmed the
+        # CLI is ready") -- so a stray "no such file or directory" anywhere
+        # in 15 lines of a working agent's output could kill it; and the
+        # launch-success hook that records which CLI version works never
+        # fired, so a real binary swap had nothing to be compared against.
+        #
+        # The old markers are kept rather than replaced: they cost nothing
+        # and a pattern this cheap should not also be a compatibility
+        # decision. IDB-2482.
+        return r"(Assistant:|Human:|❯|⏺|›)"
 
     def format_goal_command(self, condition: str) -> str:
         return f"/goal {condition}"
@@ -729,7 +793,7 @@ class OpenCodeAgent(CLIAgentInterface):
         # arrives). -i keeps it running interactively after the initial
         # message, matching how claude/pi stay alive for MCP tool calls.
         return LaunchResult(
-            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" opencode run -i --dangerously-skip-permissions '
+            f'{AGENT_LAUNCH_ENV_PREFIX} opencode run -i --dangerously-skip-permissions '
             f'--model {model} "$(cat {prompt_file})"',
             LaunchResult.MESSAGE,
         )
@@ -765,7 +829,7 @@ class DroidAgent(CLIAgentInterface):
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         return LaunchResult(
-            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" droid', LaunchResult.NONE
+            f'{AGENT_LAUNCH_ENV_PREFIX} droid', LaunchResult.NONE
         )
 
     def get_health_check_pattern(self) -> str:
@@ -882,10 +946,10 @@ class CodexAgent(CLIAgentInterface):
         # "already has an active writer"; fall back to a new session so the
         # manager can still deliver the task prompt and make progress.
         command = (
-            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH"; '
+            f'{AGENT_LAUNCH_ENV_STATEMENT} '
             f"(codex resume {codex_session_id} {flags} || codex {flags})"
             if codex_session_id
-            else f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" codex {flags}'
+            else f'{AGENT_LAUNCH_ENV_PREFIX} codex {flags}'
         )
         return LaunchResult(
             command,
@@ -1010,7 +1074,7 @@ class PiAgent(CLIAgentInterface):
             command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
 
         return LaunchResult(
-            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" {command}',
+            f'{AGENT_LAUNCH_ENV_PREFIX} {command}',
             LaunchResult.FLAG,
         )
 
@@ -1101,7 +1165,7 @@ class SwarmCodeAgent(CLIAgentInterface):
         prompt_file = f"/tmp/hep_prompt_{kwargs.get('task_id', 'default')}.txt"
         return LaunchResult(
             f"echo '{escaped_prompt}' > {prompt_file} && "
-            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" swarmcode --autonomous --context {prompt_file}',
+            f'{AGENT_LAUNCH_ENV_PREFIX} swarmcode --autonomous --context {prompt_file}',
             LaunchResult.NONE,
         )
 

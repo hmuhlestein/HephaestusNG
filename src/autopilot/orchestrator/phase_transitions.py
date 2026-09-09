@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple
 # resolves against the CURRENT module's attribute, not the original
 # definition site, so re-exporting here is sufficient; the "as X" form is
 # ruff's own marker for "this import is intentionally unused, don't flag it."
+from src.agents import cli_launch_backoff
 from src.autopilot.orchestrator._phase_case_steps import (
     _build_phase_task,
     _handle_spec_gate_result,
@@ -646,6 +647,24 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                     _t_skip.duplicate_of_task_id = _sibling_id
                     _t_skip.failure_reason = f"Superseded by task {_sibling_id[:8]}, which already owns this phase"
                     _db_skip.commit()
+            continue
+
+        # Don't spend a retry into a CLI binary swap. This sweep ticks
+        # every POLL_INTERVAL (15s), so without this gate a task's entire
+        # retry budget lands inside the few seconds a self-updating CLI's
+        # binary doesn't exist -- five attempts across ~a minute, none of
+        # them ever made outside the window, and the phase then reports
+        # itself exhausted for a cause that was gone before anyone looked.
+        # Left "failed" and not counted as an attempt, so the next sweep
+        # past the cooldown gets the full budget. See
+        # src/agents/cli_launch_backoff.py and IDB-2482.
+        launch_cooldown = cli_launch_backoff.cooldown_remaining()
+        if launch_cooldown > 0:
+            logger.info(
+                f"  Task {task_id[:8]} retry held for {launch_cooldown:.0f}s -- "
+                "a CLI launch failed recently and its binary may still be "
+                "mid-replacement; not counting this as a retry"
+            )
             continue
 
         logger.info(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
@@ -2798,6 +2817,27 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
     failed_count = db.query(Task).filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter).count()
     total_count = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
     if failed_count > 0 and failed_count == total_count:
+        # Gate before anything is mutated, not at the dispatch loop below:
+        # that loop runs over tasks this function has ALREADY reset to
+        # "pending", and a task left pending with no agent is the
+        # unrecoverable dead end the loop's own comment describes. Bailing
+        # out up here leaves every task "failed", which is exactly the
+        # state this function re-triggers from on the next sweep tick.
+        #
+        # Returning None means "no retry was needed" to the caller. That is
+        # the right answer for this tick specifically: the tasks are
+        # untouched, nothing has been counted against their retry budget,
+        # and the phase comes straight back here once the cooldown has
+        # passed. See src/agents/cli_launch_backoff.py and IDB-2482.
+        launch_cooldown = cli_launch_backoff.cooldown_remaining()
+        if launch_cooldown > 0:
+            logger.info(
+                f"[PHASE-ADVANCE] {phase.name}: holding the all-failed retry for "
+                f"{launch_cooldown:.0f}s -- a CLI launch failed recently and its "
+                "binary may still be mid-replacement"
+            )
+            return None
+
         # Same retry_count cap _retry_failed_tasks already enforces (that
         # function's own comment names this one as sharing it, but it
         # never actually checked it) -- without this, a task whose failure

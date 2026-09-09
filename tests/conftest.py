@@ -207,6 +207,32 @@ def _restore_global_config_paths():
     config.paths.worktree_base_path = worktree_base_path
 
 
+@pytest.fixture(autouse=True)
+def _reset_cli_launch_backoff():
+    """Clear the process-global CLI launch-retry cooldown between tests.
+
+    cli_launch_backoff keeps module-level state on purpose: a launch
+    failure recorded by _detect_launch_failure has to be visible to the
+    orchestrator's retry sweeps and to arbitration, which are different
+    callers on different threads with no object to thread it through. In
+    production that state is exactly right -- it is what stops five retries
+    landing inside one CLI binary swap.
+
+    In a test process it leaks. Any test that exercises a launch failure
+    (test_launch_failure_pane_corroboration.py, the _detect_launch_failure
+    cases in test_agent_manager.py, restart characterization) leaves a live
+    90-second cooldown behind, and every later test that drives
+    _retry_failed_tasks or _maybe_retry_failed_tasks then finds its retry
+    correctly held and fails -- 15 of them, in full-suite order only, all
+    passing when their own file is run alone. Same shape and same reason as
+    _restore_global_config_paths above. IDB-2482."""
+    from src.agents import cli_launch_backoff
+
+    cli_launch_backoff.reset_for_tests()
+    yield
+    cli_launch_backoff.reset_for_tests()
+
+
 @pytest.fixture
 def mock_heph_config():
     """Return a Mock config with all common fields pre-populated.

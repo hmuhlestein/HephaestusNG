@@ -9889,3 +9889,113 @@ class TestPersistDesignOutcome:
             design = session.query(AutopilotDesign).filter_by(id="design-1").first()
             assert design.status == "completed"
             assert design.completed_at is not None
+
+
+class TestRetryFailedTasksHoldsForACliBinarySwap:
+    """A task's retry budget must not be spendable inside a CLI binary
+    swap.
+
+    Every agent Hephaestus launches is a CLI process invoked by name, and
+    those CLIs replace their own binary in place when they update -- for
+    the seconds that takes, the name doesn't resolve and any launch dies on
+    the shell's "command not found". This sweep ticks every POLL_INTERVAL
+    (15s), so all of a task's attempts landed inside one such window: five
+    failures across about a minute, none of them ever made outside it, and
+    the phase then reported itself exhausted for a cause that was already
+    gone. Four runs were lost to this, one 4.5 hours in. IDB-2482.
+
+    The two properties that matter here are that the retry is DEFERRED and
+    that it is not COUNTED -- a hold that burned an attempt would leave the
+    task just as exhausted, only more slowly.
+    """
+
+    def _make_workflow_and_failed_task(self, db, retry_count=0, task_id="task-1"):
+        from src.core.database import Task, Workflow
+
+        with db.session_scope() as session:
+            if not session.query(Workflow).filter_by(id="wf-1").first():
+                session.add(
+                    Workflow(
+                        id="wf-1", name="t", phases_folder_path="/tmp", status="active"
+                    )
+                )
+            session.add(
+                Task(
+                    id=task_id,
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="claude CLI failed to start",
+                    retry_count=retry_count,
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_holds_the_retry_while_a_launch_cooldown_is_outstanding(
+        self, mock_create_agent, orch_db_env, tmp_path, monkeypatch
+    ):
+        from src.agents import cli_launch_backoff
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Task
+
+        self._make_workflow_and_failed_task(orch_db_env)
+        cli_launch_backoff.reset_for_tests()
+        monkeypatch.setattr(cli_launch_backoff, "cooldown_seconds", lambda: 90)
+        monkeypatch.setattr(
+            cli_launch_backoff, "capture_cli_version", lambda _c: "2.1.259"
+        )
+        try:
+            cli_launch_backoff.note_launch_failure("claude")
+            recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+        assert recovered == []
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            # Still "failed", so this same sweep re-triggers on it later --
+            # left "pending" it would be invisible to every retry path.
+            assert task.status == "failed"
+            # And the held attempt cost nothing.
+            assert task.retry_count == 0
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_retries_normally_once_the_cooldown_has_passed(
+        self, mock_create_agent, orch_db_env, tmp_path, monkeypatch
+    ):
+        """The hold has to be a delay, not a block: the whole point is that
+        the attempt after it is the one made outside the swap window."""
+        from src.agents import cli_launch_backoff
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Agent, Task
+
+        self._make_workflow_and_failed_task(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi")
+            )
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        cli_launch_backoff.reset_for_tests()
+        # A zero-length window is the same code path as one that has simply
+        # elapsed.
+        monkeypatch.setattr(cli_launch_backoff, "cooldown_seconds", lambda: 0)
+        monkeypatch.setattr(
+            cli_launch_backoff, "capture_cli_version", lambda _c: "2.1.259"
+        )
+        try:
+            cli_launch_backoff.note_launch_failure("claude")
+            recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+        finally:
+            cli_launch_backoff.reset_for_tests()
+
+        assert recovered == ["retried task task-1"]
+        mock_create_agent.assert_called_once()
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "in_progress"
+            assert task.retry_count == 1

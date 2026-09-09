@@ -117,6 +117,16 @@ agents:
   health_check_interval: 60
   max_health_failures: 3
   termination_delay: 5
+  # Gap enforced between agent-launch attempts after a launch failed in a
+  # way consistent with the CLI having replaced its own binary mid-run
+  # (they all self-update in place, and for the seconds that takes their
+  # own name doesn't resolve). The orchestrator's sweep ticks every 15s,
+  # which is short enough that a task's entire retry budget lands inside
+  # one ~200 MB binary swap -- five attempts across about a minute, none
+  # of them ever made outside the window. Lower this only if you have
+  # measured your own swap window; the first attempt after the gap is the
+  # one that has to succeed. See src/agents/cli_launch_backoff.py.
+  cli_launch_retry_cooldown_seconds: 90
 vector_store:
   backend: turbovec
   collection_prefix: hephaestus
