@@ -975,6 +975,35 @@ def _resolve_human_arbitration_choice(
     )
 
 
+def _claim_arbitration_resolution(db, task_id: str) -> bool:
+    """Atomically claim the right to ACT on one arbitration task's terminal
+    result. See Task.arbitration_resolved_at's own docstring for why this
+    is needed: _maybe_resolve_arbitration is called from two unsynchronized
+    places (the periodic sweep, and the synchronous per-task-completion
+    path) for the same workflow, and both can observe the same task in a
+    terminal status and both call _resolve_arbitration_outcome -- which is
+    not idempotent against a second concurrent call (mark_phase_complete's
+    own file I/O and phase-execution state changes, then dispatching the
+    next task).
+
+    Same construction as _claim_phase_task_creation
+    (phase_transitions.py): a single `UPDATE ... WHERE
+    arbitration_resolved_at IS NULL` can only succeed for one caller no
+    matter how the two paths interleave, because SQLite serializes writes
+    to the same row. Returns True if this call won the claim (go ahead and
+    resolve), False if someone else already holds it (skip -- this task's
+    decision is being, or was already, acted on).
+    """
+    claimed_at = utc_now()
+    result = (
+        db.query(Task)
+        .filter(Task.id == task_id, Task.arbitration_resolved_at.is_(None))
+        .update({"arbitration_resolved_at": claimed_at}, synchronize_session=False)
+    )
+    db.commit()
+    return result > 0
+
+
 def _maybe_resolve_arbitration(workflow_id: str, logger: "OrchestratorLogger") -> None:
     """Check every phase with an in-flight arbitration for this workflow and
     act on the result once the arbitration agent finishes (or dies).
@@ -1005,14 +1034,24 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: "OrchestratorLogger") -
     for phase_id, task in arb_tasks.items():
         phase_name = phase_names.get(phase_id, phase_id)
 
+        if task.status not in ("failed", "done"):
+            continue  # still running -- self-heal handles a dead agent eventually
+
+        with get_db() as claim_db:
+            if not _claim_arbitration_resolution(claim_db, task.id):
+                # Another concurrent caller (the periodic sweep vs. this
+                # same task's fire_spec_gate_if_ready path) already claimed
+                # resolving this exact task -- see
+                # Task.arbitration_resolved_at's own docstring. Not an
+                # error: it means the decision is being (or was already)
+                # acted on, just not by this call.
+                continue
+
         if task.status == "failed":
             reason = task.failure_reason or "Arbitration agent failed with no reason given"
             logger.error(f"[ARBITRATE] {phase_name}: arbitration agent failed -- {reason}")
             _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, "fail", None, reason, logger)
             continue
-
-        if task.status != "done":
-            continue  # still running -- self-heal handles a dead agent eventually
 
         decision, target_phase, dec_reason = _read_arbitration_result(working_directory)
         if decision is None:

@@ -6984,6 +6984,84 @@ class TestMaybeResolveArbitration:
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
+    def test_a_task_claimed_by_a_concurrent_caller_is_skipped(
+        self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
+    ):
+        """Regression: _maybe_resolve_arbitration is called from two
+        unsynchronized places (the periodic sweep, and the synchronous
+        per-task-completion path inside fire_spec_gate_if_ready) for the
+        same workflow -- both can observe the same task.status=="done" and
+        both act on it, since resolving an arbitration decision never
+        changes the arbitration TASK's own status field. Two genuinely
+        concurrent callers both pass the OUTER "is this phase's claim
+        still held" check before either has resolved anything (that outer
+        claim is only released at the very end of a successful
+        resolution) -- the real race window is between that outer check
+        and the per-task claim taken here, not something a single-
+        threaded, sequential two-call test can reproduce (the first call
+        finishing releases the outer claim before a second sequential call
+        even starts, which isn't the same race). Simulate the actual
+        race directly: pre-claim the task the way a winning concurrent
+        caller would, moments before this call's own attempt. Observed
+        live: an adversarial_review cap counter drifted from the real run
+        count (4 vs 6) because this race let record_review_finding fire
+        twice for one real decision."""
+        from src.core.constants import CONTEXT_DIR_NAME
+        from src.autopilot.orchestrator.arbitration import _claim_arbitration_resolution
+        from src.autopilot.orchestrator.phase_transitions import _maybe_resolve_arbitration
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.working_directory = str(tmp_path)
+        self._seed_arbitration_in_flight(db_manager, task_status="done")
+
+        d = tmp_path / CONTEXT_DIR_NAME
+        d.mkdir()
+        (d / "arbitration_result.json").write_text(
+            '{"decision": "continue", "target_phase": null, "reason": "fine"}'
+        )
+        # The "concurrent caller" wins the race first.
+        with db_manager.session_scope() as session:
+            assert _claim_arbitration_resolution(session, "arb-task-1") is True
+
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+
+        _maybe_resolve_arbitration("wf-1", MagicMock())
+
+        mock_pm.mark_phase_complete.assert_not_called()
+        mock_create_task.assert_not_called()
+
+    def test_claim_arbitration_resolution_is_exclusive(self, db_manager, sample_workflow):
+        """Direct unit test of the claim primitive: a second claim attempt
+        for the same task_id must fail once the first has taken it."""
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.arbitration import _claim_arbitration_resolution
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="arb-task-1",
+                    raw_description="Arbitrate stuck phase: requirements",
+                    done_definition="x",
+                    status="done",
+                    phase_id="phase-1",
+                    workflow_id="wf-1",
+                    created_by_agent_id=ARBITRATION_CREATED_BY,
+                    action="arbitrate",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            first = _claim_arbitration_resolution(session, "arb-task-1")
+        with db_manager.session_scope() as session:
+            second = _claim_arbitration_resolution(session, "arb-task-1")
+
+        assert first is True
+        assert second is False
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_still_running_arbitration_is_left_alone(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):

@@ -324,6 +324,24 @@ class Task(Base):
     # staleness and gets the agent killed / task marked orphaned mid-step.
     dispatch_grace_until = Column(DateTime, nullable=True)
 
+    # Arbitration tasks only: atomic claim on the right to ACT on this
+    # task's terminal result (_maybe_resolve_arbitration in arbitration.py).
+    # That function is called from two unsynchronized places for the same
+    # workflow -- the periodic sweep and the synchronous per-task-completion
+    # path -- and both can observe the same task.status in ("done",
+    # "failed") and both call _resolve_arbitration_outcome, which performs
+    # real side effects (mark_phase_complete's file I/O + phase-execution
+    # state changes, dispatching the next task) that are not themselves
+    # idempotent against a second concurrent call. Same shape as
+    # PhaseExecution.task_creation_claimed_at
+    # (_claim_phase_task_creation) -- a single `UPDATE ... WHERE
+    # arbitration_resolved_at IS NULL` can only succeed for one caller no
+    # matter how the two paths interleave. Confirmed live: an
+    # adversarial_review cap-counter drifted from the real run count (4 vs
+    # 6) because this race let record_review_finding fire twice for one
+    # real arbitration decision.
+    arbitration_resolved_at = Column(DateTime, nullable=True)
+
     # Relationships
     assigned_agent = relationship("Agent", foreign_keys=[assigned_agent_id])
     duplicate_of = relationship("Task", remote_side=[id], foreign_keys=[duplicate_of_task_id], post_update=True)

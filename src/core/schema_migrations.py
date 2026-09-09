@@ -765,6 +765,23 @@ def migrate_feature_auto_merge_sync_pending_column(engine):
         logger.warning(f"features.auto_merge_sync_pending migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_task_arbitration_resolved_at_column(engine):
+    """Add tasks.arbitration_resolved_at for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN arbitration_resolved_at DATETIME"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated tasks.arbitration_resolved_at column")
+    except Exception as e:
+        logger.warning(f"tasks.arbitration_resolved_at migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_agent_pending_message_column(engine):
     """Add agents.pending_message_sent_at for existing databases.
 
@@ -1598,6 +1615,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_phase_execution_phase_id_unique", migrate_phase_execution_phase_id_unique),
     ("_migrate_verify_tests_command_column", migrate_verify_tests_command_column),
     ("_migrate_feature_auto_merge_sync_pending_column", migrate_feature_auto_merge_sync_pending_column),
+    ("_migrate_task_arbitration_resolved_at_column", migrate_task_arbitration_resolved_at_column),
     # Last: repairs damage the rebuild-and-swap migrations above can do, so it
     # always sees their final state within the same startup pass.
     ("_repair_dangling_autopilot_designs_fk", repair_dangling_autopilot_designs_fk),
