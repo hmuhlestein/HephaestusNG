@@ -68,7 +68,7 @@ class TestForensicsAnalysisGating:
 
         tmux_dir = forensics_workflow / ".hephaestus" / "tmux"
         tmux_dir.mkdir(parents=True)
-        (tmux_dir / "development_abc12345.log").write_text(
+        (tmux_dir / "development_abc12345.transcript.log").write_text(
             "reading files\nwriting calculator.py\nall tests passed\n"
         )
 
@@ -96,7 +96,7 @@ class TestForensicsAnalysisGating:
 
         tmux_dir = forensics_workflow / ".hephaestus" / "tmux"
         tmux_dir.mkdir(parents=True)
-        (tmux_dir / "development_abc12345.log").write_text(
+        (tmux_dir / "development_abc12345.transcript.log").write_text(
             "Traceback (most recent call last):\nModuleNotFoundError: no module named foo\n"
         )
 
@@ -156,6 +156,72 @@ class TestForensicsAnalysisGating:
             )
 
         mock_fire.assert_not_called()
+
+
+class TestAssessRunHealthErrorCounting:
+    """Regression: _assess_run_health's tmux error-pattern scan inflated
+    error_count by roughly two orders of magnitude on a real run (350-471
+    "hits" for a handful of real errors). Two independent, compounding
+    causes: (1) an unqualified "*.log" glob matched BOTH
+    {session}.transcript.log and {session}.clean.log for the same session,
+    counting every hit twice; (2) pipe-pane captures every terminal
+    redraw a TUI emits while overwriting the SAME line (spinners,
+    streaming tokens) as literal new lines, so a single error message
+    still visible on-screen during N redraws counted as N hits."""
+
+    def test_a_redrawn_error_line_counts_once(self, db_manager, forensics_workflow):
+        from src.autopilot.orchestrator.queue import _assess_run_health
+
+        tmux_dir = forensics_workflow / ".hephaestus" / "tmux"
+        tmux_dir.mkdir(parents=True)
+        # Bare \r (cursor to column 0, then overwrite) repainting the SAME
+        # error line -- a real terminal treats this as one row updated in
+        # place; Python's str.splitlines() treats bare \r as its own line
+        # boundary, so a naive scan of the raw bytes sees TWO lines here,
+        # both containing the error text.
+        raw = b"AssertionError: something failed\r\rAssertionError: something failed\n"
+        (tmux_dir / "development_abc12345.transcript.log").write_bytes(raw)
+
+        logger = MagicMock()
+        health = _assess_run_health(forensics_workflow, "wf-forensics", None, logger)
+
+        assert health["error_count"] == 1
+
+    def test_two_genuinely_separate_occurrences_both_count(self, db_manager, forensics_workflow):
+        """The fix must not swing the other way and start under-counting --
+        two real, separately-printed errors are two hits, not one."""
+        from src.autopilot.orchestrator.queue import _assess_run_health
+
+        tmux_dir = forensics_workflow / ".hephaestus" / "tmux"
+        tmux_dir.mkdir(parents=True)
+        (tmux_dir / "development_abc12345.transcript.log").write_text(
+            "AssertionError: first failure\nsome other output\nAssertionError: second failure\n"
+        )
+
+        logger = MagicMock()
+        health = _assess_run_health(forensics_workflow, "wf-forensics", None, logger)
+
+        assert health["error_count"] == 2
+
+    def test_does_not_double_count_transcript_and_clean_log(self, db_manager, forensics_workflow):
+        """The old unqualified "*.log" glob matched BOTH
+        {session}.transcript.log and {session}.clean.log for the same
+        session -- clean.log must never be scanned on its own."""
+        from src.autopilot.orchestrator.queue import _assess_run_health
+
+        tmux_dir = forensics_workflow / ".hephaestus" / "tmux"
+        tmux_dir.mkdir(parents=True)
+        (tmux_dir / "development_abc12345.transcript.log").write_text(
+            "AssertionError: something failed\n"
+        )
+        (tmux_dir / "development_abc12345.clean.log").write_text(
+            "AssertionError: something failed\n"
+        )
+
+        logger = MagicMock()
+        health = _assess_run_health(forensics_workflow, "wf-forensics", None, logger)
+
+        assert health["error_count"] == 1
 
 
 @pytest.fixture
