@@ -7032,6 +7032,70 @@ class TestMaybeResolveArbitration:
         mock_pm.mark_phase_complete.assert_not_called()
         mock_create_task.assert_not_called()
 
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
+    def test_a_resolution_exception_releases_the_claim_for_retry(
+        self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
+    ):
+        """The claim taken to close the double-resolution race must not
+        itself become a NEW way to permanently strand a phase: unlike
+        task_creation_claimed_at (released in _resolve_arbitration_
+        outcome's own `finally`, "or we're unwinding from an exception"),
+        arbitration_resolved_at has no other release path if the
+        resolution attempt raises BEFORE ever reaching
+        _resolve_arbitration_outcome (e.g. the result-file read itself
+        failing transiently) -- unlike an exception inside
+        _resolve_arbitration_outcome, which its own finally already
+        handles for the phase-level claim, leaving the phase eligible for
+        a fresh arbitration cycle regardless of this one. Failure point
+        chosen deliberately outside that existing safety net, to isolate
+        what THIS fix specifically protects against: without releasing
+        arbitration_resolved_at here, every later sweep tick would see
+        this exact task's claim already held and skip it forever, even
+        though the phase-level claim (and thus this same task) is still
+        the correct thing to resolve."""
+        from src.core.constants import CONTEXT_DIR_NAME
+        from src.autopilot.orchestrator.phase_transitions import _maybe_resolve_arbitration
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.working_directory = str(tmp_path)
+        self._seed_arbitration_in_flight(db_manager, task_status="done")
+
+        d = tmp_path / CONTEXT_DIR_NAME
+        d.mkdir()
+        (d / "arbitration_result.json").write_text(
+            '{"decision": "continue", "target_phase": null, "reason": "fine"}'
+        )
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "continue",
+            "target_phase": "implementation",
+            "target_phase_id": "phase-2",
+            "should_continue": True,
+        }
+
+        with patch(
+            "src.autopilot.orchestrator.arbitration._read_arbitration_result",
+            side_effect=OSError("transient read failure"),
+        ):
+            _maybe_resolve_arbitration("wf-1", MagicMock())
+
+        mock_pm.mark_phase_complete.assert_not_called()
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="arb-task-1").first()
+            assert task.arbitration_resolved_at is None, (
+                "a failed resolution attempt must release its claim, or every later "
+                "sweep tick sees it already held and skips this task forever"
+            )
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None  # untouched -- still held
+
+        # A later tick can now actually retry the SAME task.
+        _maybe_resolve_arbitration("wf-1", MagicMock())
+        mock_create_task.assert_called_once()
+
     def test_claim_arbitration_resolution_is_exclusive(self, db_manager, sample_workflow):
         """Direct unit test of the claim primitive: a second claim attempt
         for the same task_id must fail once the first has taken it."""

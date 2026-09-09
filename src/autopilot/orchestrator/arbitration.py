@@ -1047,53 +1047,79 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: "OrchestratorLogger") -
                 # acted on, just not by this call.
                 continue
 
-        if task.status == "failed":
-            reason = task.failure_reason or "Arbitration agent failed with no reason given"
-            logger.error(f"[ARBITRATE] {phase_name}: arbitration agent failed -- {reason}")
-            _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, "fail", None, reason, logger)
-            continue
+        try:
+            if task.status == "failed":
+                reason = task.failure_reason or "Arbitration agent failed with no reason given"
+                logger.error(f"[ARBITRATE] {phase_name}: arbitration agent failed -- {reason}")
+                _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, "fail", None, reason, logger)
+                continue
 
-        decision, target_phase, dec_reason = _read_arbitration_result(working_directory)
-        if decision is None:
-            # NOT necessarily "the agent ran and forgot to write the
-            # file" -- task.status=="done" here only means SOMETHING
-            # closed the task; a dispatch that silently failed before a
-            # real agent ever launched (see GitHub issue #16 -- e.g. a
-            # working_directory that couldn't be resolved at all, even
-            # after _resolve_workflow_working_directory's AgentWorktree
-            # fallback above) can reach this same state with no agent
-            # having read a single instruction. Worded to not presume
-            # which one happened -- misdiagnosing a dispatch failure as
-            # "the arbiter declined to decide" wasted real debugging time
-            # on that issue.
+            decision, target_phase, dec_reason = _read_arbitration_result(working_directory)
+            if decision is None:
+                # NOT necessarily "the agent ran and forgot to write the
+                # file" -- task.status=="done" here only means SOMETHING
+                # closed the task; a dispatch that silently failed before a
+                # real agent ever launched (see GitHub issue #16 -- e.g. a
+                # working_directory that couldn't be resolved at all, even
+                # after _resolve_workflow_working_directory's AgentWorktree
+                # fallback above) can reach this same state with no agent
+                # having read a single instruction. Worded to not presume
+                # which one happened -- misdiagnosing a dispatch failure as
+                # "the arbiter declined to decide" wasted real debugging time
+                # on that issue.
+                logger.error(
+                    f"[ARBITRATE] {phase_name}: arbitration task {task.id[:8]} is 'done' but "
+                    f"no arbitration_result.json was found at working_directory="
+                    f"{working_directory!r} -- treating as fail (this can mean the agent ran "
+                    "and failed to write the file, OR that it never actually launched, e.g. a "
+                    "missing/unresolvable working directory)"
+                )
+                _resolve_arbitration_outcome(
+                    workflow_id,
+                    phase_id,
+                    phase_name,
+                    "fail",
+                    None,
+                    "Arbitration task closed with no decision file at its working directory "
+                    "-- could mean the agent ran without writing one, or that it never "
+                    "actually launched (e.g. no resolvable working directory)",
+                    logger,
+                )
+                continue
+
+            _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, decision, target_phase, dec_reason, logger)
+            # Consume it -- see _consume_arbitration_result's docstring. Not
+            # strictly needed on THIS path today (a fresh arbitration task
+            # overwrites the file before it's ever re-read here), but leaving
+            # a resolved decision on disk is exactly the trap the cap-exhausted
+            # fallback below fell into; don't leave a second copy of that trap
+            # lying around for some future caller to walk into.
+            _consume_arbitration_result(working_directory)
+        except Exception as e:
+            # The claim taken above is intentionally NOT released on a
+            # normal successful path -- this exact task_id is a one-shot
+            # artifact that will never legitimately need re-resolution once
+            # it succeeds. But an exception here means the decision was NOT
+            # (or only partially) acted on, and nothing else will ever
+            # un-claim this task -- unlike task_creation_claimed_at right
+            # above (released in _resolve_arbitration_outcome's own
+            # `finally`, "or we're unwinding from an exception"), a claimed-
+            # but-failed arbitration_resolved_at has no other release path
+            # at all. Without this, the first transient failure here (a
+            # locked-DB retry, a network blip in _create_phase_task's agent
+            # dispatch) would permanently strand this phase: every later
+            # sweep tick would see the claim already held and skip it
+            # forever, identical in shape to the exact bug class
+            # Task.arbitration_resolved_at was added to fix.
             logger.error(
-                f"[ARBITRATE] {phase_name}: arbitration task {task.id[:8]} is 'done' but "
-                f"no arbitration_result.json was found at working_directory="
-                f"{working_directory!r} -- treating as fail (this can mean the agent ran "
-                "and failed to write the file, OR that it never actually launched, e.g. a "
-                "missing/unresolvable working directory)"
+                f"[ARBITRATE] {phase_name}: resolving arbitration task {task.id[:8]} raised "
+                f"{e!r} -- releasing the resolution claim so a later tick can retry"
             )
-            _resolve_arbitration_outcome(
-                workflow_id,
-                phase_id,
-                phase_name,
-                "fail",
-                None,
-                "Arbitration task closed with no decision file at its working directory "
-                "-- could mean the agent ran without writing one, or that it never "
-                "actually launched (e.g. no resolvable working directory)",
-                logger,
-            )
-            continue
-
-        _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, decision, target_phase, dec_reason, logger)
-        # Consume it -- see _consume_arbitration_result's docstring. Not
-        # strictly needed on THIS path today (a fresh arbitration task
-        # overwrites the file before it's ever re-read here), but leaving
-        # a resolved decision on disk is exactly the trap the cap-exhausted
-        # fallback below fell into; don't leave a second copy of that trap
-        # lying around for some future caller to walk into.
-        _consume_arbitration_result(working_directory)
+            with get_db() as release_db:
+                release_db.query(Task).filter(Task.id == task.id).update(
+                    {"arbitration_resolved_at": None}, synchronize_session=False
+                )
+                release_db.commit()
 
 
 def _read_arbitration_result(
