@@ -17,7 +17,9 @@ from src.core.constants import (
     DESIGN_CONTEXT_SUBDIR,
     DESIGN_QUEUE_FALLBACK_DIR,
     DIAGNOSTIC_TASK_PREFIX,
+    TMUX_PANE_WIDTH,
 )
+from src.shared.terminal_reconstruction import reconstruct_terminal_rows
 from src.core.database import (
     Phase,
     PhaseExecution,
@@ -816,6 +818,37 @@ def pick_next_design(
     return next_design
 
 
+def _reconstructed_transcript_lines(transcript_path: Path) -> List[str]:
+    """Raw .transcript.log -> the lines a real terminal would actually show,
+    for error-pattern scanning -- NOT a chat-UI rendering (that pipeline,
+    AgentOutputCapture._read_transcript_log, also does chrome/status-bar
+    filtering this doesn't need). pipe-pane captures every byte written to
+    the pty continuously, including every cursor-reposition/overwrite a TUI
+    emits while redrawing the SAME line (progress spinners, streaming
+    tokens) -- treating each repaint as its own new line, the way a naive
+    line-count would, inflates any error string that happens to still be
+    on-screen during a redraw by however many times the terminal repainted.
+
+    reconstruct_terminal_rows resolves those CSI cursor movements the way a
+    real terminal does, collapsing repeated repaints of the same row back
+    down to the one row a human actually saw -- the same reconstruction
+    _read_transcript_log itself relies on, imported from the shared,
+    dependency-free module both already use rather than reimplemented here.
+    """
+    with open(transcript_path, "rb") as f:
+        text = f.read().decode("utf-8", errors="replace")
+    # Same OSC/charset stripping _read_transcript_log applies before
+    # reconstruction -- reconstruct_terminal_rows only understands CSI
+    # sequences (\x1b[...), not these.
+    import re
+
+    text = re.sub(r"\x1b\][^\x07]*\x07", "", text)  # OSC with BEL
+    text = re.sub(r"\x1b\][^\x1b]*\x1b\\", "", text)  # OSC with ST
+    text = re.sub(r"\x1b[()][A-Za-z0-9]", "", text)  # Charset selection
+    text = re.sub(r"\x1b(?!\[)[^\x1b\x5b\x5d]", "", text)  # Any other bare ESC
+    return [row.rstrip() for row in reconstruct_terminal_rows(text, TMUX_PANE_WIDTH)]
+
+
 def _assess_run_health(
     project_path: Optional[Path],
     workflow_id: str,
@@ -913,10 +946,25 @@ def _assess_run_health(
         tmux_dir = project_path / CONTEXT_DIR_NAME / "tmux"
         total_errors = 0
         if tmux_dir.is_dir():
-            for log_file in sorted(tmux_dir.glob("*.log")):
+            # *.transcript.log only, not the unqualified "*.log" this used
+            # to be -- that glob matched BOTH {session}.transcript.log and
+            # {session}.clean.log for the same session, double-counting
+            # every hit. transcript.log alone is also the complete record
+            # (clean.log is a live-polling snapshot that can be missing or
+            # badly incomplete for a short-lived/never-polled agent -- see
+            # AgentOutputCapture._get_terminated_agent_output's own
+            # docstring for a measured example, 153 captured lines out of
+            # 13,034 real ones). Read through the same terminal
+            # reconstruction that capture path uses instead of a raw text
+            # scan: pipe-pane captures every redraw a TUI emits while
+            # overwriting the SAME line (spinners, streaming tokens), and a
+            # naive line-split counts each repaint as a new hit -- observed
+            # live, a single AssertionError printed once inflated to 350-471
+            # "hits" this way, two orders of magnitude off the true count.
+            for log_file in sorted(tmux_dir.glob("*.transcript.log")):
                 try:
-                    text = log_file.read_text(errors="replace")
-                    hits = [ln.strip() for ln in text.splitlines() if any(p in ln for p in error_patterns)]
+                    lines = _reconstructed_transcript_lines(log_file)
+                    hits = [ln.strip() for ln in lines if any(p in ln for p in error_patterns)]
                     if hits:
                         total_errors += len(hits)
                         health["tmux_errors"].append(
