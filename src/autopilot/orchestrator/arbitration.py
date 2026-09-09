@@ -186,34 +186,10 @@ def _resolve_workflow_working_directory(db, workflow_id: str, wf: Optional["Work
     """
     if wf and wf.working_directory:
         return wf.working_directory
-    from src.core.database import AgentLog, AgentWorktree
+    from src.core.database import AgentWorktree
+    from src.core.worktree_manager import agent_ids_ever_associated_with_workflow
 
-    # Task.assigned_agent_id only reflects the CURRENT assignment -- a
-    # superseded/duplicate task or a terminated agent gets it cleared,
-    # which silently hides that agent's otherwise-still-valid worktree
-    # from the candidates below even when the directory is genuinely
-    # present on disk. AgentLog's "created" record survives that clearing
-    # (same reasoning, same query shape, as _authorize_agent_for_task's
-    # "was-ever-assigned" tier in _update_task_status_steps.py) -- so an
-    # agent that once worked on one of this workflow's tasks stays a
-    # candidate even after reassignment or termination.
-    #
-    # Confirmed live: workflow fa51faca's only remaining on-disk worktree
-    # belonged to an agent whose task had been marked "duplicated"
-    # (assigned_agent_id cleared), so the plain assigned_agent_id join
-    # found zero candidates and arbitration reported "no resolvable
-    # working directory" despite a perfectly usable worktree sitting on
-    # disk the whole time.
-    task_ids = db.query(Task.id).filter(Task.workflow_id == workflow_id)
-    current_agent_ids = db.query(Task.assigned_agent_id).filter(
-        Task.workflow_id == workflow_id, Task.assigned_agent_id.isnot(None)
-    )
-    ever_assigned_agent_ids = db.query(AgentLog.agent_id).filter(
-        AgentLog.log_type == "created",
-        AgentLog.agent_id.isnot(None),
-        AgentLog.details["task_id"].as_string().in_(task_ids),
-    )
-    candidate_agent_ids = {row[0] for row in current_agent_ids.union(ever_assigned_agent_ids).all()}
+    candidate_agent_ids = agent_ids_ever_associated_with_workflow(db, workflow_id)
     if not candidate_agent_ids:
         return None
 
