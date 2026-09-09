@@ -2989,6 +2989,92 @@ class TestDetectLaunchFailureSkippedOnceCliIsReady:
 
         mock_detect.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_wires_the_claude_aware_ready_timeout_into_the_wait_call(
+        self, mock_agent_manager, monkeypatch
+    ):
+        """scripts/agent-safe-bin/claude retries resolving the real claude
+        binary for up to CLAUDE_WRAPPER_RESOLVE_TIMEOUT (env, default 60s)
+        during a binary swap, printing nothing to the pane while it loops.
+        _wait_for_cli_ready's own ceiling was a hard-coded 25s, wired at
+        every real call site with no override -- so between second 25 and
+        60 the ready-wait gave up, _detect_launch_failure found no failure
+        text yet either (the wrapper hadn't printed anything), and the
+        code fell through to prompt delivery (verify_delivery=False by
+        default) against a pane where claude had not actually started.
+        Computing the right ceiling (_ready_wait_timeout) is useless if
+        the call site never threads it through -- this asserts the actual
+        kwarg the flow passes, not just that the helper computes correctly
+        in isolation."""
+        from src.agents._create_agent_for_task_steps import _deliver_initial_prompt_flow
+
+        monkeypatch.setenv("CLAUDE_WRAPPER_RESOLVE_TIMEOUT", "60")
+        prep, launch = self._prep_and_launch()
+        task = MagicMock(id="task-1")
+
+        pipeline = mock_agent_manager._launch
+        with (
+            patch.object(pipeline, "_wait_for_cli_ready", AsyncMock(return_value=True)) as mock_wait,
+            patch.object(pipeline, "_check_termination_race", AsyncMock(return_value=None)),
+            patch.object(pipeline.tmux_server, "has_session", return_value=True),
+            patch.object(pipeline, "_detect_launch_failure"),
+            patch.object(pipeline, "_deliver_initial_prompt", AsyncMock(return_value=None)),
+        ):
+            await _deliver_initial_prompt_flow(
+                pipeline,
+                prep=prep,
+                launch=launch,
+                task=task,
+                agent_id="agent-1",
+                system_prompt="",
+                cli_type="claude",
+            )
+
+        assert mock_wait.call_args.kwargs.get("timeout") == 70.0, (
+            "must pass wrapper_timeout(60) + margin(10), not the bare 25s default "
+            "-- a 25s ceiling races ahead of the wrapper's own 60s resolve window"
+        )
+
+
+class TestReadyWaitTimeoutCoupledToWrapperResolveWindow:
+    """_ready_wait_timeout is the single source of truth both real call
+    sites (launch_pipeline.py's restart path and
+    _create_agent_for_task_steps.py's create path) read from, so the
+    Python-side ready-wait ceiling and the bash wrapper's own resolve
+    window can't drift apart the way they did before this fix -- see
+    TestDetectLaunchFailureSkippedOnceCliIsReady.
+    test_wires_the_claude_aware_ready_timeout_into_the_wait_call for the
+    live incident this closes."""
+
+    def test_non_claude_cli_keeps_the_original_25s_ceiling(self):
+        from src.agents.launch_pipeline import LaunchPipeline
+
+        assert LaunchPipeline._ready_wait_timeout("pi") == 25.0
+        assert LaunchPipeline._ready_wait_timeout("codex") == 25.0
+
+    def test_claude_defaults_to_the_wrapper_default_plus_margin(self, monkeypatch):
+        from src.agents.launch_pipeline import LaunchPipeline
+
+        monkeypatch.delenv("CLAUDE_WRAPPER_RESOLVE_TIMEOUT", raising=False)
+        assert LaunchPipeline._ready_wait_timeout("claude") == 70.0
+
+    def test_claude_follows_a_configured_wrapper_timeout(self, monkeypatch):
+        """If the wrapper's own resolve window is ever tuned via its env
+        var, the Python side must follow automatically -- reading the same
+        variable is exactly what prevents the two from drifting apart
+        again, rather than fixing today's numbers and leaving the same
+        coordination gap for the next person who changes one side."""
+        from src.agents.launch_pipeline import LaunchPipeline
+
+        monkeypatch.setenv("CLAUDE_WRAPPER_RESOLVE_TIMEOUT", "20")
+        assert LaunchPipeline._ready_wait_timeout("claude") == 30.0
+
+    def test_claude_falls_back_to_the_default_on_a_malformed_env_value(self, monkeypatch):
+        from src.agents.launch_pipeline import LaunchPipeline
+
+        monkeypatch.setenv("CLAUDE_WRAPPER_RESOLVE_TIMEOUT", "not-a-number")
+        assert LaunchPipeline._ready_wait_timeout("claude") == 70.0
+
 
 class TestTerminatorRunsOffTheEventLoopThread:
     """Regression test: Terminator.terminate_agent must not block the event
