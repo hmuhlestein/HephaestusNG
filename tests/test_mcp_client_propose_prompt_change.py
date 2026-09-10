@@ -84,7 +84,7 @@ class TestProposePromptChange:
         )
         _patch_client(monkeypatch, fake_client)
 
-        result = await mcp_client.propose_prompt_change(
+        result = await mcp_client.propose_prompt_change.fn(
             phase_name="architecture_design",
             field="additional_notes",
             proposed_value="new value",
@@ -116,7 +116,7 @@ class TestProposePromptChange:
         )
         _patch_client(monkeypatch, fake_client)
 
-        result = await mcp_client.propose_prompt_change(
+        result = await mcp_client.propose_prompt_change.fn(
             phase_name="qa_validation",
             field="spec_gate",
             proposed_value="x",
@@ -137,7 +137,7 @@ class TestProposePromptChange:
         fake_client = FakeAsyncClient([httpx.ConnectError("refused")])
         _patch_client(monkeypatch, fake_client)
 
-        result = await mcp_client.propose_prompt_change(
+        result = await mcp_client.propose_prompt_change.fn(
             phase_name="architecture_design",
             field="additional_notes",
             proposed_value="x",
@@ -159,7 +159,7 @@ class TestProposePromptChange:
         )
         _patch_client(monkeypatch, fake_client)
 
-        await mcp_client.propose_prompt_change(
+        await mcp_client.propose_prompt_change.fn(
             phase_name="architecture_design",
             field="additional_notes",
             proposed_value="x",

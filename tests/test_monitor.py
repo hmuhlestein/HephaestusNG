@@ -4113,7 +4113,7 @@ class TestAutoRestartResetsTask:
             current_task_id="task-1",
         )
         task = Mock(id="task-1", status="in_progress", assigned_agent_id="agent-1", failure_reason="stale")
-        db_agent = Mock(id="agent-1", status="working")
+        db_agent = Mock(id="agent-1", status="working", current_task_id="task-1")
 
         session = Mock()
 

@@ -68,10 +68,14 @@ def repairable(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_repair_runs_for_a_directory_backed_design(repairable):
     service = RepairService()
-    with patch.object(service, "_spawn_repair_review_agent") as spawn:
+    with patch.object(service, "_run_repair"):
+        # repair() hands the real _run_repair to a background thread pool
+        # via loop.run_in_executor; stub it out for this call so that
+        # thread doesn't race the inline invocation below and double-spawn.
         started = await service.repair(str(repairable["project_dir"]), "des-speckit")
-        # repair() hands the work to a thread pool; run it inline so the
-        # assertions below see a finished repair.
+
+    with patch.object(service, "_spawn_repair_review_agent") as spawn:
+        # Run it inline so the assertions below see a finished repair.
         service._run_repair(
             started["repair_id"],
             "des-speckit",
