@@ -4286,17 +4286,17 @@ class TestCleanupStaleWorktrees:
     """
 
     @pytest.mark.asyncio
-    async def test_sweeps_every_active_project_with_its_own_worktree_manager(
+    async def test_sweeps_every_project_with_its_own_worktree_manager(
         self, make_monitoring_loop, mock_db
     ):
-        """Each active project must get its own fresh WorktreeManager
-        (reload()ed to that project's base_dir), not the shared long-lived
-        instance -- reload()ing a shared instance would race a concurrent
-        request relying on it pointing at a different project."""
+        """Each project must get its own fresh WorktreeManager (reload()ed
+        to that project's base_dir), not the shared long-lived instance --
+        reload()ing a shared instance would race a concurrent request
+        relying on it pointing at a different project."""
         fake_session = MagicMock()
         proj1 = MagicMock(id="proj-1", base_dir="/path/one")
         proj2 = MagicMock(id="proj-2", base_dir="/path/two")
-        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj1, proj2]
+        fake_session.query.return_value.all.return_value = [proj1, proj2]
         mock_db.session_scope.return_value.__enter__.return_value = fake_session
 
         instances = []
@@ -4321,10 +4321,49 @@ class TestCleanupStaleWorktrees:
         instances[1].cleanup_all_stale_branches.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_sweeps_inactive_projects_too(self, make_monitoring_loop, mock_db):
+        """Regression: this sweep used to filter to
+        AutopilotProject.is_active=True -- but that flag is purely the
+        dispatch-concurrency admission gate (max_concurrent_projects
+        cycles a project in/out of the top-N slots over time), not a
+        lifecycle/deletion state. An inactive project can still have
+        agents that ran against it before it was deprioritized, leaking
+        orphaned worktrees exactly like an active one -- but this filter
+        meant those orphans were never swept, no matter how long they
+        accumulated. Confirmed live: two long-running but currently-
+        inactive dogfooding projects had 34 and 31 untracked worktree
+        directories respectively, while the active ones had single
+        digits each -- this filter, not the leak itself, was why they
+        never got cleaned up. The fix is that this query now has no
+        is_active filter at all, so an inactive project must still be
+        swept."""
+        fake_session = MagicMock()
+        inactive_proj = MagicMock(id="proj-inactive", base_dir="/path/inactive", is_active=False)
+        fake_session.query.return_value.all.return_value = [inactive_proj]
+        mock_db.session_scope.return_value.__enter__.return_value = fake_session
+
+        instances = []
+
+        def _make_instance(*a, **kw):
+            inst = MagicMock()
+            inst.cleanup_all_stale_branches.return_value = {"worktrees_cleaned": 3}
+            instances.append(inst)
+            return inst
+
+        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance), patch(
+            "src.core.repo_resolution.get_project_repos", return_value=[]
+        ):
+            await make_monitoring_loop._cleanup_stale_worktrees()
+
+        assert len(instances) == 1, "an inactive project must still be swept, not skipped"
+        instances[0].reload.assert_called_once_with("/path/inactive")
+        instances[0].cleanup_all_stale_branches.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_skips_projects_with_no_base_dir(self, make_monitoring_loop, mock_db):
         fake_session = MagicMock()
         proj_no_dir = MagicMock(id="proj-empty", base_dir=None)
-        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj_no_dir]
+        fake_session.query.return_value.all.return_value = [proj_no_dir]
         mock_db.session_scope.return_value.__enter__.return_value = fake_session
 
         with patch("src.core.worktree_manager.WorktreeManager") as MockWTM:
@@ -4339,7 +4378,7 @@ class TestCleanupStaleWorktrees:
         fake_session = MagicMock()
         proj1 = MagicMock(id="proj-fails", base_dir="/path/fails")
         proj2 = MagicMock(id="proj-ok", base_dir="/path/ok")
-        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj1, proj2]
+        fake_session.query.return_value.all.return_value = [proj1, proj2]
         mock_db.session_scope.return_value.__enter__.return_value = fake_session
 
         calls = []
@@ -4371,7 +4410,7 @@ class TestCleanupStaleWorktrees:
         swept, not just AutopilotProject.base_dir."""
         fake_session = MagicMock()
         proj1 = MagicMock(id="proj-multi", base_dir="/path/primary")
-        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj1]
+        fake_session.query.return_value.all.return_value = [proj1]
         mock_db.session_scope.return_value.__enter__.return_value = fake_session
 
         backend_repo = MagicMock(path="/path/primary")

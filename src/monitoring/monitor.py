@@ -807,17 +807,38 @@ class MonitoringLoop:
         # src/mcp/server/lifecycle.py's _resume_interrupted_workflows (see
         # its docstring). This process's own loop also has to run every
         # other monitoring-cycle task, so offloaded the same way.
-        def _fetch_active_repo_dirs_sync():
+        #
+        # Every registered project, NOT filtered to is_active=True: that
+        # flag is purely the dispatch-concurrency admission gate (see the
+        # concurrent-active-projects invariant -- controlled by
+        # max_concurrent_projects, cycles a project in/out of the top-N
+        # slots over time), not a lifecycle/deletion state -- there is no
+        # separate "archived" flag on AutopilotProject. An inactive
+        # project can still have agents that ran against it before it was
+        # deprioritized (or dispatched through a path outside the normal
+        # concurrency gate), leaking orphaned worktrees exactly like an
+        # active one -- but this filter meant those orphans were NEVER
+        # swept, no matter how long they accumulated. Confirmed live: two
+        # long-running but currently-inactive dogfooding projects had 34
+        # and 31 untracked worktree directories respectively (create_agent
+        # _worktree's git-work-then-DB-write window, see
+        # test_worktree_db_reconciliation.py's own docstring), while the
+        # two currently-active projects had single digits each -- this
+        # filter, not the leak itself, was why they never got cleaned up.
+        # Each project still gets its own isolated try/except below, so a
+        # single inactive project whose repo is genuinely gone from disk
+        # can't abort the sweep for any other project.
+        def _fetch_all_repo_dirs_sync():
             with self.db_manager.session_scope() as session:
                 dirs = []
-                for p in session.query(AutopilotProject).filter_by(is_active=True).all():
+                for p in session.query(AutopilotProject).all():
                     repos = get_project_repos(session, p.id)
                     paths = [repo.path for repo in repos] if repos else [p.base_dir]
                     dirs.extend((p.id, path) for path in paths if path)
                 return dirs
 
         loop = asyncio.get_event_loop()
-        active_repo_dirs = await loop.run_in_executor(None, _fetch_active_repo_dirs_sync)
+        active_repo_dirs = await loop.run_in_executor(None, _fetch_all_repo_dirs_sync)
         for project_id, base_dir in active_repo_dirs:
             try:
                 bm = WorktreeManager(self.db_manager)
