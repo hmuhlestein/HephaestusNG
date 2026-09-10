@@ -56,13 +56,13 @@ def launch_pipeline():
 
 
 class TestResolvePhaseConfigFallbackValidation:
-    def test_disables_global_fallback_when_not_on_path(self, launch_pipeline):
+    def test_disables_global_fallback_when_not_on_path(self, launch_pipeline, monkeypatch):
         """agents.default_fallback_cli_tool is set but not installed --
         PhaseConfig must come back with no fallback at all, not a fallback
         a caller would then launch into a dead pane."""
-        launch_pipeline.config.agents.default_fallback_cli_tool = "pi"
-        launch_pipeline.config.agents.default_fallback_cli_model = "some-model"
-        launch_pipeline.config.agents.default_cli_tool = "claude"
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_fallback_cli_tool", "pi")
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_fallback_cli_model", "some-model")
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_cli_tool", "claude")
         task = Task(id="t1", raw_description="r", enriched_description="r", done_definition="d")
 
         with patch("src.agents.launch_pipeline.is_cli_tool_available", return_value=False):
@@ -74,11 +74,11 @@ class TestResolvePhaseConfigFallbackValidation:
         assert phase_config.fallback_cli_tool is None
         assert phase_config.fallback_cli_model is None
 
-    def test_keeps_global_fallback_when_available(self, launch_pipeline):
+    def test_keeps_global_fallback_when_available(self, launch_pipeline, monkeypatch):
         """Unchanged behavior: an installed fallback is still resolved."""
-        launch_pipeline.config.agents.default_fallback_cli_tool = "pi"
-        launch_pipeline.config.agents.default_fallback_cli_model = "some-model"
-        launch_pipeline.config.agents.default_cli_tool = "claude"
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_fallback_cli_tool", "pi")
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_fallback_cli_model", "some-model")
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_cli_tool", "claude")
         task = Task(id="t2", raw_description="r", enriched_description="r", done_definition="d")
 
         with patch("src.agents.launch_pipeline.is_cli_tool_available", return_value=True):
@@ -90,7 +90,7 @@ class TestResolvePhaseConfigFallbackValidation:
         assert phase_config.fallback_cli_tool == "pi"
         assert phase_config.fallback_cli_model == "some-model"
 
-    def test_disables_phase_level_fallback_when_not_on_path(self, tmp_path):
+    def test_disables_phase_level_fallback_when_not_on_path(self, tmp_path, monkeypatch):
         """A Phase row's own fallback_cli_tool (not the global config one)
         must be validated the same way. Global fallback is enabled here
         (to a DIFFERENT tool than the phase's own) -- see
@@ -104,8 +104,8 @@ class TestResolvePhaseConfigFallbackValidation:
         db = DatabaseManager(str(db_path))
         db.create_tables()
         launch_pipeline = AgentManager(db_manager=db, llm_provider=Mock())
-        launch_pipeline.config.agents.default_fallback_cli_tool = "some-other-fallback"
-        launch_pipeline.config.agents.default_cli_tool = "claude"
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_fallback_cli_tool", "some-other-fallback")
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_cli_tool", "claude")
 
         with db.session_scope() as session:
             session.add(Workflow(id="wf1", name="W", status="active", phases_folder_path="/tmp"))
@@ -131,7 +131,7 @@ class TestResolvePhaseConfigFallbackValidation:
         assert phase_config.fallback_cli_tool is None
         assert phase_config.fallback_cli_model is None
 
-    def test_global_config_disabled_overrides_a_stale_phase_level_value(self, tmp_path):
+    def test_global_config_disabled_overrides_a_stale_phase_level_value(self, tmp_path, monkeypatch):
         """The live incident this closes: a fallback CLI tool was removed
         from every config file (agents.default_fallback_cli_tool unset),
         but a Phase row created BEFORE that removal still carried the old
@@ -149,8 +149,8 @@ class TestResolvePhaseConfigFallbackValidation:
         db = DatabaseManager(str(db_path))
         db.create_tables()
         launch_pipeline = AgentManager(db_manager=db, llm_provider=Mock())
-        launch_pipeline.config.agents.default_fallback_cli_tool = None
-        launch_pipeline.config.agents.default_cli_tool = "claude"
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_fallback_cli_tool", None)
+        monkeypatch.setattr(launch_pipeline.config.agents, "default_cli_tool", "claude")
 
         with db.session_scope() as session:
             session.add(Workflow(id="wf2", name="W", status="active", phases_folder_path="/tmp"))
@@ -241,14 +241,14 @@ def _wire_prompt_delivery_mocks(restart_manager):
 class TestRestartAgentReResolvesFallbackCli:
     @pytest.mark.asyncio
     async def test_switches_to_available_default_fallback_when_stored_cli_type_is_broken(
-        self, restart_manager, restart_db
+        self, restart_manager, restart_db, monkeypatch
     ):
         """agent.cli_type ('brokencli') isn't on PATH; the configured
         default_fallback_cli_tool ('claude') is -- restart_agent must switch
         to it and persist the change, not keep relaunching under 'brokencli'."""
         agent_id = _seed_restart_agent(restart_db, cli_type="brokencli")
-        restart_manager.config.agents.default_fallback_cli_tool = "claude"
-        restart_manager.config.agents.default_fallback_cli_model = "sonnet"
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_tool", "claude")
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_model", "sonnet")
         restart_manager.tmux_server.has_session.return_value = True
         mock_cli = _mock_cli_agent()
 
@@ -268,16 +268,16 @@ class TestRestartAgentReResolvesFallbackCli:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_default_cli_tool_when_fallback_also_unavailable(
-        self, restart_manager, restart_db
+        self, restart_manager, restart_db, monkeypatch
     ):
         """Neither the stored cli_type nor the configured fallback are
         installed -- restart_agent must still try config.agents.
         default_cli_tool before giving up entirely."""
         agent_id = _seed_restart_agent(restart_db, cli_type="brokencli")
-        restart_manager.config.agents.default_fallback_cli_tool = "alsobroken"
-        restart_manager.config.agents.default_fallback_cli_model = None
-        restart_manager.config.agents.default_cli_tool = "claude"
-        restart_manager.config.agents.cli_model = "sonnet"
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_tool", "alsobroken")
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_model", None)
+        monkeypatch.setattr(restart_manager.config.agents, "default_cli_tool", "claude")
+        monkeypatch.setattr(restart_manager.config.agents, "cli_model", "sonnet")
         restart_manager.tmux_server.has_session.return_value = True
         mock_cli = _mock_cli_agent()
 
@@ -292,14 +292,14 @@ class TestRestartAgentReResolvesFallbackCli:
             assert agent.cli_type == "claude"
 
     @pytest.mark.asyncio
-    async def test_fails_task_cleanly_when_no_cli_is_available(self, restart_manager, restart_db):
+    async def test_fails_task_cleanly_when_no_cli_is_available(self, restart_manager, restart_db, monkeypatch):
         """Stored cli_type, configured fallback, AND the global default are
         all unavailable -- restart_agent must fail the task visibly instead
         of relaunching into another dead pane."""
         agent_id = _seed_restart_agent(restart_db, cli_type="brokencli")
-        restart_manager.config.agents.default_fallback_cli_tool = "alsobroken"
-        restart_manager.config.agents.default_fallback_cli_model = None
-        restart_manager.config.agents.default_cli_tool = "brokencli"  # same as stored -- no real candidate
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_tool", "alsobroken")
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_model", None)
+        monkeypatch.setattr(restart_manager.config.agents, "default_cli_tool", "brokencli")  # same as stored -- no real candidate
         restart_manager.tmux_server.has_session.return_value = True
         mock_cli = _mock_cli_agent()
 
@@ -321,13 +321,13 @@ class TestRestartAgentReResolvesFallbackCli:
 
     @pytest.mark.asyncio
     async def test_unchanged_cli_type_when_stored_value_is_already_installed(
-        self, restart_manager, restart_db
+        self, restart_manager, restart_db, monkeypatch
     ):
         """The overwhelming majority case: agent.cli_type is fine. Restart
         must behave exactly as before -- no re-resolution, no config lookup
         beyond what create-time already did."""
         agent_id = _seed_restart_agent(restart_db, cli_type="claude", cli_model="sonnet")
-        restart_manager.config.agents.default_fallback_cli_tool = "pi"
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_tool", "pi")
         restart_manager.tmux_server.has_session.return_value = True
         mock_cli = _mock_cli_agent()
 
@@ -344,7 +344,7 @@ class TestRestartAgentReResolvesFallbackCli:
 
     @pytest.mark.asyncio
     async def test_second_restart_attempt_picks_up_a_config_fix_the_first_did_not_have(
-        self, restart_manager, restart_db
+        self, restart_manager, restart_db, monkeypatch
     ):
         """The exact scenario the fix targets: a first restart attempt has
         no usable CLI and fails cleanly (agent.cli_type left untouched); the
@@ -352,9 +352,9 @@ class TestRestartAgentReResolvesFallbackCli:
         SAME agent must pick up the new config value, not replay the first
         attempt's stale failure."""
         agent_id = _seed_restart_agent(restart_db, cli_type="brokencli", restart_count=0)
-        restart_manager.config.agents.default_fallback_cli_tool = "alsobroken"
-        restart_manager.config.agents.default_fallback_cli_model = None
-        restart_manager.config.agents.default_cli_tool = "brokencli"
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_tool", "alsobroken")
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_model", None)
+        monkeypatch.setattr(restart_manager.config.agents, "default_cli_tool", "brokencli")
         restart_manager.tmux_server.has_session.return_value = True
 
         # -- Attempt 1: nothing usable, fails cleanly --
@@ -370,8 +370,8 @@ class TestRestartAgentReResolvesFallbackCli:
             assert task.status == "failed"
 
         # -- Operator fixes the config: a fallback is now installed --
-        restart_manager.config.agents.default_fallback_cli_tool = "workingfallback"
-        restart_manager.config.agents.default_fallback_cli_model = "new-model"
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_tool", "workingfallback")
+        monkeypatch.setattr(restart_manager.config.agents, "default_fallback_cli_model", "new-model")
 
         # -- Attempt 2: picks up the fixed config --
         with patch("src.agents.launch_pipeline.get_cli_agent", return_value=_mock_cli_agent()), \

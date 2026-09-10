@@ -441,15 +441,19 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     # before prompt delivery and the failure under test never happened.
     mock_task_record.assigned_agent_id = None
 
-    mock_query = Mock()
-    mock_query.filter_by = Mock(return_value=mock_query)
-    mock_query.filter = Mock(return_value=mock_query)
-    # terminate_agent's stray-task sweep calls .filter(...).all(); an
-    # unconfigured Mock is not iterable, and the cleanup path swallows
-    # that as "Failed to update database during cleanup" -- leaving the
-    # task at its old status instead of the "failed" this test asserts.
-    mock_query.all = Mock(return_value=[])
-    mock_query.first = Mock(return_value=mock_task_record)
+    # get_session() is called many times across the flow (guard check,
+    # agent/task lookups, cleanup's own terminate_agent + task-status
+    # update) and they all land on this one mock_session -- so its query()
+    # must be model-aware: terminate_agent queries Agent for the row it
+    # terminates, the cleanup code queries Task for the row it fails.
+    def _mock_session_query(model):
+        q = Mock()
+        q.filter_by = Mock(return_value=q)
+        q.filter = Mock(return_value=q)
+        q.all = Mock(return_value=[])
+        q.first = Mock(return_value=mock_agent_record if model is Agent else mock_task_record)
+        return q
+
     mock_session = Mock()
     mock_session.__enter__ = Mock(return_value=mock_session)
     mock_session.__exit__ = Mock(return_value=False)
@@ -457,19 +461,7 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     mock_session.commit = Mock()
     mock_session.rollback = Mock()
     mock_session.close = Mock()
-    mock_session.query = Mock(return_value=mock_query)
-
-    # Cleanup session (third get_session call)
-    cleanup_query = Mock()
-    cleanup_query.filter_by = Mock(return_value=cleanup_query)
-    cleanup_query.first = Mock(side_effect=[mock_agent_record, mock_task_record])
-    cleanup_session = Mock()
-    cleanup_session.__enter__ = Mock(return_value=cleanup_session)
-    cleanup_session.__exit__ = Mock(return_value=False)
-    cleanup_session.commit = Mock()
-    cleanup_session.rollback = Mock()
-    cleanup_session.close = Mock()
-    cleanup_session.query = Mock(return_value=cleanup_query)
+    mock_session.query = Mock(side_effect=_mock_session_query)
 
     # Use a function-based side_effect: guard_session for the first call
     # (guard check), mock_session for everything else (main + cleanup).

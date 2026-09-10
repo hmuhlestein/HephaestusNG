@@ -291,7 +291,15 @@ class TestFlushStableTranscript:
         assert "flush-line-3" in content
         # Everything the bootstrap withheld (plus anything captured fresh
         # by flush's own final capture-pane call) must now be committed.
-        assert content.count("\n") >= len(state["history"][-1])
+        # _append_lines deliberately drops a leading blank line rather than
+        # writing a pointless one at the top of a fresh file (see its own
+        # docstring and TestAppendLinesCollapsesBlankRuns below) -- when
+        # tmux's captured pane happens to start with one, that's one fewer
+        # newline than len(history) by design, not a lost line.
+        expected_lines = len(state["history"][-1])
+        if state["history"][-1] and state["history"][-1][0] == "":
+            expected_lines -= 1
+        assert content.count("\n") >= expected_lines
         assert session_name not in getattr(agent_manager, "_pane_stability_cache", {})
 
 

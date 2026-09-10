@@ -8,13 +8,29 @@ that an in-process import would miss.
 """
 
 import os
-import select
+import selectors
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).parent.parent / "src" / "agents" / "pty_filter.py"
+
+
+def _wait_readable(fileobj, timeout: float) -> bool:
+    """select.select() has a fixed FD_SETSIZE ceiling (typically 1024) --
+    fine in isolation, but the full test suite's process accumulates far
+    more open fds than that over thousands of tests, so select() started
+    raising 'ValueError: filedescriptor out of range in select()' here
+    purely from running late in a big suite, nothing to do with this
+    script's own behavior. selectors.DefaultSelector picks poll/kqueue,
+    neither of which has that limit."""
+    sel = selectors.DefaultSelector()
+    sel.register(fileobj, selectors.EVENT_READ)
+    try:
+        return bool(sel.select(timeout))
+    finally:
+        sel.close()
 
 
 def _run_filter(input_bytes: bytes, timeout: float = 5.0) -> bytes:
@@ -105,7 +121,7 @@ class TestPtyFilterFlushesWithoutLineBuffering:
             proc.stdin.write(b"status: \x1b[1mworking\x1b[22m (no newline here)")
             proc.stdin.flush()
 
-            ready, _, _ = select.select([proc.stdout], [], [], 2.0)
+            ready = _wait_readable(proc.stdout, 2.0)
             assert ready, "no output arrived within 2s -- filter is buffering on input"
             data = os.read(proc.stdout.fileno(), 4096)
             assert data == b"status: \x1b[1mworking\x1b[22m (no newline here)"
@@ -123,7 +139,7 @@ class TestPtyFilterFlushesWithoutLineBuffering:
             for chunk in (b"first", b"second", b"third"):
                 proc.stdin.write(chunk)
                 proc.stdin.flush()
-                ready, _, _ = select.select([proc.stdout], [], [], 2.0)
+                ready = _wait_readable(proc.stdout, 2.0)
                 assert ready, f"chunk {chunk!r} was not flushed through promptly"
                 assert os.read(proc.stdout.fileno(), 4096) == chunk
         finally:
