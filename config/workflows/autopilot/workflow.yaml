@@ -4,8 +4,8 @@ default_thinking_level: high
 # fallback_cli_tool:
 # fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 
-# Execution order by phase id. Ids match pipeline position (1-14).
-execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+# Execution order by phase id. Ids match pipeline position (1-15).
+execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 session_roles:
   product_requirements: product-requirements
@@ -16,6 +16,7 @@ session_roles:
   architectural_review: architect       # checks design compliance vs architecture.md
   adversarial_review: adversarial       # reasons backward from failure modes
   security_review: security-reviewer
+  hipaa_compliance: compliance-reviewer # PHI/PII handling review, after security_review's fixes land
   qa_validation: qa
   product_validation: product-requirements
   doc_review: doc-reviewer
@@ -32,6 +33,7 @@ required_output:
   design_review: .hephaestus/design_review/challenge.md
   architectural_review: .hephaestus/architectural_review/review.md
   adversarial_review: .hephaestus/adversarial_review/adversarial.md
+  hipaa_compliance: .hephaestus/hipaa_compliance/hipaa_compliance.md
   qa_validation: .hephaestus/qa_validation/qa.md
   product_validation: .hephaestus/product_validation/validation.md
 
@@ -70,7 +72,7 @@ phase_inputs:
     optional: [spec.md]
   development:
     required: [architecture.md, requirements.md]
-    optional: [challenge.md, adversarial.md, review.md, security.md]
+    optional: [challenge.md, adversarial.md, review.md, security.md, hipaa_compliance.md]
   adversarial_review:
     required: [requirements.md]
     optional: [architecture.md, spec.md]
@@ -80,9 +82,12 @@ phase_inputs:
   security_review:
     required: [requirements.md, architecture.md]
     optional: [adversarial.md, spec.md]
+  hipaa_compliance:
+    required: [requirements.md, architecture.md]
+    optional: [adversarial.md, security.md, spec.md]
   qa_validation:
     required: [requirements.md]
-    optional: [architecture.md, adversarial.md, security.md, spec.md]
+    optional: [architecture.md, adversarial.md, security.md, hipaa_compliance.md, spec.md]
   product_validation:
     required: [spec.md, requirements.md]
     optional: [architecture.md]
@@ -121,6 +126,7 @@ orchestrator:
   #     adversarial_review     0.4, 0.5, 0.9
   #     architectural_review   0.4, 0.5, 0.9
   #     security_review        0.4, 0.9
+  #     hipaa_compliance       0.4, 0.5, 0.9  (same scorer shape as adversarial_review)
   #     qa_validation          0.25, 0.5, 1.0
   #     product_validation     0.25, 0.5, 0.7, 0.85, 1.0
   #
@@ -137,8 +143,9 @@ orchestrator:
   # scope_review (verdict FAIL -> 0.2), qa_validation (critical_issues over
   # the spec cap -> 0.25) and product_validation (an explicit ARCHITECTURE
   # verdict -> 0.25). For the blocker-count scorers -- design_review,
-  # adversarial_review, architectural_review, security_review -- the band is
-  # UNREACHABLE: their lowest score is 0.4, because no signal currently
+  # adversarial_review, architectural_review, security_review,
+  # hipaa_compliance -- the band is UNREACHABLE: their lowest score is
+  # 0.4, because no signal currently
   # distinguishes "needs a code fix" from "needs a redesign". Each of those
   # scorers documents this in its own docstring. The conditions are kept
   # rather than deleted so the routing is already in place if such a signal
@@ -283,6 +290,27 @@ orchestrator:
         - if: "score >= 0.7"
           action: continue
           reason: "Security review passed"
+
+    - after_phase: hipaa_compliance
+      evaluator: heuristic
+      # Same shape/thresholds as adversarial_review and architectural_review
+      # (this phase reuses score_adversarial_review's own scorer, see
+      # spec.py's score_hipaa_compliance) -- report-only, findings routed
+      # back to development, not a self-fixing phase like security_review.
+      max_retries: 10
+      max_review_runs: 4
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: architecture_design
+          reason: "PHI/PII handling requires architectural changes (e.g. missing encryption/access-control design)"
+        - if: "score < 0.6"
+          action: goto
+          target: development
+          reason: "PHI/PII compliance issues found, returning to development"
+        - if: "score >= 0.6"
+          action: continue
+          reason: "HIPAA/PII compliance review passed"
 
     - after_phase: qa_validation
       evaluator: heuristic

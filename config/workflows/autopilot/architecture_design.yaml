@@ -20,6 +20,7 @@ done_definitions:
   - "System architecture diagram/description created"
   - "Component interfaces defined (APIs, data models, contracts)"
   - "Data flow documented"
+  - "PII/PHI fields from requirements.md given an encryption/access-control/audit-logging design decision (or explicitly confirmed none exist)"
   - "Infrastructure requirements specified"
   - "Architecture verified against existing code - no file/interface/dependency conflicts"
   - "Task breakdown with blocking relationships documented in architecture.md"
@@ -124,6 +125,10 @@ additional_notes: |
   - Component list and dependencies
   - Technology constraints
   - Implementation order
+  - The "PII/PHI Data Identified" section (product_requirements.yaml
+    always writes one, even when empty) — every field listed there needs
+    an encryption/access-control/audit-logging design decision below, not
+    just a mention that the field exists
 
   **REQUIREMENT TRACKING:**
   requirements.md contains REQ-XX and NFR-XX numbered requirements.
@@ -199,7 +204,11 @@ additional_notes: |
   ### Component: [Name]
   - **Purpose:** What it does
   - **Interface:** Public API / methods / endpoints
-  - **Data Model:** What data it manages
+  - **Data Model:** What data it manages — if requirements.md's "PII/PHI
+    Data Identified" section lists any field this component stores or
+    passes through, name it here and note the encryption/access-control
+    approach (e.g. "patient.diagnosis: encrypted column, read gated by
+    treating-provider role"), not just that the field exists
   - **Dependencies:** What it needs from other components
   - **Implementation Details:** Key algorithms, patterns, libraries
   
@@ -232,6 +241,25 @@ additional_notes: |
   - Build configuration
   - Environment setup
   - Secrets management: ALL credentials, API keys, tokens, and secrets MUST go in a .env file (or secrets manager like Vault/AWS Secrets Manager). NEVER in source code, config YAML, or this document. Document which secrets are needed and their expected format, but not their values.
+  - PII/PHI handling: for every field requirements.md's "PII/PHI Data
+    Identified" section lists, state the encryption-at-rest approach,
+    which roles/code paths may read it (minimum-necessary-access, not
+    just "authenticated users"), and where its access gets audit-logged.
+    If requirements.md identified none, write "None identified" here —
+    do not skip the line.
+  - Log redaction: if any PII/PHI field is listed, name a specific
+    redaction approach for it and state it here so development follows
+    ONE decision, not ad-hoc per-call-site judgment. Prefer an established
+    library/convention for the project's language over hand-rolled
+    field-blacklisting — check what's already available before requiring
+    something new: a structured-logging redaction/scrubbing library (e.g.
+    Python's `logging` with a redacting `Filter`, `scrubadub`, or a
+    structlog processor; Node's `pino` redaction paths; a redaction
+    middleware already in the project's dependencies) beats a logger call
+    manually omitting each field, since a NEW log call elsewhere won't
+    accidentally reintroduce the leak. Name the library/pattern and where
+    it gets applied (a shared logger config, a middleware, a base
+    serializer) — not just "redact PII in logs."
   
   ## STEP 6: VERIFY ARCHITECTURE AGAINST EXISTING CODE (MANDATORY)
 
@@ -447,7 +475,12 @@ additional_notes: |
   ├── backend/
   └── ...
   ```
-  
+
+  ## PII/PHI Handling
+  [For every field in requirements.md's "PII/PHI Data Identified" section:
+  encryption-at-rest approach, minimum-necessary-access roles, audit-log
+  coverage. "None identified" if requirements.md listed none.]
+
   ## Task Breakdown
   ### Infrastructure
   1. [Task] - Blocked By: None

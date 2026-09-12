@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 
-def generate_codex_agent(phase_cfg: dict) -> str:
+def generate_codex_agent(phase_cfg: dict, total_phases: int) -> str:
     """Generate one Codex custom-agent configuration for a workflow phase."""
     name = phase_cfg["name"]
     phase_num = phase_cfg["id"]
@@ -16,7 +16,7 @@ def generate_codex_agent(phase_cfg: dict) -> str:
     description = phase_cfg.get("description", "").strip()
     first_line = description.splitlines()[0].strip() if description else role_title
 
-    instructions = f"""You are the Hephaestus {role_title} agent (Phase {phase_num} of 13).
+    instructions = f"""You are the Hephaestus {role_title} agent (Phase {phase_num} of {total_phases}).
 
 {description}
 
@@ -66,7 +66,7 @@ def main():
     print(f"Found {len(phases)} phases in YAML")
     for phase in phases:
         filename = f"hephaestus-{phase['name'].replace('_', '-')}.toml"
-        (output_dir / filename).write_text(generate_codex_agent(phase))
+        (output_dir / filename).write_text(generate_codex_agent(phase, len(phases)))
         print(f"  Generated: {filename}")
 
     print(f"\nGenerated {len(phases)} Codex agents in {output_dir}")

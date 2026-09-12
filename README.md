@@ -16,7 +16,7 @@
 
 ## 🤖 Autopilot
 
-Most "autonomous coding agents" write code. Autopilot goes further: it builds hands-free battle-hardened production-ready code. Give it a one or more design specs and it runs a 14-phase pipeline — each phase a focused agent, each phase's claim of "done" checked before the next one starts, and is able to go back to any previous step when something doesn't hold up.
+Most "autonomous coding agents" write code. Autopilot goes further: it builds hands-free battle-hardened production-ready code. Give it a one or more design specs and it runs a 15-phase pipeline — each phase a focused agent, each phase's claim of "done" checked before the next one starts, and is able to go back to any previous step when something doesn't hold up.
 
 <div align="center">
 <img src="assets/Autopilot.png" alt="Autopilot Dashboard" width="100%">
@@ -33,12 +33,13 @@ Most "autonomous coding agents" write code. Autopilot goes further: it builds ha
 | 6 | `adversarial_review` | Adversarial: assumes the code is broken and reasons backward from failure modes to find out how. |
 | 7 | `architectural_review` | Checks the implementation against the architecture doc for compliance drift. |
 | 8 | `security_review` | Focused security pass; fixes what it finds with AWS ASH. |
-| 9 | `qa_validation` | Runs comprehensive QA and validates real behavior. |
-| 10 | `product_validation` | Validates the result against original design intent, not just the architecture doc. |
-| 11 | `doc_review` | Reviews and fixes project documentation for accuracy and completeness. |
-| 12 | `forensics_analysis` | Analyzes the whole run's agent outputs to surface prompt improvements for future pipelines. |
-| 13 | `git_expert` | Autonomous git hand-off — commit, push, and (gated by review mode) merge. |
-| 14 | `deploy` | Executes the feature's deployment steps. |
+| 9 | `hipaa_compliance` | Reviews PHI/PII handling — encryption, access control, audit logging, retention — on top of security_review's fixes. Report-only. |
+| 10 | `qa_validation` | Runs comprehensive QA and validates real behavior. |
+| 11 | `product_validation` | Validates the result against original design intent, not just the architecture doc. |
+| 12 | `doc_review` | Reviews and fixes project documentation for accuracy and completeness. |
+| 13 | `forensics_analysis` | Analyzes the whole run's agent outputs to surface prompt improvements for future pipelines. |
+| 14 | `git_expert` | Autonomous git hand-off — commit, push, and (gated by review mode) merge. |
+| 15 | `deploy` | Executes the feature's deployment steps. |
 
 Building on the underlying framework's self-organizing branching (more on that below) — a battle-tested pipeline in exchange for never silently skipping a step or trusting an agent's word for it. What it buys you---production grade code:
 

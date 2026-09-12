@@ -20,6 +20,7 @@ from src.autopilot.spec import (
     score_architectural_review,
     score_design_review,
     score_feature_review,
+    score_hipaa_compliance,
     score_product_validation,
     score_qa,
     score_scope_review,
@@ -576,6 +577,49 @@ class TestBuildPhaseOutput:
         assert result["score"] >= 0.7
         assert result["spec_gate"]["band"] == "pass"
 
+    def test_hipaa_compliance_no_result(self, tmp_path):
+        result = build_phase_output("hipaa_compliance", tmp_path)
+        assert result["score"] == 0.4  # no result → conservative fallback
+
+    def test_hipaa_compliance_with_blockers(self, tmp_path):
+        docs = tmp_path / ".hephaestus" / "hipaa_compliance"
+        docs.mkdir(parents=True)
+        (docs / "hipaa_compliance.md").write_text(_okf(
+            "type: hipaa_compliance\n"
+            "blocker_count: 2\n"
+            "warning_count: 1\n"
+            "nit_count: 0"
+        ))
+        result = build_phase_output("hipaa_compliance", tmp_path)
+        assert result["score"] < 0.6
+        assert result["spec_gate"]["blocker_count"] == 2
+        assert "result_missing" not in result["spec_gate"]
+
+    def test_hipaa_compliance_warnings_unchanged_from_history_passes(self, tmp_path, db_manager):
+        """End-to-end wiring: build_phase_output looks up the workflow's own
+        review-findings history and passes prior_warning_count through to
+        score_hipaa_compliance, same mechanism as adversarial_review/
+        design_review above."""
+        from src.autopilot.spec import record_review_finding
+
+        record_review_finding(
+            "wf-bpo-hipaa-1", "hipaa_compliance", blocker_count=0,
+            summary="1 pre-existing, deferred warning", warning_count=1,
+        )
+        docs = tmp_path / ".hephaestus" / "hipaa_compliance"
+        docs.mkdir(parents=True)
+        (docs / "hipaa_compliance.md").write_text(_okf(
+            "type: hipaa_compliance\n"
+            "blocker_count: 0\n"
+            "warning_count: 1\n"
+            "nit_count: 0"
+        ))
+        result = build_phase_output(
+            "hipaa_compliance", tmp_path, workflow_id="wf-bpo-hipaa-1"
+        )
+        assert result["score"] >= 0.7
+        assert result["spec_gate"]["band"] == "pass"
+
     def test_design_review_warnings_unchanged_from_history_passes(self, tmp_path, db_manager):
         """ticket-14029d38: same end-to-end wiring as
         test_adversarial_review_warnings_unchanged_from_history_passes,
@@ -858,6 +902,89 @@ class TestScoreAdversarialReview:
 
     def test_blocker_without_report_text_falls_back_to_count(self):
         score, meta = score_adversarial_review(
+            {"blocker_count": 1, "warning_count": 0, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert "1 BLOCKER" in meta["reason"]
+
+
+class TestScoreHipaaCompliance:
+    """Identical scoring shape to score_adversarial_review -- hipaa_compliance.yaml
+    uses the same BLOCKER/WARNING/NIT report schema."""
+
+    def test_none_result(self):
+        score, meta = score_hipaa_compliance(None)
+        assert score == 0.4
+        assert meta["result_missing"] is True
+
+    def test_none_result_with_report_text_still_quotes_report(self):
+        report = "# HIPAA/PII Compliance Report\n\n### [BLOCKER] SSN logged in cleartext"
+        score, meta = score_hipaa_compliance(None, report_text=report)
+        assert meta["result_missing"] is True
+        assert report in meta["reason"]
+
+    def test_blocker_routes_to_development(self):
+        score, meta = score_hipaa_compliance(
+            {"blocker_count": 2, "warning_count": 1, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert meta["band"] == "development"
+        assert meta["blocker_count"] == 2
+
+    def test_warnings_only_still_routes_to_development(self):
+        score, meta = score_hipaa_compliance(
+            {"blocker_count": 0, "warning_count": 3, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert meta["band"] == "development"
+
+    def test_warnings_unchanged_from_prior_run_passes(self):
+        """Same anti-loop mechanism as score_adversarial_review: a
+        pre-existing, out-of-scope warning recurring every run because
+        development has nothing new to fix must not burn the retry budget
+        forever."""
+        score, meta = score_hipaa_compliance(
+            {"blocker_count": 0, "warning_count": 2, "nit_count": 1},
+            prior_warning_count=2,
+        )
+        assert score >= 0.7
+        assert meta["band"] == "pass"
+        assert meta["warning_count"] == 2
+
+    def test_warnings_fewer_than_prior_run_passes(self):
+        score, meta = score_hipaa_compliance(
+            {"blocker_count": 0, "warning_count": 1, "nit_count": 0},
+            prior_warning_count=2,
+        )
+        assert score >= 0.7
+        assert meta["band"] == "pass"
+
+    def test_new_warning_beyond_prior_run_still_routes_to_development(self):
+        score, meta = score_hipaa_compliance(
+            {"blocker_count": 0, "warning_count": 3, "nit_count": 0},
+            prior_warning_count=2,
+        )
+        assert score < 0.6
+        assert meta["band"] == "development"
+
+    def test_clean(self):
+        score, meta = score_hipaa_compliance(
+            {"blocker_count": 0, "warning_count": 0, "nit_count": 0}
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+
+    def test_blocker_with_report_text_quotes_full_report(self):
+        report = "# HIPAA/PII Compliance Report\n\n### [BLOCKER] PHI unencrypted at rest\n- File: src/models.py:12"
+        score, meta = score_hipaa_compliance(
+            {"blocker_count": 1, "warning_count": 0, "nit_count": 0},
+            report_text=report,
+        )
+        assert score < 0.6
+        assert report in meta["reason"]
+
+    def test_blocker_without_report_text_falls_back_to_count(self):
+        score, meta = score_hipaa_compliance(
             {"blocker_count": 1, "warning_count": 0, "nit_count": 0}
         )
         assert score < 0.6

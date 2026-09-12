@@ -197,6 +197,14 @@ additional_notes: |
      - Implement classes/functions per interface spec
      - Handle edge cases from requirements
      - Follow existing code patterns in the project
+     - If architecture.md's "PII/PHI Handling" section names a field you're
+       implementing storage/transmission for, follow its encryption/
+       access-control decision exactly — don't store or transmit it
+       unencrypted "for now." General hygiene for any PII/PHI field even
+       when architecture.md is silent on the specifics: use parameterized
+       queries (never string-interpolate it into SQL), never place it in a
+       URL or query string, and encrypt it at rest if it lands in a
+       database column or file.
   
   3. **Write tests**
      - Unit tests for core logic
@@ -305,6 +313,15 @@ additional_notes: |
   - If you return a fallback value, log the error before returning.
   - The only acceptable silent catch is in a cleanup/teardown path where the original
     operation already succeeded and logging would be noise.
+  - Never interpolate a PII/PHI field's actual value into a log line or an
+    error message returned to a client — log the field NAME and enough
+    context to debug (record ID, operation), not the value itself.
+  - If architecture.md's "Log redaction" line names a specific
+    library/pattern, use it — don't hand-roll field-by-field omission at
+    each call site once a shared redaction mechanism is supposed to exist.
+    If architecture.md is silent and the project already depends on a
+    redaction/scrubbing library or structured-logging redaction filter,
+    use the one already there rather than introducing a second approach.
   
   ## STEP 5: CREATE PHASE 4 REVIEW TASKS
   

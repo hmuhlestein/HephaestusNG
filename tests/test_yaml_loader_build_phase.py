@@ -76,7 +76,7 @@ def test_autopilot_phases_use_claude_sonnet_with_no_fallback_by_default():
         Path(__file__).resolve().parents[1] / "config" / "workflows" / "autopilot"
     )
 
-    assert len(workflow.phases) == 14
+    assert len(workflow.phases) == 15
     for phase in workflow.phases:
         assert phase.cli_tool == "claude"
         assert phase.cli_model == "sonnet"
