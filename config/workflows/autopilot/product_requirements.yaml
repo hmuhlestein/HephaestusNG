@@ -14,6 +14,7 @@ done_definitions:
   - "Functional requirements extracted with acceptance criteria"
   - "Non-functional requirements identified"
   - "Component dependencies mapped"
+  - "PII/PHI fields identified and listed (or explicitly noted as none)"
   - "Technology constraints noted (respecting existing stack)"
   - "Integration points with existing system identified"
   - "requirements.md created in Artifacts Path location"
@@ -212,6 +213,17 @@ additional_notes: |
      - How does this feature enable subsequent features?
      - What capabilities does it unlock?
 
+  D. Does it touch personally-identifying or health data?
+     - Any field that identifies a person (name, DOB, address, phone,
+       email, SSN/national ID) or describes their health (medical record
+       numbers, diagnoses, medications, insurance/health-plan IDs,
+       biometric data) is PII/PHI — name it explicitly as such in the
+       requirement, even if the design doc itself doesn't use those words.
+     - This is identification only, not a compliance review — a later
+       phase (hipaa_compliance) does the actual encryption/access-control/
+       audit-logging analysis. Your job here is making sure that phase
+       (and architecture_design, before it) knows the fields exist at all.
+
   ## STEP 5: RESPECT EXISTING TECHNOLOGY STACK
 
   CRITICAL: If the project already has a technology stack:
@@ -298,6 +310,14 @@ additional_notes: |
   | NFR-01 | Performance | [requirement] | [target] |
   | NFR-02 | Security | [requirement] | [target] |
 
+  ## PII/PHI Data Identified
+  [Every field from STEP 4D, or "None identified" — do not omit this
+  section even when empty, so downstream phases can trust its absence
+  means "checked, none found" rather than "not checked"]
+  | Field | Category (PII/PHI) | Where it's used (REQ ID) | Notes |
+  |-------|---------------------|--------------------------|-------|
+  | [e.g. patient.diagnosis] | PHI | REQ-03 | [any stated retention/access constraint] |
+
   ## NEEDS CLARIFICATION
   - [ ] (max 3, priority order: scope > security/privacy > UX > technical
     detail) [question] — omit this section entirely if nothing qualifies
@@ -346,6 +366,8 @@ additional_notes: |
   - Respect existing technology choices
   - Document integration points
   - Flag technology conflicts
+  - Name every PII/PHI field explicitly, even when the design doc doesn't
+    use those words itself
 
   DO NOT:
   - Ignore existing code and architecture

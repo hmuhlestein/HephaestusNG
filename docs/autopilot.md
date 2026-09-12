@@ -1,7 +1,7 @@
 # Autopilot Pipeline
 
 A fully automated multi-agent workflow engine that takes design documents,
-decomposes them into features, and drives each feature through a 14-phase
+decomposes them into features, and drives each feature through a 15-phase
 pipeline to produce validated, committed, shipped software.
 
 ## Overview
@@ -11,7 +11,7 @@ DB queue                   Phase 0 (once)        per-feature pipeline      proje
   ├── auth-system.md  ──► [Feature Architect] ──► auth    (parallel) ──►    ├── src/
   │   (anywhere)            │                 ──► session (parallel) ──►    ├── tests/
   ├── dashboard.md          ▼                ──► admin   (sequential) ──►   └── .hephaestus/
-  └── api-v2.md        features.json              (phases 1–14 each)             ├── designs/
+  └── api-v2.md        features.json              (phases 1–15 each)             ├── designs/
                                                                                  │   └── 20260612_auth_system_fb36c8e3/
                                                                                  │       ├── design_report.html
                                                                                  │       ├── design_metrics.json
@@ -39,7 +39,7 @@ A Feature is a vertically-scoped, independently shippable slice of a design.
 Each Feature:
 
 - Has a clear name and scope (e.g. "JWT authentication", "user dashboard", "admin API")
-- Runs the full 14-phase pipeline in its own git worktree
+- Runs the full 15-phase pipeline in its own git worktree
 - Produces its own set of phase artifacts (requirements, architecture, code, reports)
 - Has an independent pass/fail status and iteration count
 - Is committed and merged to main independently
@@ -274,9 +274,9 @@ and all `scope.md` files are written and validated by the orchestrator.
 
 ---
 
-### Per-Feature Pipeline (Phases 1–14)
+### Per-Feature Pipeline (Phases 1–15)
 
-Each Feature runs its own independent instance of the following 14 phases (1–14), in its
+Each Feature runs its own independent instance of the following 15 phases (1–15), in its
 own git worktree.
 
 ---
@@ -429,7 +429,32 @@ Focused security assessment:
 
 Produces: `security.md` with findings and fixes applied.
 
-### Phase 9: QA Validation
+### Phase 9: HIPAA/PII Compliance
+
+**Agent:** HIPAA Compliance Reviewer
+
+Runs immediately after Security Review, on already-hardened code — its
+focus is regulatory data handling, not generic vulnerabilities. Identifies
+every PHI/PII field the feature touches (from requirements.md, architecture.md,
+and the code itself) and checks:
+- Encryption at rest and in transit
+- Access control (minimum-necessary-access, not just authentication)
+- Audit logging for every PHI/PII read/write/export path
+- Data retention and right-to-deletion support, where a policy is stated
+- Third-party/external exposure without redaction or a BAA
+- PHI/PII leaking into logs, error messages, or stack traces
+- De-identification correctness, where the design calls for it
+
+Classifies findings as BLOCKER/WARNING/NIT, same scoring shape as
+Adversarial Review. Reports findings — does **not** edit code directly; the
+developer fixes based on this report. If a feature has no PHI/PII at all,
+the report says so explicitly rather than manufacturing findings.
+
+Produces: `hipaa_compliance.md` — a YAML frontmatter block (OKF format,
+`blocker_count`/`warning_count`/`nit_count`) followed by the narrative
+report and a PHI/PII inventory.
+
+### Phase 10: QA Validation
 
 **Agent:** QA Engineer
 
@@ -442,7 +467,7 @@ Comprehensive testing:
 
 Produces: `qa.md` with pass/fail status and recommendation.
 
-### Phase 10: Product Validation
+### Phase 11: Product Validation
 
 **Agent:** Product Validator
 
@@ -457,7 +482,7 @@ merged, and verifies the feature's scope faithfully represents the original desi
 
 Produces: `validation.md` with PASS/NEEDS_WORK verdict.
 
-### Phase 11: Documentation Review
+### Phase 12: Documentation Review
 
 **Agent:** Documentation Reviewer
 
@@ -473,7 +498,7 @@ Reviews all documentation against the actual implementation:
 
 Produces: `docs.md` with findings and fixes applied.
 
-### Phase 12: Forensics Analysis
+### Phase 13: Forensics Analysis
 
 **Agent:** Forensics Analyst
 
@@ -499,7 +524,7 @@ tmux logs instead.
 
 Produces: `forensics.md` with evidence-based improvement recommendations.
 
-### Phase 13: Git Commit & Push
+### Phase 14: Git Commit & Push
 
 **Agent:** Git Operator
 
@@ -513,7 +538,7 @@ Version control workflow for this feature:
 7. Checks out main and pulls
 8. Saves commit hash and PR URL to memory
 
-### Phase 14: Deploy
+### Phase 15: Deploy
 
 **Agent:** Deployer
 
@@ -759,7 +784,7 @@ worktrees/
 │           └── admin/
 │               └── scope.md
 │
-├── <design-id>-auth/                  ← auth feature worktree (Phases 1–14)
+├── <design-id>-auth/                  ← auth feature worktree (Phases 1–15)
 │   └── .hephaestus/                   ← ALL phase reports land here, never in docs/
 │       ├── features.json              ← copied from Phase 0 worktree at creation
 │       ├── features/
@@ -773,10 +798,10 @@ worktrees/
 │       │   └── qa.md
 │       └── ...
 │
-├── <design-id>-session/               ← session feature worktree (Phases 1–14)
+├── <design-id>-session/               ← session feature worktree (Phases 1–15)
 │   └── ...
 │
-└── <design-id>-admin/                 ← admin feature worktree (Phases 1–14)
+└── <design-id>-admin/                 ← admin feature worktree (Phases 1–15)
     └── ...
 ```
 
@@ -852,7 +877,7 @@ AutopilotDesign
         id, design_id, name, scope, files, depends_on, execution
         status: pending | active | completed | failed | skipped
         │
-        └── Workflow (one per Feature — runs Phases 1–14)
+        └── Workflow (one per Feature — runs Phases 1–15)
               id, feature_id, status, paused_by, cost_total_usd
               │
               └── Phase (one per pipeline phase, 1–14)
@@ -958,7 +983,7 @@ outstanding issues across features.
 
 When LiteLLM proxy is configured, LLM calls include a `user` field:
 - Phase 0: `<design-name>/feature-architect`
-- Phases 1–14: `<design-name>/<feature-id>`
+- Phases 1–15: `<design-name>/<feature-id>`
 
 ```bash
 export LITELLM_PROXY_URL=http://deneb-server:4000
@@ -1169,12 +1194,13 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 | 6  | Feature | requirements.md, architecture.md, source code | adversarial.md |
 | 7  | Feature | architecture.md, requirements.md, adversarial.md | review.md |
 | 8  | Feature | requirements.md, architecture.md, adversarial.md | security.md, code fixes |
-| 9  | Feature | requirements.md, architecture.md, all review reports | qa.md |
-| 10 | Feature | scope.md, spec.md, requirements.md, architecture.md, qa.md | validation.md |
-| 11 | Feature | All reports, source code | docs.md, summary.md, feature_report.html, doc fixes |
-| 12 | Feature | All docs, run_health.json, phase_prompts/ | forensics.md, prompt proposals, memory entries |
-| 13 | Feature | Committed source, forensics.md | Git commit, PR, merge |
-| 14 | Feature | Merged code, deployment config | deploy.md, deployment output/logs |
+| 9  | Feature | requirements.md, architecture.md, adversarial.md, security.md | hipaa_compliance.md |
+| 10 | Feature | requirements.md, architecture.md, all review reports | qa.md |
+| 11 | Feature | scope.md, spec.md, requirements.md, architecture.md, qa.md | validation.md |
+| 12 | Feature | All reports, source code | docs.md, summary.md, feature_report.html, doc fixes |
+| 13 | Feature | All docs, run_health.json, phase_prompts/ | forensics.md, prompt proposals, memory entries |
+| 14 | Feature | Committed source, forensics.md | Git commit, PR, merge |
+| 15 | Feature | Merged code, deployment config | deploy.md, deployment output/logs |
 | —  | Design  | All feature outputs | design_report.html, design_metrics.json |
 
 ---

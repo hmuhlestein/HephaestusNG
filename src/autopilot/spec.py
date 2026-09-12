@@ -1883,6 +1883,93 @@ def score_adversarial_review(
     return 0.9, {"gate": "adversarial_review", "band": "pass", "reason": "clean"}
 
 
+def score_hipaa_compliance(
+    result: Optional[Dict[str, Any]],
+    report_text: Optional[str] = None,
+    prior_warning_count: Optional[int] = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """Score a hipaa_compliance.md by BLOCKER/WARNING/NIT counts.
+
+    Identical shape to score_adversarial_review -- hipaa_compliance.yaml's
+    report classifies findings the same way (PHI/PII exposure/missing
+    encryption/missing audit trail as BLOCKER; incomplete protection as
+    WARNING; documentation/hardening gaps as NIT). Any BLOCKER routes back
+    to development (workflow.yaml's `score < 0.6` band); no distinct signal
+    exists to tell "needs a development fix" apart from "needs an
+    architectural redesign" here either, so a BLOCKER never reaches the
+    `score < 0.3` architecture_design band -- same known limitation as
+    score_adversarial_review/score_architectural_review, not a silent gap.
+
+    prior_warning_count: this phase's warning_count from its own last
+    recorded run (get_review_findings_history), or None on a first run /
+    when history isn't available. Same rationale as
+    score_adversarial_review's identically-named parameter: without it, a
+    report with 0 BLOCKERs but lingering WARNINGs the reviewer itself
+    already called pre-existing/out-of-scope still routed back to
+    development every run, burning the phase's retry budget on a goto loop
+    that could never converge.
+    """
+    if not result:
+        # The agent may have written the markdown report but failed (or
+        # forgot) to also emit the structured JSON -- don't discard real
+        # findings just because the JSON is missing.
+        reason = (
+            f"no hipaa_compliance.md frontmatter found, but a report was "
+            f"written:\n\n{report_text}"
+            if report_text
+            else "no hipaa_compliance.md found"
+        )
+        return 0.4, {
+            "gate": "hipaa_compliance",
+            "reason": reason,
+            "result_missing": True,
+        }
+
+    blockers = int(result.get("blocker_count") or 0)
+    warnings = int(result.get("warning_count") or 0)
+
+    if blockers > 0:
+        # Send the full report, not just a count or an extracted snippet --
+        # a developer agent with no other context needs the actual PHI/PII
+        # exposure path and recommended fix the reviewer wrote, not a
+        # summary that strips them back out.
+        reason = (
+            f"{blockers} BLOCKER(s) found in HIPAA/PII compliance review:\n\n{report_text}"
+            if report_text
+            else f"{blockers} BLOCKER(s) found — returning to development"
+        )
+        return 0.4, {
+            "gate": "hipaa_compliance",
+            "band": "development",
+            "blocker_count": blockers,
+            "warning_count": warnings,
+            "reason": reason,
+        }
+    if warnings > 0:
+        if prior_warning_count is not None and warnings <= prior_warning_count:
+            return 0.9, {
+                "gate": "hipaa_compliance",
+                "band": "pass",
+                "warning_count": warnings,
+                "reason": (
+                    f"{warnings} WARNING(s) found, unchanged from the prior run's "
+                    f"{prior_warning_count} -- no new findings, passing"
+                ),
+            }
+        reason = (
+            f"{warnings} WARNING(s) found in HIPAA/PII compliance review:\n\n{report_text}"
+            if report_text
+            else f"{warnings} WARNING(s) found — returning to development"
+        )
+        return 0.5, {
+            "gate": "hipaa_compliance",
+            "band": "development",
+            "warning_count": warnings,
+            "reason": reason,
+        }
+    return 0.9, {"gate": "hipaa_compliance", "band": "pass", "reason": "clean"}
+
+
 def score_design_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
@@ -2267,6 +2354,7 @@ GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
     "architectural_review": ("review.md",),
     "adversarial_review": ("adversarial.md",),
     "security_review": ("security.md",),
+    "hipaa_compliance": ("hipaa_compliance.md",),
     "qa_validation": ("qa.md",),
     "product_validation": ("validation.md",),
     "feature_review": ("feature_review.md",),
@@ -2332,7 +2420,8 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
         return {**base, "verdict": "PASS"}
     if phase_name == "security_review":
         return {**base, "unresolved_count": 0, "critical_count": 0, "high_count": 0}
-    # design_review, architectural_review, adversarial_review, feature_review: blocker-count schema.
+    # design_review, architectural_review, adversarial_review, hipaa_compliance,
+    # feature_review: blocker-count schema.
     return {**base, "blocker_count": 0}
 
 
@@ -2451,6 +2540,7 @@ GATE_RESULT_REQUIRED_KEYS: Dict[str, Tuple[str, ...]] = {
     "architectural_review": ("blocker_count",),
     "adversarial_review": ("blocker_count",),
     "security_review": ("unresolved_count", "critical_count", "high_count"),
+    "hipaa_compliance": ("blocker_count",),
     "qa_validation": ("failed_tests", "passed_tests", "critical_issues"),
     "product_validation": ("verdict",),
     "feature_review": ("blocker_count",),
@@ -2615,6 +2705,18 @@ def build_phase_output(
             working_directory, "security.md", phase_name=phase_name
         )
         score, meta = score_security_review(result, report_text=report_text)
+    elif phase_name == "hipaa_compliance":
+        result, report_text = read_okf_report(
+            working_directory, "hipaa_compliance.md", phase_name=phase_name
+        )
+        prior_warning_count = None
+        if workflow_id:
+            history = get_review_findings_history(workflow_id, phase_name)
+            if history:
+                prior_warning_count = history[-1].get("warning_count")
+        score, meta = score_hipaa_compliance(
+            result, report_text=report_text, prior_warning_count=prior_warning_count
+        )
     elif phase_name == "qa_validation":
         result, _ = read_okf_report(working_directory, "qa.md", phase_name=phase_name)
         # Enhancement 1: Pass working_directory for independent test verification

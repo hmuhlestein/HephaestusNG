@@ -200,6 +200,13 @@ additional_notes: |
     internal endpoint the design assumes is "trusted" with no enforcement)?
   - Does any described interface accept unvalidated input that later
     reaches a shell command, SQL string, or file path?
+  - If requirements.md's "PII/PHI Data Identified" section lists any
+    field, does architecture.md's "PII/PHI Handling" section give it an
+    actual encryption/access-control/audit-logging decision, or does it
+    just repeat that the field exists with no design response? A listed
+    field with no corresponding design decision is a BLOCKER here — a
+    full compliance review runs later (hipaa_compliance), but a design
+    that never decided how to protect the data can't pass one.
 
   ## STEP 9: TASK BREAKDOWN SANITY
 
