@@ -249,7 +249,7 @@ that specific ambiguity check entirely.
 
 ## Related
 
-- [Autopilot Pipeline](autopilot.md) — the 14-phase pipeline a selected
+- [Autopilot Pipeline](autopilot.md) — the 15-phase pipeline a selected
   Spec Kit feature (or hand-written design) runs through once queued.
 - [Multi-Repo Projects](multi-repo-projects.md) — how Spec Kit detection
   scans every child repo's own `specs/` directory, and how `--repo`/
