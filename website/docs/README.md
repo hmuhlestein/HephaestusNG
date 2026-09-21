@@ -19,6 +19,12 @@ Learn how to design effective multi-agent workflows:
 - **[Guardian Monitoring](guides/guardian-monitoring.md)** - How Guardian keeps agents on track
 - **[Ticket Tracking](guides/ticket-tracking.md)** - Kanban boards for agent coordination
 
+### Autopilot
+
+The fixed, named pipeline product built on top of the phases system:
+
+- **[Autopilot Pipeline](autopilot/overview.md)** - The 15-phase pipeline that takes a design to a merged PR
+
 ### Core Systems
 
 Deep dive into the architecture and core systems:

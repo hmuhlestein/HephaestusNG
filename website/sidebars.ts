@@ -35,6 +35,14 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: '🛠️ Autopilot',
+      collapsed: false,
+      items: [
+        'autopilot/overview',
+      ],
+    },
+    {
+      type: 'category',
       label: '🔧 Troubleshooting',
       collapsed: false,
       items: [

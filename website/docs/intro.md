@@ -76,6 +76,7 @@ Our documentation is organized into several sections:
 
 - **[Getting Started](getting-started/quick-start)**: Build your first workflow in 10 minutes
 - **[Workflow Design Guides](guides/phases-system)**: Learn how to design effective multi-agent workflows
+- **[Autopilot](autopilot/overview)**: The fixed 15-phase pipeline that drives a design to a merged PR with no human in the loop
 - **[Core Systems](core/monitoring-implementation)**: Architecture, system components, and advanced features
 - **[Python SDK](sdk/README)**: Python SDK for programmatic workflow control
 
