@@ -220,19 +220,34 @@ class HephaestusConfig:
         def _missing_key(provider: str, env_var: str) -> None:
             # CLIFallbackChatModel (llm_client.py) shells out to
             # default_cli_tool for a real LLM answer instead of every
-            # caller falling back to its own static default -- but it only
-            # implements Claude's non-interactive `-p` mode today, so it
-            # only actually covers a missing key when default_cli_tool ==
-            # "claude". Without this check, a missing key here made the
-            # WHOLE pipeline refuse to even start (HephaestusSDK.__init__
-            # calls this before anything else), even though every
-            # downstream LLM call already knows how to work around it.
-            # Mirrors SimpleConfig.validate(strict=False)'s identical
+            # caller falling back to its own static default. Whether that
+            # covers a missing key is a per-CLI capability, not a hardcoded
+            # "claude only" fact: it works for any default_cli_tool whose
+            # agent implements a non-interactive mode
+            # (get_noninteractive_command != None -- claude, kiro, pi,
+            # opencode today). Without this, a missing key made the WHOLE
+            # pipeline refuse to even start (HephaestusSDK.__init__ calls
+            # this first), even though the downstream LLM call knows how to
+            # work around it. Mirrors SimpleConfig.validate(strict=False)'s
             # "warn, don't crash" behavior in src/core/llm_config.py.
-            if self.default_cli_tool == "claude":
+            try:
+                from src.interfaces.cli_interface import get_cli_agent
+
+                has_cli_fallback = (
+                    get_cli_agent(self.default_cli_tool).get_noninteractive_command(
+                        "", "", None
+                    )
+                    is not None
+                )
+            except ValueError:
+                # Unknown/unregistered default_cli_tool -- no fallback.
+                has_cli_fallback = False
+
+            if has_cli_fallback:
                 logger.warning(
                     f"{env_var} is not set for {provider} provider -- LLM "
-                    "calls will fall back to the claude CLI (CLIFallbackChatModel)."
+                    f"calls will fall back to the {self.default_cli_tool} CLI "
+                    "(CLIFallbackChatModel)."
                 )
             else:
                 raise ValueError(f"{env_var} must be set for {provider} provider")

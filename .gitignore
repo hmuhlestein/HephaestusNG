@@ -80,6 +80,7 @@ lib/
 agents/pi/
 agents/claude/
 agents/codex/
+agents/kiro/
 
 .playwright-mcp/
 node_modules/

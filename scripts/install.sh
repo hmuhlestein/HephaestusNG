@@ -1259,6 +1259,44 @@ else
     log "Claude Code not detected — skipping agent installation"
 fi
 
+# ─── Kiro CLI Agent Installation ──────────────────────────────────
+#
+# Kiro is the default CLI tool (agents.default_cli_tool). Its binary is
+# kiro-cli (not "kiro"). Unlike Claude Code/Codex, Kiro needs NO separate
+# MCP registration step here: generate_kiro_agents.py embeds the heph MCP
+# server directly in each agent's JSON (mcpServers), so a Kiro-launched
+# agent has the heph_* tools regardless of which project it runs in.
+
+header "Kiro CLI Agents"
+
+KIRO_AGENTS_DIR="$HOME/.kiro/agents"
+
+if command -v kiro-cli >/dev/null 2>&1; then
+    log "Kiro CLI detected — installing Hephaestus subagents"
+    if [ -f "$PREFIX/scripts/generate_kiro_agents.py" ]; then
+        "$PYTHON_PATH" "$PREFIX/scripts/generate_kiro_agents.py" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            # Copy generated agents to Kiro's global agents directory
+            # (~/.kiro/agents/) so they're discoverable via
+            # `kiro-cli chat --agent <name>` regardless of which project a
+            # Hephaestus-launched agent is working in.
+            mkdir -p "$KIRO_AGENTS_DIR"
+            if [ -d "$PREFIX/agents/kiro" ]; then
+                cp "$PREFIX/agents/kiro"/*.json "$KIRO_AGENTS_DIR" 2>/dev/null
+                agent_count=$(ls -1 "$PREFIX/agents/kiro"/*.json 2>/dev/null | wc -l)
+                ok "Installed $agent_count Hephaestus Kiro agents"
+            fi
+        else
+            warn "Failed to generate Kiro agents"
+        fi
+    else
+        warn "generate_kiro_agents.py not found — skipping agent generation"
+    fi
+else
+    log "Kiro CLI not detected — skipping agent installation"
+    log "Kiro is the default CLI tool; install kiro-cli, then re-run install.sh"
+fi
+
 header "Starting Hephaestus"
 
 if "$HEPH_BIN" start; then

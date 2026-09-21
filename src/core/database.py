@@ -613,7 +613,7 @@ class Phase(Base):
     self_review = Column(JSON)
 
     # Per-phase CLI configuration (optional - falls back to global defaults)
-    cli_tool = Column(String, nullable=True)  # "claude", "opencode", "droid", "codex", "pi", "swarm"
+    cli_tool = Column(String, nullable=True)  # "kiro", "claude", "opencode", "droid", "codex", "pi", "swarm"
     cli_model = Column(String, nullable=True)  # "sonnet", "opus", "haiku", "GLM-4.6", etc.
     fallback_cli_tool = Column(String, nullable=True)  # Fallback CLI tool when primary fails
     fallback_cli_model = Column(String, nullable=True)  # Fallback model when primary fails
@@ -1577,7 +1577,7 @@ class CostEntry(Base):
     agent_id = Column(String, ForeignKey("agents.id"), nullable=True)
     workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
 
-    # 'pi' | 'claude_code' | 'opencode' | 'codex' | 'openrouter_direct'
+    # 'pi' | 'claude_code' | 'opencode' | 'codex' | 'kiro' | 'openrouter_direct'
     source = Column(String, nullable=False)
     model = Column(String, nullable=True)  # e.g. "anthropic/claude-sonnet-4"
 

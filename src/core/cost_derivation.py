@@ -86,7 +86,7 @@ def record_cost(
     Args:
         db: Database session
         cost_usd: Cost in dollars
-        source: Cost source ('pi', 'claude_code', 'opencode', 'codex', 'openrouter_direct')
+        source: Cost source ('pi', 'claude_code', 'opencode', 'codex', 'kiro', 'openrouter_direct')
         task_id: Optional task ID
         agent_id: Optional agent ID
         workflow_id: Optional workflow ID (auto-derived from task if not provided)

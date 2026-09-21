@@ -6,8 +6,8 @@ description: >-
   docs/LOOP_ENGINEERING_REVIEW.md) since it determines how many per-feature
   Workflow rows get created, so it can't be phase order=0 within one of them.
 
-default_cli_tool: claude
-default_model: sonnet
+default_cli_tool: kiro
+default_model: auto
 default_thinking_level: high
 # pi removed as the secondary/fallback CLI tool -- falls through to
 # hephaestus_config.yaml's agents.default_fallback_cli_tool, also unset.
