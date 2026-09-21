@@ -431,15 +431,22 @@ def _setup_shared_design_worktree(
             logger.info(f"Using existing worktree directly: {design_worktree_path}")
         else:
 
-            # Create feature branch from main
+            # Create feature branch from the configured base branch
+            # (git.base_branch, default "main") -- NOT the main repo's
+            # current HEAD. The managed repo may be checked out on any
+            # arbitrary branch when a workflow starts; branching the shared
+            # design worktree off that would base every phase's work (and
+            # the final merge into the base branch) on unrelated commits.
             import git as _git
+
+            base_commit = wt_mgr._resolve_base_commit()
 
             # Use design_entry name if available, otherwise derive from design_doc
             _design_label = design_name.replace(" ", "-").lower() if design_name else "design"
             feature_branch = f"feature/{_design_label}"
             # Ensure branch name is unique (append short hash if needed)
             try:
-                wt_mgr.main_repo.git.branch(feature_branch)
+                wt_mgr.main_repo.git.branch(feature_branch, base_commit)
             except _git.exc.GitCommandError:
                 # Branch exists — use it (idempotent)
                 pass
