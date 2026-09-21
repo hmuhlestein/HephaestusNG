@@ -172,6 +172,11 @@ class TestCLIFallbackChatModelAinvoke:
 
     @pytest.mark.asyncio
     async def test_unsupported_cli_tool_raises_not_implemented(self):
-        model = CLIFallbackChatModel("pi", "some-model")
-        with pytest.raises(NotImplementedError, match="pi"):
+        # codex is a registered CLI with no non-interactive mode
+        # (get_noninteractive_command returns None), so the fallback raises
+        # NotImplementedError rather than mis-invoking it. (pi/opencode/kiro
+        # each now DO support a non-interactive mode, so they no longer
+        # exercise this path.)
+        model = CLIFallbackChatModel("codex", "some-model")
+        with pytest.raises(NotImplementedError, match="codex"):
             await model.ainvoke([Mock(type="human", content="hi")])

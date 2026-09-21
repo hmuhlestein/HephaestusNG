@@ -19,6 +19,26 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+def _empty_mcp_config_path() -> str:
+    """Path to a `{"mcpServers": {}}` file, written once and reused, for
+    non-interactive CLI completions that need zero MCP tool access.
+
+    Paired with a CLI's strict-mcp flag it guarantees no globally-configured
+    MCP server attaches to a one-shot completion and lures the CLI into tool
+    calls instead of just answering. Shared here (module level) so any CLI's
+    get_noninteractive_command can build a self-contained argv without
+    reaching into another module.
+    """
+    import tempfile
+
+    path = os.path.join(tempfile.gettempdir(), "hephaestus_cli_fallback_empty_mcp.json")
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write('{"mcpServers": {}}')
+    return path
+
+
 # Prepended to a launched CLI agent's PATH so `rm` resolves to
 # scripts/agent-safe-bin/rm instead of the real binary -- a hard technical
 # guardrail against a destructive command outside .hephaestus/, since pi's
@@ -106,6 +126,40 @@ class LaunchResult:
         return self.command
 
 
+class NonInteractiveCommand:
+    """A single-shot, non-interactive invocation of a CLI tool for one
+    request/response — the polymorphic replacement for CLIFallbackChatModel
+    hardcoding claude's argv. Each CLI that supports a print/-p style mode
+    returns one of these from get_noninteractive_command; the fallback model
+    executes it CLI-agnostically (argv via asyncio.create_subprocess_exec),
+    with the flattened prompt delivered either on stdin or as a trailing
+    argv element per prompt_via.
+
+    argv:       fully-formed argument vector (argv[0] is the binary name).
+                When prompt_via == ARGV, the prompt is appended as the final
+                element by the caller, so it must NOT already be in argv.
+    prompt_via: STDIN (prompt piped to the process's stdin) or ARGV (prompt
+                appended as the last argv element).
+    cwd:        working directory to run in. None = caller's default (the
+                fallback model passes a temp dir so a project-level
+                CLAUDE.md/AGENTS.md can't shape these generic completions).
+    """
+
+    __slots__ = ("argv", "prompt_via", "cwd")
+
+    STDIN = "stdin"
+    ARGV = "argv"
+
+    def __init__(
+        self,
+        argv: List[str],
+        prompt_via: str = STDIN,
+        cwd: Optional[str] = None,
+    ) -> None:
+        self.argv = argv
+        self.prompt_via = prompt_via
+        self.cwd = cwd
+
 
 class CLIAgentInterface(ABC):
     """Abstract interface for CLI AI agents.
@@ -116,6 +170,22 @@ class CLIAgentInterface(ABC):
 
     #: Human-readable label used in delivery logging (e.g. "Claude", "Pi").
     display_name: str = "agent"
+
+    #: The actual executable name on PATH, when it differs from this CLI's
+    #: registry key in CLI_AGENTS. Every registered agent's own
+    #: get_launch_command already invokes its literal binary, so for
+    #: claude/pi/codex/opencode/droid the key and the binary are identical
+    #: and this stays "". Kiro's registry key is "kiro" but its binary is
+    #: "kiro-cli", so it sets this -- keeping is_cli_tool_available (and any
+    #: future PATH check) polymorphic instead of special-casing the name.
+    binary_name: str = ""
+
+    @classmethod
+    def resolve_binary_name(cls, cli_type: str) -> str:
+        """The executable name to look up on PATH for this CLI. Defaults to
+        the registry key (cli_type) when binary_name is unset, so the common
+        case (key == binary) needs no per-CLI override."""
+        return cls.binary_name or cli_type
 
     #: Whether the initial prompt must be sent in chunks to avoid tmux
     #: buffer issues with large prompts (True for CLIs that read the full
@@ -185,6 +255,29 @@ class CLIAgentInterface(ABC):
         needed there. Empty = no such mechanism for this CLI (the caller
         skips sending anything)."""
         return ""
+
+    def get_noninteractive_command(
+        self,
+        prompt: str,
+        model: str,
+        effort: Optional[str] = None,
+    ) -> Optional["NonInteractiveCommand"]:
+        """Describe this CLI's single-shot, non-interactive invocation for a
+        one-off completion (task enrichment, trajectory analysis, ticket
+        wording) — the polymorphic mechanism behind CLIFallbackChatModel,
+        which uses it as the no-API-key completion path.
+
+        Returns a NonInteractiveCommand (argv + stdin/argv prompt strategy),
+        or None when this CLI has no non-interactive mode. None is the safe
+        default so a CLI without one is simply skipped by the fallback (the
+        caller turns it into the same static default a missing API key would
+        have produced) rather than being mis-invoked with a guessed flag.
+
+        Note the prompt is passed in for CLIs that must embed it in argv, but
+        a STDIN-strategy command should NOT put it in argv — the caller reads
+        prompt_via and delivers it accordingly.
+        """
+        return None
 
     def message_queued_confirmation_pattern(self) -> str:
         """Regex to look for in the pane shortly after AgentMessenger.
@@ -715,6 +808,28 @@ class ClaudeCodeAgent(CLIAgentInterface):
     def format_message(self, message: str) -> str:
         return message
 
+    def get_noninteractive_command(
+        self, prompt: str, model: str, effort: Optional[str] = None
+    ) -> Optional["NonInteractiveCommand"]:
+        # Claude Code's `-p/--print` mode. The prompt goes on stdin (see
+        # prompt_via=STDIN), so it is deliberately NOT in argv. --mcp-config
+        # <empty> + --strict-mcp-config guarantees zero MCP tools for these
+        # generic completions (without it, a globally-configured MCP server
+        # could still attach and lure the CLI into tool calls instead of
+        # just answering). cwd is left to the caller (fallback model passes
+        # a temp dir so this repo's CLAUDE.md can't shape the answer). This
+        # is the exact argv CLIFallbackChatModel used to hardcode, now owned
+        # by the CLI that knows it.
+        effort_args = ["--effort", effort] if effort else []
+        return NonInteractiveCommand(
+            argv=[
+                "claude", "-p", "--model", model, *effort_args,
+                "--dangerously-skip-permissions",
+                "--mcp-config", _empty_mcp_config_path(), "--strict-mcp-config",
+            ],
+            prompt_via=NonInteractiveCommand.STDIN,
+        )
+
     def message_queued_confirmation_pattern(self) -> str:
         # Claude Code's own footer hint once a message is confirmed queued
         # behind an in-progress turn. See the base method's docstring for
@@ -803,6 +918,22 @@ class OpenCodeAgent(CLIAgentInterface):
 
     def format_message(self, message: str) -> str:
         return message
+
+    def get_noninteractive_command(
+        self, prompt: str, model: str, effort: Optional[str] = None
+    ) -> Optional["NonInteractiveCommand"]:
+        # Bare `opencode run <message>` is one-shot: it answers and exits
+        # (the interactive launch adds -i to keep it alive; omitting -i here
+        # is exactly what makes it non-interactive). opencode takes the
+        # message as a positional argument, not stdin, so prompt_via=ARGV.
+        # No effort/thinking flag exists for opencode -- effort is ignored.
+        return NonInteractiveCommand(
+            argv=[
+                "opencode", "run", "--dangerously-skip-permissions",
+                "--model", model,
+            ],
+            prompt_via=NonInteractiveCommand.ARGV,
+        )
 
     def get_stuck_patterns(self) -> List[str]:
         return [
@@ -1099,6 +1230,23 @@ class PiAgent(CLIAgentInterface):
     def format_message(self, message: str) -> str:
         return message
 
+    def get_noninteractive_command(
+        self, prompt: str, model: str, effort: Optional[str] = None
+    ) -> Optional["NonInteractiveCommand"]:
+        # pi's `-p/--print` non-interactive mode. Thinking budget maps to
+        # pi's --thinking (same vocabulary as its interactive launch); the
+        # prompt is delivered on stdin. --no-context-files keeps a stray
+        # project AGENTS.md out of a generic completion, mirroring the
+        # interactive launch's own flag.
+        thinking_args = ["--thinking", effort] if effort else []
+        return NonInteractiveCommand(
+            argv=[
+                "pi", "-p", "--model", model, *thinking_args,
+                "--approve", "--no-context-files",
+            ],
+            prompt_via=NonInteractiveCommand.STDIN,
+        )
+
     def get_stuck_patterns(self) -> List[str]:
         return [
             r"rate limit exceeded",
@@ -1157,8 +1305,158 @@ class PiAgent(CLIAgentInterface):
         return self._parse_prompt_marker_output(output, "pi>")
 
 
+class KiroAgent(CLIAgentInterface):
+    """Implementation for the Kiro CLI (`kiro-cli chat`).
+
+    Peer of ClaudeCodeAgent: launches interactively so the agent stays
+    alive for MCP tool calls, loads its system prompt via kiro-cli's own
+    named-agent mechanism (--agent, discovered from ~/.kiro/agents/*.json,
+    generated by scripts/generate_kiro_agents.py) when one exists for the
+    phase, and otherwise folds the prompt into the initial message. Session
+    continuity across phases/gotos uses --resume-id, which is create-or-
+    resume in a single flag (verified live: a fresh id creates the session
+    and responds rather than erroring), so no ||-fallback branch is needed
+    the way Codex's `resume || fresh` is.
+    """
+
+    display_name = "Kiro"
+    #: Registry key is "kiro"; the executable on PATH is "kiro-cli".
+    binary_name = "kiro-cli"
+    needs_chunked_delivery = True
+    #: kiro-cli's own default. `auto` lets Kiro pick the model per task;
+    #: unlike claude's "sonnet", the global agents.cli_model isn't a Kiro
+    #: model string, so _get_model resolves to this unless a caller passes
+    #: a kiro-valid --model explicitly.
+    default_model = "auto"
+
+    #: kiro-cli's --effort accepts low|medium|high|xhigh|max directly, a
+    #: superset of Hephaestus's thinking levels. off/minimal have no kiro
+    #: equivalent and map to low; everything else passes through unchanged.
+    _EFFORT_MAP = {
+        "off": "low",
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max",
+    }
+
+    def _resolve_effort(self, kwargs: dict) -> Optional[str]:
+        from src.core.simple_config import get_config
+
+        config = get_config()
+        thinking = (
+            str(
+                kwargs.get("thinking_level")
+                or getattr(config.agents, "cli_thinking_level", "medium")
+            )
+            .lower()
+            .strip()
+        )
+        return self._EFFORT_MAP.get(thinking)
+
+    def get_session_args(self, session_id: str) -> str:
+        # --resume-id is create-or-resume in one flag (see class docstring),
+        # so a single deterministic UUID covers both first launch and every
+        # goto/retry that reuses this session_id -- no ||-fallback needed.
+        if session_id:
+            session_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, session_id))
+            return f"--resume-id {session_uuid}"
+        return ""
+
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
+        # Per-phase Kiro agent file (~/.kiro/agents/hephaestus-<phase>.json,
+        # generated by scripts/generate_kiro_agents.py and installed by
+        # install.sh). When present, `--agent <name>` is kiro-cli's own
+        # supported way to launch under a named agent (mirrors Claude Code's
+        # --agent and pi's agent-file lookup); otherwise the prompt is
+        # delivered as the initial message (LaunchResult.MESSAGE), like
+        # OpenCode.
+        phase_name = kwargs.get("phase_name", "")
+        kiro_agent_name = (
+            f"hephaestus-{phase_name.replace('_', '-')}" if phase_name else None
+        )
+        kiro_agent_file = (
+            os.path.expanduser(f"~/.kiro/agents/{kiro_agent_name}.json")
+            if kiro_agent_name
+            else None
+        )
+
+        model = self._get_model(kwargs, self.default_model)
+        effort = self._resolve_effort(kwargs)
+        effort_flag = f" --effort {effort}" if effort else ""
+        session_args = self.get_session_args(kwargs.get("session_id", ""))
+        session_flag = f" {session_args}" if session_args else ""
+
+        if kiro_agent_file and os.path.exists(kiro_agent_file):
+            agent_flag = f" --agent {kiro_agent_name}"
+            delivery = LaunchResult.AGENT_FILE
+        else:
+            agent_flag = ""
+            delivery = LaunchResult.MESSAGE
+
+        # --trust-all-tools is kiro-cli's permission bypass (equivalent to
+        # claude's --dangerously-skip-permissions): an unattended agent has
+        # no one to answer a per-tool confirmation.
+        command = (
+            f"{AGENT_LAUNCH_ENV_PREFIX} kiro-cli chat --trust-all-tools "
+            f"--model {model}{effort_flag}{agent_flag}{session_flag}"
+        )
+        return LaunchResult(command, delivery)
+
+    def get_health_check_pattern(self) -> str:
+        # kiro-cli chat's own input prompt (U+276F) plus a couple of generic
+        # readiness markers. Kept deliberately broad (like claude's) so the
+        # ready-wait matches rather than burning the full timeout.
+        return r"(❯|›|>|To get started)"
+
+    def format_goal_command(self, condition: str) -> str:
+        return f"/goal {condition}"
+
+    def format_message(self, message: str) -> str:
+        return message
+
+    def get_noninteractive_command(
+        self, prompt: str, model: str, effort: Optional[str] = None
+    ) -> Optional["NonInteractiveCommand"]:
+        # kiro-cli chat --no-interactive: the prompt is the positional INPUT
+        # argument (prompt_via=ARGV), --trust-all-tools so a tool prompt
+        # can't block a headless completion. --effort passes through kiro's
+        # own low|medium|high|xhigh|max vocabulary unchanged.
+        effort_args = ["--effort", effort] if effort else []
+        return NonInteractiveCommand(
+            argv=[
+                "kiro-cli", "chat", "--no-interactive", "--trust-all-tools",
+                "--model", model, *effort_args,
+            ],
+            prompt_via=NonInteractiveCommand.ARGV,
+        )
+
+    def get_stuck_patterns(self) -> List[str]:
+        return [
+            r"rate limit exceeded",
+            r"rate limit",
+            r"API error",
+            r"connection timeout",
+            r"Error:.*API",
+            r"Failed to connect",
+            r"Maximum retries exceeded",
+            r"authentication failed",
+            r"invalid API key",
+        ]
+
+    def parse_output(self, output: str) -> Dict[str, Any]:
+        return self._parse_prompt_marker_output(output, "❯")
+
+
 class SwarmCodeAgent(CLIAgentInterface):
     """Implementation for SwarmCode CLI (hypothetical advanced agent)."""
+
+    #: Registry key is "swarm" but the executable is "swarmcode" -- the one
+    #: pre-existing key/binary mismatch is_cli_tool_available's old docstring
+    #: called out as an unhandled gap; now covered by resolve_binary_name.
+    binary_name = "swarmcode"
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         escaped_prompt = system_prompt.replace("'", "'\"'\"'")
@@ -1189,6 +1487,7 @@ CLI_AGENTS = {
     "droid": DroidAgent,
     "codex": CodexAgent,
     "pi": PiAgent,
+    "kiro": KiroAgent,
     "swarm": SwarmCodeAgent,
 }
 
@@ -1216,13 +1515,12 @@ def is_cli_tool_available(cli_type: str) -> bool:
     """Whether cli_type's CLI binary is actually reachable on PATH --
     shutil.which is the stdlib equivalent of the `command -v` checks
     scripts/install.sh already relies on throughout for this same class
-    of check. cli_type is also the literal binary name every registered
-    *Agent's get_launch_command invokes (claude, pi, codex, opencode,
-    droid), so a plain PATH lookup on the string itself is correct
-    without a separate binary-name mapping -- except "swarm"
-    (SwarmCodeAgent), whose own launch command execs "swarmcode"; that
-    registration is a hypothetical/unused stub (see its class docstring),
-    so this is left as a known gap rather than special-cased.
+    of check. The binary name is resolved through the registered agent
+    class (CLIAgentInterface.resolve_binary_name), so a CLI whose registry
+    key differs from its executable (kiro -> kiro-cli, swarm -> swarmcode)
+    is looked up correctly without special-casing -- the same polymorphic
+    seam every other per-CLI behavior already flows through, rather than a
+    name-mapping table maintained here.
 
     Used to validate a configured fallback CLI (hephaestus_config.yaml's
     default_fallback_cli_tool, or a Phase's own fallback_cli_tool) before
@@ -1231,4 +1529,6 @@ def is_cli_tool_available(cli_type: str) -> bool:
     no CLI running at all, indistinguishable from a healthy agent to
     every status field (Agent.status stays "working").
     """
-    return shutil.which(cli_type) is not None
+    agent_cls = CLI_AGENTS.get(cli_type)
+    binary = agent_cls.resolve_binary_name(cli_type) if agent_cls else cli_type
+    return shutil.which(binary) is not None

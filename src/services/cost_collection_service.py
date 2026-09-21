@@ -621,6 +621,120 @@ class CodexUsageCollector(CostCollector):
         return entries, lines_processed
 
 
+class KiroUsageCollector(CostCollector):
+    """Collect per-turn credit usage from a Kiro CLI transcript.
+
+    kiro-cli's messages.jsonl reports cost as CREDITS, not tokens or dollars:
+    each completed turn appends a `usage_summary` payload whose
+    promptTurnSummaries carry a per-turn `usage` float with unit "credit".
+    There are no per-token counts in the transcript, so token fields are
+    recorded as 0 (mirroring how the pipeline treats other tokenless
+    sources). Each usage_summary is per-turn (its own executionId), so
+    credits are summed per line rather than delta-tracked like Codex's
+    cumulative totals.
+
+    Dollars: a credit is an account-plan unit, not a dollar amount, and the
+    transcript carries no billable USD price (same situation as Codex). A
+    cost_usd is only produced when KIRO_CREDIT_COST_USD (dollars per credit)
+    is explicitly configured; otherwise cost_usd is 0.0 and the credit
+    amount is preserved in raw_usage for later reconciliation.
+    """
+
+    def collect(
+        self,
+        session_id: str,
+        task_id: str,
+        workflow_id: str,
+        agent_id: Optional[str],
+        session_file: Path,
+        checkpoint: int,
+    ) -> Tuple[List[dict], int]:
+        entries: List[dict] = []
+        lines_processed = checkpoint
+        model = None
+        credit_rate = _kiro_credit_rate()
+
+        try:
+            with open(session_file) as f:
+                for line_num, line in enumerate(f, 1):
+                    lines_processed = line_num
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    payload = data.get("payload", {})
+                    ptype = payload.get("type")
+
+                    # Track the most recent model id seen so a usage_summary
+                    # (which carries no model itself) can be attributed.
+                    if ptype == "assistant":
+                        model = payload.get("reasoningModelId") or model
+                        continue
+
+                    if line_num <= checkpoint or ptype != "usage_summary":
+                        continue
+
+                    credits = 0.0
+                    for summary in payload.get("promptTurnSummaries", []):
+                        if summary.get("unit") == "credit":
+                            try:
+                                credits += float(summary.get("usage") or 0)
+                            except (TypeError, ValueError):
+                                continue
+                    if credits <= 0:
+                        continue
+
+                    cost_usd = credits * credit_rate if credit_rate is not None else 0.0
+                    entries.append(
+                        {
+                            "id": f"cost-{uuid.uuid4().hex[:8]}",
+                            "task_id": task_id,
+                            "agent_id": agent_id,
+                            "workflow_id": workflow_id,
+                            "source": "kiro",
+                            "model": model,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "cache_read_tokens": 0,
+                            "cache_write_tokens": 0,
+                            "reasoning_tokens": 0,
+                            "cost_usd": cost_usd,
+                            "recorded_at": utc_now(),
+                            # Credits are the only cost signal Kiro emits and
+                            # record_cost has no credits column, so they're
+                            # preserved here in raw_usage for reconciliation.
+                            "raw_usage": {
+                                "credits": credits,
+                                "unit": "credit",
+                                "cost_status": (
+                                    "estimated" if credit_rate is not None else "unavailable"
+                                ),
+                            },
+                        }
+                    )
+        except FileNotFoundError:
+            logger.warning(f"Session file not found: {session_file}")
+        except OSError as exc:
+            logger.error(f"Error collecting Kiro usage from {session_file}: {exc}")
+
+        return entries, lines_processed
+
+
+def _kiro_credit_rate() -> Optional[float]:
+    """USD per Kiro credit, if explicitly configured via KIRO_CREDIT_COST_USD.
+
+    Kiro subscription/credit usage can't be inferred from a transcript in
+    dollars. Set this only when the account's credit->USD rate is known;
+    otherwise credit amounts are still recorded but cost_usd stays 0.0.
+    """
+    try:
+        rate = float(os.environ["KIRO_CREDIT_COST_USD"])
+    except (KeyError, ValueError):
+        return None
+    return rate if rate >= 0 else None
+
+
 def _nonnegative_int(value: Any) -> int:
     """Convert a transcript token field to a non-negative integer."""
     try:
@@ -791,6 +905,42 @@ def _discover_codex_session_file(session_id: str, cwd: str) -> Optional[Path]:
     return None
 
 
+def _discover_kiro_session_file(session_id: str, cwd: str) -> Optional[Path]:
+    """Find the Kiro CLI transcript for a Hephaestus session.
+
+    KiroAgent launches with `--resume-id <uuid>` where the uuid is
+    uuid5(NAMESPACE_URL, session_id) -- the same deterministic transform as
+    Claude. kiro-cli stores each session at
+    ~/.kiro/sessions/<workspace-hash>/<uuid>/messages.jsonl. The
+    <workspace-hash> is an internal hash of the workspace that isn't
+    reproducible from cwd here, but the <uuid> directory name is globally
+    unique, so the transcript is located by globbing on the uuid alone
+    regardless of which workspace-hash bucket it landed in. cwd is accepted
+    for signature parity with the other discovery functions and validated
+    defensively, but not needed to locate the file.
+    """
+    if ".." in cwd or "~" in cwd:
+        logger.warning(f"Rejected Kiro session discovery with suspicious cwd: {cwd}")
+        return None
+
+    session_uuid = _session_id_to_uuid(session_id)
+    sessions_dir = Path.home() / ".kiro" / "sessions"
+    if not sessions_dir.exists():
+        return None
+
+    try:
+        base = sessions_dir.resolve()
+        matches = list(sessions_dir.glob(f"*/{session_uuid}/messages.jsonl"))
+        for candidate in matches:
+            # SECURITY: ensure the globbed path stays within ~/.kiro/sessions
+            if candidate.resolve().is_relative_to(base):
+                return candidate
+    except (OSError, ValueError):
+        return None
+
+    return None
+
+
 def collect_task_cost(task_id: str, agent_id: Optional[str] = None) -> None:
     """Entry point for cost collection on task completion.
 
@@ -907,6 +1057,10 @@ def collect_task_cost(task_id: str, agent_id: Optional[str] = None) -> None:
             cwd = _get_agent_cwd(db, agent, task)
             if cwd:
                 session_file = _discover_codex_session_file(session_id, cwd)
+        elif cli_type == "kiro":
+            cwd = _get_agent_cwd(db, agent, task)
+            if cwd:
+                session_file = _discover_kiro_session_file(session_id, cwd)
 
         if not session_file:
             logger.debug(f"[COST-COLLECT] No session file found for {cli_type} session {session_id[:8]} — skipping")
@@ -919,6 +1073,7 @@ def collect_task_cost(task_id: str, agent_id: Optional[str] = None) -> None:
             "claude": ClaudeCodeCollector(),
             "opencode": OpenCodeCollector(),
             "codex": CodexUsageCollector(),
+            "kiro": KiroUsageCollector(),
         }
         collector = collectors.get(cli_type)
         if not collector:

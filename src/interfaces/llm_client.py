@@ -156,16 +156,20 @@ def _build_google_ai_model(assignment: "ModelAssignment", provider_config, api_k
     )
 
 
-def _build_claude_cli_model(assignment: "ModelAssignment", provider_config, api_key: str):
-    # No API key involved -- routes through the locally authenticated
-    # Claude Code CLI (billed against the existing Claude subscription).
-    # temperature/max_tokens don't apply: CLIFallbackChatModel just sends
-    # the flattened prompt via `claude -p --model <model> --effort <level>`.
-    # reasoning_effort maps directly to the CLI's --effort flag (low/medium/
-    # high/xhigh/max); defaults to "high" when unset.
+def _build_cli_model(assignment: "ModelAssignment", provider_config, api_key: str):
+    # No API key involved -- routes through a locally authenticated CLI
+    # (billed against its existing subscription). The provider name is
+    # "<tool>_cli" (claude_cli, kiro_cli); the tool is the leading segment,
+    # which is exactly the CLI_AGENTS registry key CLIFallbackChatModel
+    # dispatches on. temperature/max_tokens don't apply: the CLI just
+    # answers the flattened prompt non-interactively. reasoning_effort maps
+    # to the CLI's own effort/thinking flag (low/medium/high/xhigh/max),
+    # defaulting to "high" when unset.
+    provider = assignment.provider
+    cli_tool = provider[: -len("_cli")] if provider.endswith("_cli") else provider
     effort = (assignment.reasoning_effort or "high").lower()
-    logger.info(f"Creating claude_cli model: {assignment.model} (effort: {effort})")
-    return CLIFallbackChatModel("claude", assignment.model, effort=effort)
+    logger.info(f"Creating {provider} model: {assignment.model} (cli={cli_tool}, effort: {effort})")
+    return CLIFallbackChatModel(cli_tool, assignment.model, effort=effort)
 
 
 # Timeout for a single CLIFallbackChatModel.ainvoke() call -- the fallback
@@ -190,10 +194,11 @@ class _CLIFallbackResponse:
 
 class CLIFallbackChatModel:
     """Shells out to the locally authenticated CLI tool for a single non-
-    interactive request/response. Used two ways: (1) as the "claude_cli"
-    provider (see _build_claude_cli_model below), a deliberate choice to
-    route a component through the existing Claude subscription instead of
-    a metered API key; (2) as an automatic fallback when a configured
+    interactive request/response. Used two ways: (1) as a "<tool>_cli"
+    provider (claude_cli, kiro_cli; see _build_cli_model below), a
+    deliberate choice to route a component through that CLI's existing
+    subscription instead of a metered API key; (2) as an automatic fallback
+    when a configured
     provider's API key is missing, instead of the caller falling straight
     to its own dumb static default (every LLMProviderInterface method
     already has one, e.g. "medium" complexity or a canned task-enrichment
@@ -221,57 +226,53 @@ class CLIFallbackChatModel:
             parts.append(f"{role.capitalize()}: {m.content}")
         return "\n\n".join(parts)
 
-    @staticmethod
-    def _empty_mcp_config_path() -> str:
-        """Path to a `{"mcpServers": {}}` file, written once and reused.
-
-        --mcp-config alone only ADDS to whatever's already auto-discovered
-        (project/user-level MCP settings); paired with --strict-mcp-config
-        it's the only way to guarantee zero MCP tools for these one-shot
-        text/JSON completions, which need no tool access at all -- without
-        it, an unrelated globally-configured MCP server could still attach
-        and let the CLI wander into tool calls instead of just answering.
-        """
-        path = os.path.join(tempfile.gettempdir(), "hephaestus_cli_fallback_empty_mcp.json")
-        if not os.path.exists(path):
-            with open(path, "w") as f:
-                f.write('{"mcpServers": {}}')
-        return path
-
     async def ainvoke(self, messages: list) -> _CLIFallbackResponse:
-        if self.cli_tool != "claude":
-            # Only claude's non-interactive `-p` mode is implemented -- the
-            # only CLI tool this fallback has ever actually been run
-            # against. A differently-configured default_cli_tool raises
-            # here rather than silently mis-invoking it; the caller's own
-            # except-block turns this into the same static default as a
-            # missing API key would have.
-            raise NotImplementedError(
-                f"CLI fallback not implemented for cli_tool={self.cli_tool!r} (only 'claude')"
-            )
+        # The CLI-specific argv is owned by the CLI agent itself
+        # (CLIAgentInterface.get_noninteractive_command), not hardcoded here.
+        # This keeps the fallback CLI-agnostic: any registered CLI that
+        # supports a non-interactive mode is usable as the no-API-key path
+        # without editing this method. A CLI with no such mode returns None,
+        # which raises the same error the caller's except-block already turns
+        # into a static default -- exactly the old claude-only behavior for
+        # every other tool, minus the hardcoded "only 'claude'" branch.
+        from src.interfaces.cli_interface import NonInteractiveCommand, get_cli_agent
+
+        try:
+            agent = get_cli_agent(self.cli_tool)
+        except ValueError as e:
+            raise NotImplementedError(str(e))
 
         prompt = self._flatten_messages(messages)
-        effort_args = ["--effort", self.effort] if self.effort else []
+        ni = agent.get_noninteractive_command(prompt, self.cli_model, self.effort)
+        if ni is None:
+            raise NotImplementedError(
+                f"CLI fallback not implemented for cli_tool={self.cli_tool!r} "
+                f"(no non-interactive mode)"
+            )
+
+        argv = list(ni.argv)
+        stdin_input: Optional[bytes] = None
+        if ni.prompt_via == NonInteractiveCommand.ARGV:
+            argv.append(prompt)
+        else:
+            stdin_input = prompt.encode()
+
+        # cwd defaults to a temp dir (not this process's cwd): the backend
+        # runs from HephaestusNG's own repo root, and CLIs like Claude Code
+        # auto-load whatever project-level CLAUDE.md/AGENTS.md sits at cwd.
+        # These are generic completions (task enrichment, trajectory
+        # analysis for an arbitrary MANAGED project, ticket wording), so
+        # this repo's opinionated instructions must not shape the answer.
         proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", "--model", self.cli_model, *effort_args,
-            "--dangerously-skip-permissions",
-            "--mcp-config", self._empty_mcp_config_path(), "--strict-mcp-config",
-            # cwd=tempdir, not this process's own cwd: the backend runs from
-            # HephaestusNG's own repo root, and Claude Code auto-loads
-            # whatever project-level CLAUDE.md sits at its cwd -- these
-            # calls are generic completions (task enrichment, trajectory
-            # analysis for an arbitrary MANAGED project, ticket wording),
-            # not "work on HephaestusNG" ones, so this repo's own opinionated
-            # instructions (commit policy, SOLID review conventions, output
-            # style) have no business shaping the answer.
-            cwd=tempfile.gettempdir(),
+            *argv,
+            cwd=ni.cwd or tempfile.gettempdir(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(prompt.encode()), timeout=CLI_FALLBACK_TIMEOUT
+                proc.communicate(stdin_input), timeout=CLI_FALLBACK_TIMEOUT
             )
         except asyncio.TimeoutError:
             proc.kill()
@@ -298,7 +299,8 @@ _MODEL_BUILDERS = {
     "openrouter": _build_openrouter_model,
     "azure_openai": _build_azure_openai_model,
     "google_ai": _build_google_ai_model,
-    "claude_cli": _build_claude_cli_model,
+    "claude_cli": _build_cli_model,
+    "kiro_cli": _build_cli_model,
 }
 
 

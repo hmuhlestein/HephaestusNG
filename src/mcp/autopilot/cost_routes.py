@@ -49,7 +49,7 @@ class CostEntryCreate(BaseModel):
     @classmethod
     def validate_source(cls, v: str) -> str:
         """Validate source is a known cost collection source."""
-        valid_sources = {"pi", "claude_code", "opencode", "codex", "openrouter_direct"}
+        valid_sources = {"pi", "claude_code", "opencode", "codex", "kiro", "openrouter_direct"}
         if v not in valid_sources:
             raise ValueError(f"source must be one of {valid_sources}, got '{v}'")
         return v
