@@ -11,7 +11,7 @@ description: |
   confirming the reported bug is actually gone, not just that requirements
   are met.
 
-default_cli_tool: kiro
+default_cli_tool: claude
 default_model: auto
 default_thinking_level: low
 # fallback_cli_tool:
