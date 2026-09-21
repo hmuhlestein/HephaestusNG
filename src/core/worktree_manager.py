@@ -108,6 +108,11 @@ class WorktreeManager:
             task targets a specific repo.
     """
 
+    #: Wall-clock ceiling (seconds) for the pre-base-resolution fetch in
+    #: _resolve_base_commit. Bounds how long a slow/blackholed remote can
+    #: delay an agent launch before falling back to the local base ref.
+    _BASE_FETCH_TIMEOUT_S = 15
+
     def __init__(self, db_manager: DatabaseManager, repo_path: Optional[Path] = None):
         self.db_manager = db_manager
         self.config = get_config()
@@ -224,6 +229,76 @@ class WorktreeManager:
                 raise ValueError(f"No worktree record for agent {agent_id}")
             return Repo(record.worktree_path)
 
+    def _resolve_base_commit(self) -> str:
+        """Resolve the commit that NEW agent work must branch from.
+
+        Always the configured base branch (git.base_branch, default "main"),
+        NEVER the main repo's current HEAD -- the managed repo may be sitting
+        on any arbitrary branch when a workflow starts, and branching a new
+        worktree off that would base the agent's work (and the eventual
+        merge into base_branch) on unrelated commits. Prefers the
+        remote-tracking ref (origin/<base_branch>) when a remote exists, so
+        a stale local base branch doesn't pin new work behind origin; falls
+        back to the local base branch otherwise.
+
+        Raises loudly if the base branch can't be resolved at all rather
+        than silently falling back to HEAD -- that silent HEAD fallback was
+        the original bug this method exists to remove.
+        """
+        base_branch = self.config.git.base_branch
+        remote_name = self.main_repo.remotes[0].name if self.main_repo.remotes else None
+
+        # Best-effort refresh so new work branches from the LATEST base
+        # branch, not a stale local origin/<base> ref. A GitHub-side merge
+        # (gh pr merge) updates origin without touching this checkout, so
+        # without this a new worktree could be based on an out-of-date
+        # origin/main. Non-fatal: offline/transient fetch failures fall
+        # through to whatever ref is already present rather than blocking
+        # an agent launch (which must still work with no network).
+        if remote_name:
+            try:
+                # Hard-bounded so a slow/blackholed remote (e.g. a VPN that
+                # stalls the connection rather than refusing it) can't
+                # freeze an agent launch. kill_after_timeout is a
+                # transport-agnostic wall-clock kill (works for SSH and
+                # HTTP alike, unlike http.lowSpeed*); GIT_SSH_COMMAND's
+                # ConnectTimeout fails a dead SSH connect fast so the happy
+                # path doesn't wait the full window. A fetch failure (or a
+                # base branch missing on the remote) just falls through to
+                # the local ref below -- agent launch must still work
+                # offline.
+                self.main_repo.git.fetch(
+                    remote_name,
+                    base_branch,
+                    kill_after_timeout=self._BASE_FETCH_TIMEOUT_S,
+                    env={"GIT_SSH_COMMAND": "ssh -o ConnectTimeout=5 -o BatchMode=yes"},
+                )
+            except (GitCommandError, git.exc.CommandError) as e:
+                logger.warning(
+                    f"[WORKTREE] Could not fetch {remote_name}/{base_branch} "
+                    f"before basing new work ({e}); using the local ref as-is"
+                )
+
+        candidates = []
+        if remote_name:
+            candidates.append(f"{remote_name}/{base_branch}")
+        candidates.append(base_branch)
+
+        for ref in candidates:
+            try:
+                sha = self.main_repo.git.rev_parse("--verify", "--quiet", f"{ref}^{{commit}}")
+                if sha:
+                    logger.info(f"[WORKTREE] Basing new work on {ref} ({sha[:8]})")
+                    return sha
+            except GitCommandError:
+                continue
+
+        raise RuntimeError(
+            f"Cannot resolve base branch {base_branch!r} (tried {candidates}). "
+            "Refusing to fall back to the repo's current HEAD -- set git.base_branch "
+            "to a branch that exists (locally or on the remote), or fetch it first."
+        )
+
     # ── Worktree creation ────────────────────────────────────────
 
     def create_agent_worktree(
@@ -258,13 +333,18 @@ class WorktreeManager:
                 elif parent_agent_id:
                     parent_commit_sha = self._get_parent_commit(parent_agent_id, session)
                     if not parent_commit_sha:
-                        parent_commit_sha = self.main_repo.head.commit.hexsha
+                        # Parent inheritance requested but parent has no
+                        # commits -- fall back to the base branch, not the
+                        # repo's current HEAD (which may be an unrelated
+                        # checked-out branch).
+                        parent_commit_sha = self._resolve_base_commit()
                         logger.info(
-                            f"[WORKTREE] Parent has no commits, using main HEAD: {parent_commit_sha[:8]}"
+                            f"[WORKTREE] Parent has no commits, using base branch: {parent_commit_sha[:8]}"
                         )
                 else:
-                    parent_commit_sha = self.main_repo.head.commit.hexsha
-                    logger.info(f"[WORKTREE] Using main HEAD: {parent_commit_sha[:8]}")
+                    # New work: always branch from the configured base
+                    # branch, never the repo's current HEAD.
+                    parent_commit_sha = self._resolve_base_commit()
 
                 branch_name = f"{self.config.git.branch_prefix}{agent_id}"
 
@@ -285,9 +365,9 @@ class WorktreeManager:
                         e
                     ) or "not a valid object name" in str(e):
                         logger.warning(
-                            f"[WORKTREE] Commit {parent_commit_sha[:8]} not found, falling back to main HEAD"
+                            f"[WORKTREE] Commit {parent_commit_sha[:8]} not found, falling back to base branch"
                         )
-                        parent_commit_sha = self.main_repo.head.commit.hexsha
+                        parent_commit_sha = self._resolve_base_commit()
                         self.main_repo.git.branch(branch_name, parent_commit_sha)
                     else:
                         raise
@@ -656,8 +736,11 @@ class WorktreeManager:
                 f"[WORKTREE] Could not read parent {parent_id} worktree: {e}"
             )
 
-        # Parent merged/cleaned — branch from its recorded commit or main HEAD
-        return parent.parent_commit_sha or self.main_repo.head.commit.hexsha
+        # Parent merged/cleaned — branch from its recorded commit, or the
+        # base branch if that's missing (NOT the repo's current HEAD, which
+        # may be an unrelated checked-out branch — same leak this class's
+        # _resolve_base_commit exists to prevent).
+        return parent.parent_commit_sha or self._resolve_base_commit()
 
     def get_workspace_changes(
         self, agent_id: str, since_commit: Optional[str] = None
