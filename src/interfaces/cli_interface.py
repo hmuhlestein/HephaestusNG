@@ -1411,6 +1411,17 @@ class KiroAgent(CLIAgentInterface):
         # ready-wait matches rather than burning the full timeout.
         return r"(❯|›|>|To get started)"
 
+    def post_launch_confirmation_keys(self) -> List[str]:
+        # --trust-all-tools suppresses per-tool prompts but NOT the one-time
+        # "Kiro is running in trust all tools mode ... are you sure?" gate
+        # that kiro-cli shows on a real TTY at launch. Unanswered, it hangs
+        # the pane forever and the session exits with no one to select an
+        # option. The menu opens on "No, exit"; Down Down lands on "Yes, and
+        # don't ask again" and Enter accepts. (Verified live: this ack does
+        # NOT persist to any kiro settings file, so it must be re-sent every
+        # launch rather than pre-seeded once in prepare_working_directory.)
+        return ["Down", "Down", "Enter"]
+
     def format_goal_command(self, condition: str) -> str:
         return f"/goal {condition}"
 
