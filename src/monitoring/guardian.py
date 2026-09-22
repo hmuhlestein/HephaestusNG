@@ -121,53 +121,21 @@ def _sanitize_tmux_output_for_llm(tmux_output: str) -> str:
 # very reply that explains the real blocker.
 #
 # Two independent, narrowly-scoped signals must BOTH be present (see
-# detect_tool_unavailable_blocker below) -- requiring the compound match is
-# what keeps a genuinely stuck agent's passing remark ("I can't get this to
-# work") from being incorrectly exempted from real stuck-loop nudging;
-# mirrors this module's other confirmation gates (GUARDIAN_TIMEOUT_
-# ESCALATION_THRESHOLD, the 2-consecutive-flag gate in
-# _evaluate_steering_eligibility) in spirit, though here the "confirmation"
-# is two co-occurring signals in one cycle rather than repeated cycles --
-# a real capability outage is a stable, re-readable fact in the transcript
-# each cycle, not a one-off judgment call that benefits from waiting.
-
-# Signal 1: the agent believes its actual work is already finished.
-# Deliberately just "already" + a completion verb (not a longer phrase) --
-# broad within THIS category is fine because signal 2 below is what
-# supplies the specificity; the incident's own phrasing ("work was already
-# done") is exactly this shape.
-_WORK_ALREADY_DONE_RE = re.compile(
-    r"already\s+(?:done|complete|completed|finished|wrote|written|created|verified)",
-    re.IGNORECASE,
-)
-
-# Signal 2: the agent names a specific tool/function (an identifier in the
-# snake_case shape every MCP tool in this codebase uses -- complete_my_task,
-# update_task_status, ...) and reports it as not callable/registered/
-# resolving/available, in either word order ("X isn't callable" / "isn't
-# registered ... X" / "can't call X"). Anchored to this curated
-# capability-registration vocabulary (callable/registered/resolve/exposed/
-# recognized/available/working/found) rather than a bare "can't do X" --
-# that generic phrasing is exactly the passing remark a genuinely stuck
-# agent might also make, and must NOT trip this detector on its own.
-_NOT_WORD = (
-    r"(?:isn'?t|is\s+not|wasn'?t|was\s+not|doesn'?t|does\s+not|didn'?t|"
-    r"did\s+not|couldn'?t|could\s+not|can'?t|cannot|not)"
-)
-_UNAVAIL_TARGET = (
-    r"(?:callable|registered|resolve(?:d|ing)?|exposed|recognized|"
-    r"available|working|found|showing up)"
-)
-_TOOL_NAME_TOKEN = r"`?\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,5}\b`?"
-_TOOL_UNAVAILABLE_RE = re.compile(
-    rf"(?:{_TOOL_NAME_TOKEN}[^\n.]{{0,50}}{_NOT_WORD}[^\n.]{{0,25}}{_UNAVAIL_TARGET}"
-    rf"|{_NOT_WORD}[^\n.]{{0,25}}{_UNAVAIL_TARGET}[^\n.]{{0,50}}{_TOOL_NAME_TOKEN}"
-    # "can't call X" specifically -- "call" alone is too generic to pair
-    # with _UNAVAIL_TARGET (would match "can't call this a success"), so
-    # it's only accepted immediately adjacent to a named tool token.
-    rf"|{_NOT_WORD}\s+call\s+(?:the\s+|this\s+)?{_TOOL_NAME_TOKEN})",
-    re.IGNORECASE,
-)
+# tool_unavailable_blocker) -- requiring the compound match is what keeps a
+# genuinely stuck agent's passing remark ("I can't get this to work") from
+# being incorrectly exempted from real stuck-loop nudging; mirrors this
+# module's other confirmation gates (GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD,
+# the 2-consecutive-flag gate in _evaluate_steering_eligibility) in spirit,
+# though here the "confirmation" is two co-occurring signals in one cycle
+# rather than repeated cycles -- a real capability outage is a stable,
+# re-readable fact in the transcript each cycle, not a one-off judgment
+# call that benefits from waiting.
+#
+# The signals and their matcher now live in patterns.py (this module's
+# shared home), since mechanical_recovery.py also consumes them to
+# RE-DISPATCH a work-done-but-tool-unavailable task rather than only
+# suppress a nudge here. See patterns.py for the full signal rationale.
+from src.monitoring.patterns import tool_unavailable_blocker
 
 
 class SteeringType(Enum):
@@ -823,18 +791,12 @@ class Guardian:
     def detect_tool_unavailable_blocker(self, tmux_output: str) -> bool:
         """True if the agent's own recent output reports it has already
         finished its real work and is blocked because a tool/capability it
-        needs is unavailable -- see the module-level comment above
-        _WORK_ALREADY_DONE_RE for the incident this guards against.
-
-        Both signals must be present in the SAME tmux_output snapshot; see
-        that same comment for why this compound-AND is the false-positive
-        guard rather than a repeated-cycle confirmation gate.
+        needs is unavailable -- see patterns.tool_unavailable_blocker and
+        the module-level comment above its import for the incident this
+        guards against. Thin wrapper kept so guardian's callers keep a
+        method on the Guardian object; the signal logic is shared.
         """
-        if not tmux_output:
-            return False
-        return bool(_WORK_ALREADY_DONE_RE.search(tmux_output)) and bool(
-            _TOOL_UNAVAILABLE_RE.search(tmux_output)
-        )
+        return tool_unavailable_blocker(tmux_output)
 
     def _record_steering(self, agent_id: str, steering_type: str, message: str):
         """Record steering in history."""

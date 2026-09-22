@@ -19,7 +19,7 @@ done_definitions:
   - "Unit tests written and passing, with unit test coverage of the code you wrote at or above 80% — the qa_validation gate rejects a run below this floor"
   - "For each bug fix: the new/changed test was stash-verified to fail before the fix and pass after (git stash discipline — see STEP 4)"
   - "For each new feature: an acceptance test was stash-verified to fail without the implementation and pass with it — same discipline, `git stash push -u` so brand-new untracked source files are actually removed"
-  - "`ruff check .` and `ruff format --check .` pass with ZERO errors (logging not print, imports at top, sorted) and `mypy` passes — run `ruff check --fix . && ruff format .` first, then verify clean before marking done"
+  - "`ruff check .` passes with ZERO errors (logging not print, imports at top, sorted) — run `ruff check --fix .` first, then verify clean. If the project has a formatter configured (a `[tool.ruff.format]`/`[tool.black]` section or equivalent formatter config), also run it and confirm `--check` is clean; if NONE is configured, do NOT reformat (it would reflow untouched files) — instead confirm every line you added is within the project's documented column limit (see AGENTS.md/CLAUDE.md). Run `mypy` only if it is installed AND configured (`[tool.mypy]` or a mypy config file present); if not, state that in the implementation status and rely on full type hints on new signatures instead of a passing mypy run"
   - "Implementation status documented"
   - "Task marked as done"
 outputs:
