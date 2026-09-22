@@ -872,8 +872,8 @@ export const apiService = {
     return data;
   },
 
-  addAutopilotProjectDesign: async (projectId: string, name: string, content: string, extension: string = '.md', destination: string = 'queue', workflowType: 'feature' | 'bugfix' | null = null, sourceRemotePath: string | null = null): Promise<any> => {
-    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`, { name, content, extension, destination, workflow_type: workflowType, source_remote_path: sourceRemotePath });
+  addAutopilotProjectDesign: async (projectId: string, name: string, content: string, extension: string = '.md', destination: string = 'queue', workflowType: 'feature' | 'bugfix' | null = null, sourceRemotePath: string | null = null, gitBaseUseCurrent: boolean = false): Promise<any> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`, { name, content, extension, destination, workflow_type: workflowType, source_remote_path: sourceRemotePath, git_base_use_current: gitBaseUseCurrent });
     return data;
   },
 

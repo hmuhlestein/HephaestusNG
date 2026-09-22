@@ -1461,6 +1461,17 @@ class AutopilotDesign(Base):
     # delete). NULL means active/visible.
     archived_at = Column(DateTime, nullable=True)
 
+    # Git base for this design's new agent worktrees. NULL/False => branch
+    # from the configured base branch (git.base_branch, "main") fetched
+    # fresh -- the default and the ONLY value full-autopilot/auto-discovered
+    # designs ever have. True => branch from the primary checkout's current
+    # branch (resolved live at launch), for building on in-progress work.
+    # Only add_project_design (the Design/Bug Spec modal) ever sets True;
+    # every other AutopilotDesign creation site leaves it NULL, so a design
+    # autopilot discovers can never be current-branch. Merge target is
+    # always main regardless. See docs/designs/configurable-worktree-base.md.
+    git_base_use_current = Column(Boolean, nullable=True)
+
     # Relationships
     project = relationship("AutopilotProject", back_populates="designs")
     features = relationship("Feature", back_populates="design", cascade="all, delete-orphan")

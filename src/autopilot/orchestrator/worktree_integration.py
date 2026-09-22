@@ -131,6 +131,38 @@ def copy_speckit_feature(dir_path: Path, feature_folder: Path) -> Path:
     return _copy_design_content(dir_path, feature_folder / CONTEXT_DIR_NAME, filename="", is_directory=True)
 
 
+def _design_uses_current_branch(design_id: Optional[str], session=None) -> bool:
+    """Whether this design's new worktrees branch from the primary checkout's
+    current branch (True) vs the base branch fetched fresh (False, default).
+
+    Reads AutopilotDesign.git_base_use_current by id. Only the Design/Bug
+    Spec modal ever sets True; every other design-creation path leaves it
+    NULL, so an auto-discovered/full-autopilot design always reads False.
+    A missing id or row (or any lookup failure) reads False -- the safe,
+    always-branch-from-main default. Accepts an optional open session so a
+    caller already holding one (e.g. _create_integration_worktree) doesn't
+    open a nested get_db().
+    """
+    if not design_id:
+        return False
+
+    def _read(db):
+        row = db.query(AutopilotDesign).filter_by(id=design_id).first()
+        return bool(row and row.git_base_use_current)
+
+    try:
+        if session is not None:
+            return _read(session)
+        with get_db() as db:
+            return _read(db)
+    except Exception as e:
+        logger.warning(
+            f"[WORKTREE] Could not read git_base_use_current for design "
+            f"{(design_id or '?')[:8]} ({e}); defaulting to base branch"
+        )
+        return False
+
+
 def _create_integration_worktree(
     project_path: Path,
     design_id: str,
@@ -170,9 +202,25 @@ def _create_integration_worktree(
         try:
             wt_mgr = WorktreeManager(db_manager=db, repo_path=project_path)
 
-            # Create branch from main if it doesn't exist
+            # Create branch from the resolved base if it doesn't exist.
+            # Base = the design's current-vs-main choice (default main,
+            # fetched fresh); resolved as a start-point rather than the
+            # old no-start-point `git.branch(branch)`, which silently
+            # branched off the repo's arbitrary current HEAD (the leftover
+            # current-HEAD bug commit 9bbc499f missed here). On reuse the
+            # existing branch is kept as-is -- its base was already fixed
+            # at first creation, which a resume must not re-point.
             try:
-                wt_mgr.main_repo.git.branch(branch)
+                use_current = _design_uses_current_branch(design_id)
+                base_commit = wt_mgr._resolve_base_commit(use_current_branch=use_current)
+            except Exception as e:
+                logger.warning(
+                    f"[WORKTREE] Base resolution failed for integration worktree "
+                    f"({e}); falling back to base branch"
+                )
+                base_commit = wt_mgr._resolve_base_commit()
+            try:
+                wt_mgr.main_repo.git.branch(branch, base_commit)
             except _git.exc.GitCommandError:
                 pass  # Branch exists
 

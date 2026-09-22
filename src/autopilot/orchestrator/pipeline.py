@@ -90,6 +90,7 @@ from src.autopilot.orchestrator.worktree_integration import (
     _copy_design_content,
     _create_designs_folder,
     _create_integration_worktree,
+    _design_uses_current_branch,
     copy_design_source,
     copy_speckit_feature,
 )
@@ -431,15 +432,18 @@ def _setup_shared_design_worktree(
             logger.info(f"Using existing worktree directly: {design_worktree_path}")
         else:
 
-            # Create feature branch from the configured base branch
-            # (git.base_branch, default "main") -- NOT the main repo's
-            # current HEAD. The managed repo may be checked out on any
-            # arbitrary branch when a workflow starts; branching the shared
-            # design worktree off that would base every phase's work (and
-            # the final merge into the base branch) on unrelated commits.
+            # Create feature branch from the resolved base -- the base
+            # branch (git.base_branch, "main") fetched fresh by default, or
+            # the primary checkout's current branch when the design opted in
+            # (git_base_use_current, modal-only). NOT the repo's arbitrary
+            # current HEAD: the managed repo may be on any branch at launch,
+            # and branching off that would base every phase's work (and the
+            # final merge into main) on unrelated commits. Merge target
+            # stays main regardless.
             import git as _git
 
-            base_commit = wt_mgr._resolve_base_commit()
+            _use_current = bool((launch_params or {}).get("git_base_use_current"))
+            base_commit = wt_mgr._resolve_base_commit(use_current_branch=_use_current)
 
             # Use design_entry name if available, otherwise derive from design_doc
             _design_label = design_name.replace(" ", "-").lower() if design_name else "design"
@@ -1289,6 +1293,11 @@ def run_phase0(
             "design_document": str(design_entry.path),
             "project_path": str(project_path),
             "design_id": design_entry.db_id or "",
+            # Git base for the shared design worktree -- default main+fetch;
+            # True only for a manual modal design. Read by db_id so Phase 0
+            # (decomposition) branches from the same base as the feature
+            # phases, not silently off main while they use current.
+            "git_base_use_current": _design_uses_current_branch(design_entry.db_id),
         }
 
         description = f"Phase 0: Feature Architect for {design_entry.name}"
@@ -2228,6 +2237,12 @@ def _run_one_feature(
             "project_path": str(project_path),
             "feature_id": feature_key,
             "project_context": f"Building feature: {feature_name}.",
+            # Git base for the shared design worktree -- default main+fetch;
+            # True only for a manual modal design (feature or bugfix, which
+            # both flow through here). Read by db_id, independent of
+            # workflow type. The per-feature integration branch reads the
+            # same flag directly in _create_integration_worktree.
+            "git_base_use_current": _design_uses_current_branch(design_entry.db_id),
         }
         if scope_dest is not None:
             launch_params["feature_scope"] = str(scope_dest)

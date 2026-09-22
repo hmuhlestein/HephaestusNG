@@ -229,22 +229,39 @@ class WorktreeManager:
                 raise ValueError(f"No worktree record for agent {agent_id}")
             return Repo(record.worktree_path)
 
-    def _resolve_base_commit(self) -> str:
+    def _resolve_base_commit(self, *, use_current_branch: bool = False) -> str:
         """Resolve the commit that NEW agent work must branch from.
 
-        Always the configured base branch (git.base_branch, default "main"),
-        NEVER the main repo's current HEAD -- the managed repo may be sitting
-        on any arbitrary branch when a workflow starts, and branching a new
-        worktree off that would base the agent's work (and the eventual
-        merge into base_branch) on unrelated commits. Prefers the
-        remote-tracking ref (origin/<base_branch>) when a remote exists, so
-        a stale local base branch doesn't pin new work behind origin; falls
-        back to the local base branch otherwise.
+        Default (use_current_branch=False): the configured base branch
+        (git.base_branch, default "main"), fetched fresh -- NEVER the main
+        repo's arbitrary current HEAD. Prefers the remote-tracking ref
+        (origin/<base_branch>) so a stale local base branch doesn't pin new
+        work behind origin; falls back to the local base branch. Raises
+        loudly if the base branch can't be resolved rather than silently
+        falling back to HEAD.
 
-        Raises loudly if the base branch can't be resolved at all rather
-        than silently falling back to HEAD -- that silent HEAD fallback was
-        the original bug this method exists to remove.
+        use_current_branch=True: branch from the primary checkout's current
+        branch, resolved as a LIVE named ref (not a detached sha, so the
+        worktree tracks that branch and never drifts to a frozen point).
+        Only ever requested for a manual Design/Bug Spec run (the modal is
+        the only setter of AutopilotDesign.git_base_use_current). If the
+        main repo is itself already on a detached HEAD, falls back to the
+        base branch rather than propagate detachment into new work. The
+        merge target stays git.base_branch regardless (see merge_to_main).
         """
+        if use_current_branch:
+            try:
+                current_branch = self.main_repo.active_branch.name
+            except TypeError:
+                logger.warning(
+                    "[WORKTREE] Requested current-branch base but repo is on a "
+                    "detached HEAD -- falling back to the base branch"
+                )
+                return self._resolve_base_commit(use_current_branch=False)
+            sha = self.main_repo.git.rev_parse("--verify", f"{current_branch}^{{commit}}")
+            logger.info(f"[WORKTREE] Basing new work on current branch {current_branch} ({sha[:8]})")
+            return sha
+
         base_branch = self.config.git.base_branch
         remote_name = self.main_repo.remotes[0].name if self.main_repo.remotes else None
 
