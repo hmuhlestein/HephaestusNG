@@ -982,12 +982,44 @@ class WorktreeManager:
 
     def _cleanup_all_stale_branches_inner(self) -> Dict[str, Any]:
         """Inner implementation of cleanup_all_stale_branches (lock already acquired)."""
+        target_branch = self.config.git.base_branch
+
+        # Back off entirely when a human has the primary checkout parked on a
+        # non-base branch. This whole pass is best-effort cleanup that runs
+        # on a timer from three recurring sweeps (monitor._cleanup_stale_
+        # worktrees, the phase-advancement sweep, repair_service), and its
+        # very first act is an unconditional `heads[base_branch].checkout()`
+        # below -- which silently reverts a developer's `git checkout
+        # <feature>` in a repo they're actively working in, every sweep
+        # tick (~60s), with no log. The worktree-isolation model assumes
+        # Hephaestus owns the primary checkout and keeps it on the base
+        # branch, but a human working directly in the managed repo breaks
+        # that assumption. Deferring cleanup until the checkout is back on
+        # the base branch is safe: nothing here is time-critical (orphaned
+        # branches/worktrees are merged/reclaimed opportunistically), and a
+        # real merge of finished agent work goes through merge_to_main /
+        # the pipeline, not this sweep. Detached HEAD (active_branch raises
+        # TypeError) is treated as "not the base branch" -> also defer.
+        try:
+            on_base = self.main_repo.active_branch.name == target_branch
+        except TypeError:
+            on_base = False
+        if not on_base:
+            logger.info(
+                "[WORKTREE] Skipping stale-branch cleanup: primary checkout is not on "
+                f"{target_branch!r} (a user is working in this repo) -- deferring until "
+                "it returns to the base branch"
+            )
+            return {
+                "cleaned": 0, "merged": 0, "failed": 0, "worktrees_cleaned": 0,
+                "branches": [], "skipped": "checkout_not_on_base_branch",
+            }
+
         with self.db_manager.session_scope() as session:
             cleaned: List[str] = []
             merged: List[str] = []
             failed: List[str] = []
             worktrees_cleaned = 0
-            target_branch = self.config.git.base_branch
             # Deliberately unguarded, matching merge_to_main's identical
             # checkout above -- a swallowed failure here previously let
             # execution continue with main_repo still checked out on
