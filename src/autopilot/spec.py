@@ -2360,6 +2360,22 @@ GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
     "feature_review": ("feature_review.md",),
 }
 
+# Gated phases whose scorer reads prior_warning_count back from
+# get_review_findings_history to pass a re-run whose WARNING set didn't grow
+# (see score_design_review/score_adversarial_review/score_hipaa_compliance).
+# That guard only works if the finding history is actually recorded -- and
+# recording is otherwise gated behind max_review_runs. design_review has no
+# max_review_runs by design (see workflow.yaml's comment: capping it out
+# would skip to development on unconfirmed architecture), so without naming
+# it here its history is never written, prior_warning_count stays None, and
+# an identical blocker-free WARNING set loops architecture_design every retry
+# until arbitration -- exactly the convergence failure prior_warning_count
+# exists to prevent. Recording is cheap and inert for phases nothing reads it
+# back for, so the recording gate is (in this set) OR (has max_review_runs).
+WARNING_HISTORY_PHASES: frozenset = frozenset(
+    {"design_review", "adversarial_review", "hipaa_compliance"}
+)
+
 # Override for a gated phase whose result lives somewhere other than
 # .hephaestus/<phase_name>/<file> or <root>/<file> -- currently unused.
 # feature_review used to be the one exception (a flat .hephaestus/review.md,
