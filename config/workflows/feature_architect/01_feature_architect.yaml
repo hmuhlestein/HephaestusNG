@@ -1,8 +1,6 @@
 id: 1
 name: feature_architect
 description: "Decomposes a design document into discrete, implementable features with clear boundaries and dependencies"
-cli_tool: claude
-cli_model: auto
 
 done_definitions:
   - ".hephaestus/features.json exists and contains valid JSON"
