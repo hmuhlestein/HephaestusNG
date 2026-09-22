@@ -421,6 +421,24 @@ def migrate_autopilot_designs_archived_at_column(engine):
         logger.warning(f"autopilot_designs.archived_at migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_autopilot_designs_git_base_column(engine):
+    """Add autopilot_designs.git_base_use_current for existing databases.
+
+    NULL (existing rows) => branch new work from the base branch fetched
+    fresh, unchanged from today. Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN git_base_use_current BOOLEAN"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated autopilot_designs.git_base_use_current column")
+    except Exception as e:
+        logger.warning(f"autopilot_designs.git_base_use_current migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_speckit_auto_scan_column(engine):
     """Add autopilot_projects.speckit_auto_scan_enabled for existing databases.
 
@@ -1616,6 +1634,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_verify_tests_command_column", migrate_verify_tests_command_column),
     ("_migrate_feature_auto_merge_sync_pending_column", migrate_feature_auto_merge_sync_pending_column),
     ("_migrate_task_arbitration_resolved_at_column", migrate_task_arbitration_resolved_at_column),
+    ("_migrate_autopilot_designs_git_base_column", migrate_autopilot_designs_git_base_column),
     # Last: repairs damage the rebuild-and-swap migrations above can do, so it
     # always sees their final state within the same startup pass.
     ("_repair_dangling_autopilot_designs_fk", repair_dangling_autopilot_designs_fk),

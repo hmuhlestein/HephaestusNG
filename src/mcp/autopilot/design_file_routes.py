@@ -96,6 +96,14 @@ class DesignAddRequest(BaseModel):
     # a freshly typed/uploaded name that happens to match one already in
     # the queue) -- that case is still a real error.
     source_remote_path: Optional[str] = None
+    # Git base for this design's new agent worktrees. False/None (default):
+    # branch from the base branch (main) fetched fresh. True: branch from
+    # the primary checkout's current branch (for building on in-progress
+    # work), resolved live at launch. This is the ONLY endpoint that may set
+    # True -- every other design-creation path leaves it unset, so a design
+    # full autopilot auto-discovers can never be current-branch. Merge
+    # target is always main. See docs/designs/configurable-worktree-base.md.
+    git_base_use_current: Optional[bool] = None
 
 
 def _get_design_queue_dir(project_base: str) -> Path:
@@ -426,6 +434,10 @@ async def add_project_design(
             extension=ext,
             modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             workflow_type=workflow_type,
+            # Store True only when explicitly requested; leave NULL otherwise
+            # so this design reads as the default base+fetch (and so this
+            # column stays NULL for every non-modal creation path).
+            git_base_use_current=True if req.git_base_use_current else None,
         )
         db.add(d)
 

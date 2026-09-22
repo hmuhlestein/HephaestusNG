@@ -90,6 +90,11 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
   const [addedRemotePaths, setAddedRemotePaths] = useState<Set<string>>(new Set());
   const [browsingForFolder, setBrowsingForFolder] = useState(false);
   const [destinationFolder, setDestinationFolder] = useState('');
+  // Git base for this design's agent worktrees: false => base branch
+  // (main) fetched fresh (default); true => the repo's current checked-out
+  // branch (for building on in-progress work). Manual-run only -- this
+  // modal is the only place it can be set. Merge target is always main.
+  const [gitBaseUseCurrent, setGitBaseUseCurrent] = useState(false);
   // Bug Spec flow only: typed/pasted content saved directly to a file in
   // the destination folder, instead of the feature flow's drag & drop --
   // a bug report is usually written fresh on the spot, not dragged in
@@ -131,6 +136,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       setTextFilename('bug-report.md');
       setTextSourceRemotePath(null);
       setSpecPreview(null);
+      setGitBaseUseCurrent(false);
     } else {
       const defaultFolder = copy?.defaultFolder ?? '';
       setDestinationFolder(defaultFolder);
@@ -305,7 +311,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
         const destination = workflowType
           ? destinationFolder
           : (file.remotePath ? 'queue' : 'docs');
-        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext, destination, workflowType ?? null, file.remotePath ?? null);
+        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext, destination, workflowType ?? null, file.remotePath ?? null, gitBaseUseCurrent);
         results.push(result);
       }
       return results;
@@ -488,6 +494,37 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                   </div>
                   <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                     Every file below is stored here, whether uploaded from your machine or picked from the project.
+                  </p>
+                </div>
+              )}
+
+              {/* Git base (New Feature / Report Bug flows only) -- where the
+                  agent's work branches from. "Current branch" is for a
+                  manual run building on in-progress work; full autopilot
+                  always uses the base branch. Merge target is always main. */}
+              {workflowType && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start work from</label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGitBaseUseCurrent(false)}
+                      className={`flex-1 px-3 py-2 text-xs font-medium rounded-xl border ${!gitBaseUseCurrent ? `${accent.ring} ring-2 border-transparent text-gray-800 dark:text-gray-100 bg-gray-50 dark:bg-gray-700` : 'border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+                    >
+                      Base branch (main)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGitBaseUseCurrent(true)}
+                      className={`flex-1 px-3 py-2 text-xs font-medium rounded-xl border ${gitBaseUseCurrent ? `${accent.ring} ring-2 border-transparent text-gray-800 dark:text-gray-100 bg-gray-50 dark:bg-gray-700` : 'border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+                    >
+                      Current branch
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                    {gitBaseUseCurrent
+                      ? "Branches from the repo's currently checked-out branch — for building on in-progress work. Still merges back to main."
+                      : 'Branches from the base branch, fetched fresh. Recommended for autopilot runs.'}
                   </p>
                 </div>
               )}
