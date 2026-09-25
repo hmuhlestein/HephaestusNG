@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import uuid as _uuid
 from pathlib import Path
@@ -849,6 +850,58 @@ def _reconstructed_transcript_lines(transcript_path: Path) -> List[str]:
     return [row.rstrip() for row in reconstruct_terminal_rows(text, TMUX_PANE_WIDTH)]
 
 
+# Import-class errors are the ONLY thing a stash-verify deliberately
+# produces (the code under test is stashed, so importing it raises), so
+# only these are suppressed inside a stash window -- a Traceback/
+# AssertionError/"exit code 1"/FAILED occurring there is still a real
+# failure worth counting.
+_STASH_SUPPRESSED_PATTERNS = ("ModuleNotFoundError", "ImportError")
+# A stash-verify cycle brackets its intentional failure between a stash
+# save and the matching restore. Only the OPENING forms count: `git stash
+# push`/`save`/`-u` or a bare `git stash` (nothing after) -- the development
+# prompt's STEP 4 uses `git stash push -u -- <files>`. Deliberately NOT a
+# loose `git stash <anything>`: `git stash list`/`show`/`drop` don't open a
+# window, and treating them as opening one would wrongly suppress a real
+# import error until the next pop. The restore forms (`pop`/`apply`) close
+# the window.
+_STASH_PUSH_RE = re.compile(r"git\s+stash\s+(?:push|save|-u)\b|git\s+stash\s*$", re.IGNORECASE)
+_STASH_POP_RE = re.compile(r"git\s+stash\s+(?:pop|apply)\b", re.IGNORECASE)
+
+
+def _scan_transcript_errors(lines: List[str], error_patterns) -> List[str]:
+    """Return the error-pattern hits in `lines`, EXCLUDING import-class
+    errors that occur inside a `git stash push`->`git stash pop` window.
+
+    Those windows are the intentional TDD stash-verify the development
+    prompt mandates: stash the implementation, confirm the test now FAILS
+    to import the (stashed) code, then pop. That deliberately-induced
+    ModuleNotFoundError/ImportError is the point of the exercise, not a
+    defect -- but the raw scanner counted it, inflating error_count and
+    flagging structurally-clean runs (0 GOTOs, all gates passed) as
+    unhealthy. Observed live (forensics Finding 1): a GOTO-free run
+    reported error_count=60, nearly all such intentional failures, re-run
+    by every verification phase that repeats the stash-verify.
+
+    Only import-class errors are suppressed and only while a stash is open;
+    everything else, and every error outside the window, still counts.
+    Nesting isn't expected (agents pop before pushing again), so a simple
+    open/closed flag matches how these actually appear.
+    """
+    hits: List[str] = []
+    stash_open = False
+    for ln in lines:
+        if _STASH_PUSH_RE.search(ln):
+            stash_open = True
+        elif _STASH_POP_RE.search(ln):
+            stash_open = False
+        if not any(p in ln for p in error_patterns):
+            continue
+        if stash_open and any(p in ln for p in _STASH_SUPPRESSED_PATTERNS):
+            continue
+        hits.append(ln.strip())
+    return hits
+
+
 def _assess_run_health(
     project_path: Optional[Path],
     workflow_id: str,
@@ -964,7 +1017,7 @@ def _assess_run_health(
             for log_file in sorted(tmux_dir.glob("*.transcript.log")):
                 try:
                     lines = _reconstructed_transcript_lines(log_file)
-                    hits = [ln.strip() for ln in lines if any(p in ln for p in error_patterns)]
+                    hits = _scan_transcript_errors(lines, error_patterns)
                     if hits:
                         total_errors += len(hits)
                         health["tmux_errors"].append(

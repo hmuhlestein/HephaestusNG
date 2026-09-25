@@ -217,3 +217,67 @@ def _strip_sgr(text: str) -> str:
 MAX_FALLBACK_ATTEMPTS = 2
 
 
+# ── "work done but a needed tool is unavailable" detection ─────────────
+# Two independent, narrowly-scoped signals that must BOTH be present (see
+# tool_unavailable_blocker) to distinguish an agent that finished its real
+# work and is blocked on a missing tool registration from a genuinely
+# stuck/looping one. Originally defined in guardian.py, where the incident
+# was first observed (~40 of a 56-minute run spent re-prodding an agent
+# that had already written and verified its output but could not call
+# complete_my_task because the tool wasn't registered). Relocated here --
+# patterns.py's whole purpose -- once a SECOND consumer appeared
+# (mechanical_recovery's re-dispatch detector): both guardian (to SUPPRESS
+# a useless "keep working" nudge) and mechanical_recovery (to RE-DISPATCH
+# the task onto a fresh launch whose MCP-ready wait attaches the tools)
+# import these from here instead of one reaching into the other.
+
+# Signal 1: the agent believes its actual work is already finished.
+# Deliberately just "already" + a completion verb (not a longer phrase) --
+# broad within THIS category is fine because signal 2 supplies the
+# specificity; the incident's own phrasing ("work was already done") is
+# exactly this shape.
+_WORK_ALREADY_DONE_RE = re.compile(
+    r"already\s+(?:done|complete|completed|finished|wrote|written|created|verified)",
+    re.IGNORECASE,
+)
+
+# Signal 2: the agent names a specific tool/function (an identifier in the
+# snake_case shape every MCP tool in this codebase uses -- complete_my_task,
+# update_task_status, ...) and reports it as not callable/registered/
+# resolving/available, in either word order ("X isn't callable" / "isn't
+# registered ... X" / "can't call X"). Anchored to this curated
+# capability-registration vocabulary (callable/registered/resolve/exposed/
+# recognized/available/working/found) rather than a bare "can't do X" --
+# that generic phrasing is exactly the passing remark a genuinely stuck
+# agent might also make, and must NOT trip this detector on its own.
+_NOT_WORD = (
+    r"(?:isn'?t|is\s+not|wasn'?t|was\s+not|doesn'?t|does\s+not|didn'?t|"
+    r"did\s+not|couldn'?t|could\s+not|can'?t|cannot|not)"
+)
+_UNAVAIL_TARGET = (
+    r"(?:callable|registered|resolve(?:d|ing)?|exposed|recognized|"
+    r"available|working|found|showing up)"
+)
+_TOOL_NAME_TOKEN = r"`?\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,5}\b`?"
+_TOOL_UNAVAILABLE_RE = re.compile(
+    rf"(?:{_TOOL_NAME_TOKEN}[^\n.]{{0,50}}{_NOT_WORD}[^\n.]{{0,25}}{_UNAVAIL_TARGET}"
+    rf"|{_NOT_WORD}[^\n.]{{0,25}}{_UNAVAIL_TARGET}[^\n.]{{0,50}}{_TOOL_NAME_TOKEN}"
+    # "can't call X" specifically -- "call" alone is too generic to pair
+    # with _UNAVAIL_TARGET (would match "can't call this a success"), so
+    # it's only accepted immediately adjacent to a named tool token.
+    rf"|{_NOT_WORD}\s+call\s+(?:the\s+|this\s+)?{_TOOL_NAME_TOKEN})",
+    re.IGNORECASE,
+)
+
+
+def tool_unavailable_blocker(text: str) -> bool:
+    """True if `text` shows BOTH signals: the agent reports its real work is
+    already finished AND names a tool/capability it needs as unavailable.
+    Both must be present in the SAME snapshot -- the compound-AND is the
+    false-positive guard (a genuinely stuck agent's passing "I can't get
+    this to work" trips neither signal's curated vocabulary on its own)."""
+    if not text:
+        return False
+    return bool(_WORK_ALREADY_DONE_RE.search(text)) and bool(
+        _TOOL_UNAVAILABLE_RE.search(text)
+    )

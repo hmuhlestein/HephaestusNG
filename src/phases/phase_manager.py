@@ -1143,6 +1143,7 @@ class PhaseManager:
         try:
             from src.autopilot.spec import (
                 GATE_RESULT_ARTIFACTS,
+                WARNING_HISTORY_PHASES,
                 consume_gate_artifacts,
                 gate_finding_count,
                 get_max_review_runs,
@@ -1158,25 +1159,47 @@ class PhaseManager:
                 # they're deleted below -- the next run of this phase is a
                 # fresh agent with zero memory of its own (see
                 # _create_phase_task), so without this every re-run
-                # re-reviews from scratch. Only for phases that opted into
-                # max_review_runs (workflow.yaml) -- skip the write entirely
-                # everywhere else, keeping this inert by default.
-                if get_max_review_runs(phase.workflow_id, phase.name) is not None:
-                    artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
-                    result, report_text = (
-                        read_okf_report(
-                            workflow.working_directory, artifacts[0], phase_name=phase.name
+                # re-reviews from scratch. Recorded for phases that opted into
+                # max_review_runs (its cap logic reads run history) AND for
+                # phases whose scorer reads prior_warning_count back to pass an
+                # unchanged WARNING set (WARNING_HISTORY_PHASES) -- notably
+                # design_review, which has no max_review_runs but WILL loop
+                # architecture_design forever on an identical blocker-free
+                # WARNING set without this. Inert everywhere else.
+                if (
+                    get_max_review_runs(phase.workflow_id, phase.name) is not None
+                    or phase.name in WARNING_HISTORY_PHASES
+                ):
+                    # Best-effort: recording history is an optimization that
+                    # lets the next run pass an unchanged finding set. It must
+                    # NOT be able to block consume_gate_artifacts below --
+                    # that deletion is the actual loop-prevention and has to
+                    # run on every goto even if recording fails (e.g. DB
+                    # hiccup). Kept in its own try so one can't take the other
+                    # down; previously a raise here skipped consumption
+                    # entirely, leaving stale result files to re-score and
+                    # re-loop -- the exact bug this method exists to prevent.
+                    try:
+                        artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
+                        result, report_text = (
+                            read_okf_report(
+                                workflow.working_directory, artifacts[0], phase_name=phase.name
+                            )
+                            if artifacts
+                            else (None, None)
                         )
-                        if artifacts
-                        else (None, None)
-                    )
-                    record_review_finding(
-                        phase.workflow_id,
-                        phase.name,
-                        blocker_count=gate_finding_count(phase.name, result),
-                        summary=report_text or (result or {}).get("reason", ""),
-                        warning_count=int((result or {}).get("warning_count") or 0),
-                    )
+                        record_review_finding(
+                            phase.workflow_id,
+                            phase.name,
+                            blocker_count=gate_finding_count(phase.name, result),
+                            summary=report_text or (result or {}).get("reason", ""),
+                            warning_count=int((result or {}).get("warning_count") or 0),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not record review findings for {phase.name} "
+                            f"(continuing to artifact consumption): {e}"
+                        )
 
                 consume_gate_artifacts(phase.name, workflow.working_directory)
         except Exception as e:

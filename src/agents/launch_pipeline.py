@@ -747,6 +747,59 @@ class LaunchPipeline:
         logger.warning(f"{cli_type} agent {agent_id} did not match its ready pattern within {timeout:.0f}s -- proceeding anyway (same ceiling as the previous flat wait)")
         return False
 
+    async def _wait_for_mcp_ready(
+        self,
+        pane,
+        cli_agent,
+        cli_type: str,
+        agent_id: str,
+        timeout: float = 20.0,
+        poll_interval: float = 0.5,
+    ) -> bool:
+        """Wait until a CLI has finished connecting its MCP servers, for a
+        CLI whose input prompt renders BEFORE its tools register (see
+        post_launch_mcp_ready_marker). Runs AFTER post_launch_confirmation_keys
+        cleared any launch dialog, so the settled-prompt marker can actually
+        appear -- the generic ready-wait can't do this itself, because it
+        runs before the dialog is cleared and would deadlock waiting for a
+        settled state the dialog is still covering.
+
+        No-op (returns True immediately) for any CLI whose
+        post_launch_mcp_ready_marker is None. On timeout, logs and returns
+        False but does NOT block the launch -- proceeding with a late prompt
+        is strictly better than never dispatching, and matches
+        _wait_for_cli_ready's own proceed-anyway ceiling. Poll-count loop
+        (not a wall-clock deadline) for the same test-mock reason
+        _wait_for_cli_ready documents.
+        """
+        import re
+
+        marker = cli_agent.post_launch_mcp_ready_marker()
+        if not marker:
+            return True
+
+        logger.info(
+            f"Waiting up to {timeout:.0f}s for {cli_type} agent {agent_id} MCP servers to connect..."
+        )
+        loop = asyncio.get_event_loop()
+        max_polls = max(1, int(timeout / poll_interval))
+        for _ in range(max_polls):
+            try:
+                captured = await loop.run_in_executor(None, pane.cmd, "capture-pane", "-p", "-S", "-10")
+                text = "\n".join(captured.stdout) if captured.stdout else ""
+            except Exception:
+                text = ""
+            if text and re.search(re.escape(marker), text):
+                logger.info(f"{cli_type} agent {agent_id} MCP servers connected")
+                return True
+            await asyncio.sleep(poll_interval)
+
+        logger.warning(
+            f"{cli_type} agent {agent_id} MCP-ready marker not seen within "
+            f"{timeout:.0f}s -- proceeding anyway (tools may register late)"
+        )
+        return False
+
     def _check_duplicate_active_agent(self, task: Task) -> Optional[Agent]:
         """Guard: don't create a second agent for a task that already has one.
 
@@ -1195,6 +1248,8 @@ class LaunchPipeline:
         for key in cli_agent.post_launch_confirmation_keys():
             pane.send_keys(key)
             await asyncio.sleep(1.5)
+
+        await self._wait_for_mcp_ready(pane, cli_agent, cli_type, agent_id)
 
         await self._send_initial_prompt_with_retry(
             pane=pane,

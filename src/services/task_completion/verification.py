@@ -915,17 +915,40 @@ def verify_git_expert_merged_and_pushed(session, task, phase=None) -> Optional[D
             main_commit = repo.commit("main")
         except Exception:
             main_commit = None
-        if main_commit is None or not repo.is_ancestor(feature_commit, main_commit):
+        try:
+            remote_main = repo.commit(f"{remote.name}/main") if remote else None
+        except Exception:
+            remote_main = None
+
+        # The work counts as merged if the feature commit is an ancestor of
+        # EITHER local main OR the remote's main. Two legitimate merge flows
+        # land it in different places:
+        #   - local merge (`git merge --no-ff` then `git push origin main`)
+        #     advances local main first;
+        #   - `gh pr merge` -- the ONLY path when main is branch-protected
+        #     and direct pushes are refused -- advances REMOTE main, leaving
+        #     the worktree's local main stale.
+        # Checking only local main wrongly failed a PR-merged, branch-
+        # protected repo: observed live, git_expert merged PR #1237 via
+        # `gh pr merge --admin` (origin/main advanced, feature confirmed an
+        # ancestor of it) and reported done, but local main still pointed at
+        # a pre-merge WIP commit, so the gate rejected genuinely-merged work
+        # and burned the phase's whole retry budget.
+        merged_local = main_commit is not None and repo.is_ancestor(feature_commit, main_commit)
+        merged_remote = remote_main is not None and repo.is_ancestor(feature_commit, remote_main)
+        if not merged_local and not merged_remote:
             return _reject(
                 "this branch's work is not yet merged into main. Merge the feature branch into "
                 "main before calling update_task_status(done)."
             )
 
-        if remote:
-            try:
-                remote_main = repo.commit(f"{remote.name}/main")
-            except Exception:
-                remote_main = None
+        # Only require local main to be pushed to the remote when the merge
+        # happened LOCALLY (merged_local) and the remote hasn't already
+        # caught up on its own -- a PR merge (merged_remote) already put the
+        # work on the remote, so there is nothing local left to push, and
+        # demanding a push of a deliberately-stale local main would just
+        # re-reject the exact PR-merge case above.
+        if remote and merged_local and not merged_remote:
             if remote_main is None or not repo.is_ancestor(main_commit, remote_main):
                 return _reject(
                     f"main has commits not yet pushed to {remote.name}. Push main "

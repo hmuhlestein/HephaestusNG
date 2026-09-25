@@ -34,6 +34,7 @@ from src.monitoring.patterns import (
     _USAGE_LIMIT_RE,
     MAX_FALLBACK_ATTEMPTS,
     _strip_sgr,
+    tool_unavailable_blocker,
 )
 from src.prompts.loader import get_monitor_nudge
 
@@ -1605,6 +1606,80 @@ class MechanicalRecoveryDetector:
             return True
         except Exception as e:
             logger.warning(f"[UNCONFIRMED-COMPLETION] check failed for {agent.id[:8]}: {e}")
+        return False
+
+
+    async def detect_work_done_tool_unavailable(self, agent) -> bool:
+        """Detect an agent whose own output says it FINISHED its real work
+        but cannot close the task because the heph MCP task tools
+        (complete_my_task/update_task_status) are not registered in its
+        session -- and re-dispatch the task so a fresh launch attaches them.
+
+        This is the recovery half of the MCP-connect race the launch
+        pipeline's _wait_for_mcp_ready now prevents: kiro-cli renders its
+        input prompt before its MCP servers finish connecting, so an agent
+        whose first turn ran too early sees complete_my_task 'not available'
+        and strands a fully-done task with every deliverable already written
+        to disk (observed live: doc_review agent e3220e5d). The launch-time
+        wait removes the cause; this is the belt-and-suspenders backstop for
+        any session that still lands in that state (a slow server, a launch
+        that predates the wait, or a genuinely dropped registration).
+        Independently recommended by a forensics_analysis pass (Finding 5).
+
+        Distinct from detect_unconfirmed_task_completion, which handles the
+        OPPOSITE case -- the agent DID call complete_my_task but the call
+        never landed (dropped connection), so a nudge to retry the call is
+        the right move. Here the tool isn't callable at all, so no nudge can
+        help; the only fix is a fresh session with the tools attached, which
+        is exactly what requeue_and_terminate provides. Guardian detects the
+        same signal to SUPPRESS a useless 'keep working' nudge; this detector
+        (running in the mechanical sweep, before Guardian) actually resolves
+        it, and marking the agent intervened this cycle keeps Guardian's
+        log-only path from firing on top.
+
+        Re-dispatch is immediate, not nudge-then-escalate: unlike an
+        unconfirmed completion (where a retried call might land), a missing
+        tool registration will not appear mid-session -- kiro-cli connects
+        MCP at startup only -- so there is nothing to wait for. A cooldown
+        still guards against acting twice on the same agent before the
+        terminate/reset takes effect.
+        """
+        if agent.status != "working" or not agent.current_task_id:
+            return False
+        try:
+            if not hasattr(self, "_redispatched_tool_unavailable"):
+                self._redispatched_tool_unavailable = {}
+
+            out = self.agent_manager.get_agent_output(agent.id, lines=60)
+            if not out:
+                return False
+            if not tool_unavailable_blocker(_strip_sgr(out)):
+                return False
+
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if not task or task.status not in ("in_progress", "assigned"):
+                    # Already terminal/under_review/moved on -- nothing stranded.
+                    return False
+
+            # Cooldown: a single re-dispatch takes a moment to terminate the
+            # agent and reset the task; don't fire again for the same agent
+            # inside that window and race our own teardown.
+            last = self._redispatched_tool_unavailable.get(agent.id)
+            if last is not None and time.time() - last < 120:
+                return False
+            self._redispatched_tool_unavailable[agent.id] = time.time()
+
+            logger.warning(
+                f"[TOOL-UNAVAILABLE] Agent {agent.id[:8]} reports its work is "
+                f"done but the heph MCP task tools are not registered in its "
+                f"session -- re-dispatching task {agent.current_task_id[:8]} "
+                f"for a fresh launch with tools attached"
+            )
+            await self._auto_restart.requeue_and_terminate(agent)
+            return True
+        except Exception as e:
+            logger.warning(f"[TOOL-UNAVAILABLE] check failed for {agent.id[:8]}: {e}")
         return False
 
 

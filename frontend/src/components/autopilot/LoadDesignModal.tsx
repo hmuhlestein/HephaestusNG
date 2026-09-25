@@ -745,8 +745,12 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                 </div>
               )}
 
-              {/* Loaded Files List */}
-              {loadedFiles.length > 0 && (
+              {/* Loaded Files List -- hidden in the Design Spec (feature)
+                  flow: the modal has no scroll, so this list grew the modal
+                  and pushed the action buttons out of reach. The spec-folder
+                  browser above is the primary selection surface there.
+                  Still shown for the plain "Load Design" flow. */}
+              {loadedFiles.length > 0 && workflowType !== 'feature' && (
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                     {loadedFiles.length} file(s) selected

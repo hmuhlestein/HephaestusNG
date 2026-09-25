@@ -246,6 +246,18 @@ class CLIAgentInterface(ABC):
         dialog). Empty = no confirmation needed for this CLI."""
         return []
 
+    def post_launch_mcp_ready_marker(self) -> Optional[str]:
+        """A pane substring that appears only once this CLI has finished
+        connecting its MCP servers and is genuinely ready for a task -- for
+        a CLI whose input prompt renders BEFORE its MCP tools register, so
+        the generic ready-wait (get_health_check_pattern) returns too early
+        and the agent's first turn can run with its MCP tools still missing.
+        Sent after any post_launch_confirmation_keys and before the initial
+        prompt; the caller polls for this marker (bounded) so the agent
+        doesn't act until its tools exist. None = no such gap for this CLI
+        (the generic ready-wait already covers it)."""
+        return None
+
     def format_goal_command(self, condition: str) -> str:
         """CLI-native command text that sets a self-checked completion
         condition, keeping the agent working until it's actually met
@@ -1408,8 +1420,37 @@ class KiroAgent(CLIAgentInterface):
     def get_health_check_pattern(self) -> str:
         # kiro-cli chat's own input prompt (U+276F) plus a couple of generic
         # readiness markers. Kept deliberately broad (like claude's) so the
-        # ready-wait matches rather than burning the full timeout.
+        # ready-wait matches rather than burning the full timeout. NOTE: this
+        # `›` prompt renders WHILE kiro is still "Initializing" and connecting
+        # its MCP servers, so matching it means "the CLI is accepting input",
+        # NOT "MCP tools are ready" -- the trust-dialog clear + MCP-settle
+        # wait in _deliver_initial_prompt handles the latter (see
+        # post_launch_mcp_ready_marker).
         return r"(❯|›|>|To get started)"
+
+    def post_launch_mcp_ready_marker(self) -> Optional[str]:
+        # After the trust dialog is cleared, kiro-cli shows "Initializing"
+        # while it connects MCP servers, and only then renders its settled
+        # idle prompt. The heph server (FastMCP) is among the slowest to
+        # register, so an agent whose first turn runs during "Initializing"
+        # sees complete_my_task/update_task_status as "not available" and
+        # strands a fully-done task (observed live: doc_review agent e3220e5d
+        # did all the work, then could not mark itself done -- no heph_* tool
+        # was registered yet). The caller waits for this settled-prompt
+        # marker (which appears only AFTER init completes) before sending the
+        # initial prompt. Returned by KiroAgent only; None disables the wait.
+        return "ask a question or describe a task"
+
+    def post_launch_confirmation_keys(self) -> List[str]:
+        # --trust-all-tools suppresses per-tool prompts but NOT the one-time
+        # "Kiro is running in trust all tools mode ... are you sure?" gate
+        # that kiro-cli shows on a real TTY at launch. Unanswered, it hangs
+        # the pane forever and the session exits with no one to select an
+        # option. The menu opens on "No, exit"; Down Down lands on "Yes, and
+        # don't ask again" and Enter accepts. (Verified live: this ack does
+        # NOT persist to any kiro settings file, so it must be re-sent every
+        # launch rather than pre-seeded once in prepare_working_directory.)
+        return ["Down", "Down", "Enter"]
 
     def format_goal_command(self, condition: str) -> str:
         return f"/goal {condition}"

@@ -1259,13 +1259,62 @@ else
     log "Claude Code not detected — skipping agent installation"
 fi
 
-# ─── Kiro CLI Agent Installation ──────────────────────────────────
+# ─── Kiro CLI MCP Configuration ──────────────────────────────────
 #
 # Kiro is the default CLI tool (agents.default_cli_tool). Its binary is
-# kiro-cli (not "kiro"). Unlike Claude Code/Codex, Kiro needs NO separate
-# MCP registration step here: generate_kiro_agents.py embeds the heph MCP
-# server directly in each agent's JSON (mcpServers), so a Kiro-launched
-# agent has the heph_* tools regardless of which project it runs in.
+# kiro-cli (not "kiro").
+#
+# generate_kiro_agents.py embeds the heph MCP server in each generated
+# agent's JSON (mcpServers), but that only covers phases that HAVE a
+# generated agent file -- and the generator only reads the `autopilot`
+# workflow's phases. A Kiro agent launched for any other workflow's phase
+# (e.g. feature_architect / feature_review, whose files are never
+# generated) falls back to LaunchResult.MESSAGE with NO agent file, so it
+# gets ZERO heph_* tools -- complete_my_task included -- and can do the
+# work but never mark it done, silently stranding the task. Observed live:
+# a feature_architect task looped through repeated re-dispatches, each
+# agent finishing the decomposition and then reporting complete_my_task
+# was not callable.
+#
+# So Kiro needs the SAME global registration Claude Code and Codex get
+# above: `kiro-cli mcp add --scope global` writes the heph server to the
+# CLI's global config (~/.kiro/settings/mcp.json), independent of the
+# per-agent files, so every Kiro-launched agent has heph_* tools in every
+# project/worktree regardless of which workflow's phase it runs. `mcp add`
+# is add-or-replace, so re-running is safe without a remove-first dance.
+KIRO_MCP_SCRIPT="$PREFIX/mcp/mcp_client.py"
+KIRO_MCP_LOCK_DIR="$HOME/.kiro/settings/mcp.json.heph-install.lock"
+
+if command -v kiro-cli >/dev/null 2>&1; then
+    mkdir -p "$HOME/.kiro/settings" 2>/dev/null
+    if ! mkdir "$KIRO_MCP_LOCK_DIR" 2>/dev/null; then
+        warn "Another Hephaestus installer is updating Kiro CLI MCP configuration"
+    elif [ -f "$KIRO_MCP_SCRIPT" ] && [ -x "$VENV_DIR/bin/python" ]; then
+        # `mcp status` prints the server's Command (the python path) but not
+        # its Args (the script path), so the path is all we can match on here.
+        # That's sufficient: it confirms a heph server exists pointing at this
+        # venv's python, and `mcp add` is add-or-replace anyway, so a stale
+        # args path would be corrected on the next add rather than duplicated.
+        # mcp status writes to stderr, not stdout, so capture with 2>&1.
+        KIRO_MCP_STATUS="$(kiro-cli mcp status --name heph 2>&1 || true)"
+        if printf '%s\n' "$KIRO_MCP_STATUS" | grep -Fq "$VENV_DIR/bin/python"; then
+            ok "Kiro CLI MCP server already configured (heph)"
+        elif kiro-cli mcp add --scope global --name heph --command "$VENV_DIR/bin/python" --args "$KIRO_MCP_SCRIPT" >/dev/null 2>&1; then
+            ok "Configured Hephaestus MCP server for Kiro CLI"
+        else
+            warn "Failed to configure Kiro CLI MCP server"
+        fi
+        rmdir "$KIRO_MCP_LOCK_DIR"
+    else
+        warn "Kiro CLI MCP script or virtual environment Python not found — skipping"
+        rmdir "$KIRO_MCP_LOCK_DIR"
+    fi
+else
+    log "Kiro CLI not detected — skipping MCP configuration"
+    log "Kiro is the default CLI tool; install kiro-cli, then re-run install.sh"
+fi
+
+# ─── Kiro CLI Agent Installation ──────────────────────────────────
 
 header "Kiro CLI Agents"
 

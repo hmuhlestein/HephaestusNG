@@ -75,6 +75,7 @@ class MonitoringLoop:
         "_detect_resume_session_prompt",
         "_detect_max_token_limit_error",
         "_detect_unconfirmed_task_completion",
+        "_detect_work_done_tool_unavailable",
         "_detect_mcp_disconnected",
         "_detect_connection_errors",
         "_detect_bad_model_error",
@@ -313,6 +314,9 @@ class MonitoringLoop:
         """Delegator to _mechanical_recovery.detect_unconfirmed_task_completion()."""
         return await self._mechanical_recovery.detect_unconfirmed_task_completion(*args, **kwargs)
 
+    async def _detect_work_done_tool_unavailable(self, *args, **kwargs):
+        """Delegator to _mechanical_recovery.detect_work_done_tool_unavailable()."""
+        return await self._mechanical_recovery.detect_work_done_tool_unavailable(*args, **kwargs)
 
     async def _detect_mcp_disconnected(self, *args, **kwargs):
         """Delegator to _mechanical_recovery.detect_mcp_disconnected()."""
