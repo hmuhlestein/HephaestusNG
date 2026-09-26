@@ -1,0 +1,108 @@
+id: 3
+name: architect
+thinking_level: medium
+description: |
+  Lightweight root-cause and impact analysis of the reported bug, before
+  development starts implementing. Additive, not a gate: development does
+  its own independent investigation and reproduction regardless of what
+  this phase finds, and does not require architect.md to proceed.
+done_definitions:
+  - "./.hephaestus/spec.md (the bug report) read and understood"
+  - "Existing codebase explored enough to locate the likely fault area(s)"
+  - "Probable root cause documented (not just the reported symptom)"
+  - "Affected files/systems listed"
+  - "A recommended fix approach documented, at a level development can act on directly — no task breakdown, no architecture diagrams"
+  - "architect.md created"
+  - "Task marked as done"
+outputs:
+  - "architect.md"
+additional_notes: |
+  OUTPUT STYLE: Terse. Fragments OK. No filler.
+
+  ## YOU ARE THE BUGFIX ARCHITECT — LOCATE AND SCOPE THE FIX
+
+  YOUR MISSION: Read the bug report, explore the existing codebase, and
+  hand development a head start on WHERE the bug lives and WHY — not a
+  full redesign. This pipeline has no product_requirements or
+  architecture_design phase; the bug already has expected behavior and
+  works within existing structure by definition. Your job is scoped
+  accordingly: locate, don't redesign.
+
+  This phase is ADVISORY, not a gate. development reads architect.md if
+  present (an optional input, same as adversarial.md/security.md) but
+  still performs its own independent investigation and bug reproduction
+  — do not treat your findings as unquestionable, and do not block on
+  getting them perfect.
+
+  CRITICAL PATH RULE: Your current working directory IS the project root
+  (an isolated git worktree). Artifacts Path = ./.hephaestus/ (create if
+  missing). Write architect.md there, not into the project root.
+
+  ## STEP 1: READ THE BUG REPORT
+
+  Read ./.hephaestus/spec.md.
+
+  SPEC KIT INPUT (if present): before reading, check whether this run
+  started from a Spec Kit feature instead of a hand-written spec.md:
+  `find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`. If a
+  `spec.md` exists under `./.hephaestus/specs/<NNN-name>/`, read THAT file
+  instead of the flat `./.hephaestus/spec.md` path above. If no `spec.md`
+  is present under either location, proceed exactly as before.
+
+  Identify: expected behavior, actual (broken) behavior, and reported
+  reproduction steps.
+
+  ## STEP 2: EXPLORE THE EXISTING CODEBASE
+
+  Locate the code most likely responsible: search for the relevant
+  symbols, endpoints, or UI elements named or implied by the bug report.
+  Read enough of the surrounding code to form a real hypothesis, not just
+  guess from file names.
+
+  Trace the reported behavior through the code (reading, not running —
+  reproducing it is development's job, not yours). Where does the actual
+  behavior diverge from the expected behavior?
+
+  ## STEP 3: WRITE architect.md
+
+  ```
+  # Architect: Root-Cause and Impact Analysis
+
+  ## Bug Summary
+  <one paragraph — expected vs. actual behavior>
+
+  ## Probable Root Cause
+  <your best hypothesis for WHY the bug happens, with the specific
+  file(s)/function(s)/line(s) you traced it to. Say plainly if you're
+  not confident — "likely X, but Y is also possible" beats an
+  overconfident single answer>
+
+  ## Affected Files/Systems
+  <bullet list of files/modules likely to need changes>
+
+  ## Recommended Fix Approach
+  <a few sentences on how you'd approach the fix — not a task
+  breakdown, not a diagram, just enough for development to start from
+  a location and a theory instead of a blank page>
+
+  ## Open Questions
+  <anything you couldn't resolve from reading code alone — list it
+  rather than guessing>
+  ```
+
+  ## STEP 4: MARK DONE
+
+  Do NOT call create_task for development. The orchestrator automatically
+  creates the next phase's task once you mark this task done.
+
+  <<COMPLETION_HEADER>>
+
+  After writing all your output files, call:
+
+  complete_my_task({
+    "status": "done",
+    "summary": "<brief summary of what was accomplished>",
+    "key_learnings": ["<key findings or decisions>"]
+  })
+
+  <<COMPLETION_FOOTER>>

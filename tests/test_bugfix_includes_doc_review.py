@@ -46,6 +46,7 @@ def test_bugfix_workflow_loads_with_doc_review_in_order():
     phases = build_phase_list(cfg)
     names = [p.name for p in phases]
     assert names == [
+        "architect",
         "development",
         "adversarial_review",
         "security_review",

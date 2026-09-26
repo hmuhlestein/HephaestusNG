@@ -4,10 +4,13 @@ thinking_level: medium
 self_review:
   enabled: true
 description: |
-  Fix the reported bug. This is the bugfix pipeline's first phase — there is
-  no product_requirements or architecture_design phase ahead of it, so
-  spec.md (the bug report) IS the scope authority, not a derived
-  architecture.md.
+  Fix the reported bug. There is no product_requirements or
+  architecture_design phase in this pipeline, so spec.md (the bug report)
+  IS the scope authority, not a derived architecture.md. An advisory
+  architect phase runs ahead of this one and may leave architect.md with
+  a root-cause head start (see "INPUTS AVAILABLE TO YOU THIS RUN" in your
+  task description) — read it if present, but do your own independent
+  investigation and reproduction regardless; it is not authoritative.
 
   Reads spec.md, implements the fix, writes a regression test proving the
   bug is actually fixed, and creates working software.
@@ -102,8 +105,19 @@ additional_notes: |
 
   Read:
   - ./.hephaestus/spec.md — SCOPE AUTHORITY: only implement what this specifies
+
+    SPEC KIT INPUT (if present): before reading, check whether this run
+    started from a Spec Kit feature instead of a hand-written spec.md:
+    `find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`. If a
+    `spec.md` exists under `./.hephaestus/specs/<NNN-name>/`, read THAT
+    file instead of the flat `./.hephaestus/spec.md` path above. If no
+    `spec.md` is present under either location, proceed exactly as before.
   - Your task description for "Artifacts Path" and "Project Path" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
+  - architect.md (from Artifacts Path, if it exists) — the architect
+    phase's root-cause/impact analysis. Advisory, not authoritative: it's
+    a head start on where the bug likely lives and why, not a replacement
+    for your own investigation below.
   - adversarial.md (from Artifacts Path, if it exists) — findings from the
     adversarial reviewer. Fix every BLOCKER and WARNING before marking done.
     Each finding includes a "Recommended fix" — follow it precisely.
@@ -169,8 +183,13 @@ additional_notes: |
 
   ## STEP 4: IMPLEMENT YOUR COMPONENT
 
+  REPRODUCE FIRST: for a bug fix (not a new feature), follow the bug
+  report's reproduction steps against the current code before changing
+  anything. Confirm you can see the bug — you cannot verify a fix without
+  first confirming the failure.
+
   For your assigned component:
-  
+
   1. **Set up project structure** (if infrastructure task)
      - Create directories
      - Initialize package manager
