@@ -43,6 +43,13 @@ class ReviewGateDecision:
     # the tool has exhausted its own attempts. Distinct from a clean pause
     # so the caller can log it differently and the UI can flag it.
     stuck: bool = False
+    # True when the PR is already MERGED. There is nothing to review and
+    # nothing to fix: the caller should finish the workflow, not pause it.
+    # should_pause is left True alongside it on purpose -- a consumer that
+    # never learned about this field falls back to the old behaviour
+    # (asking a human), which is wrong but harmless, rather than to the
+    # hold path, which would reopen git_expert against a merged PR.
+    merged: bool = False
 
 
 _CLEAN_REASON = "All phases complete -- awaiting human review and merge approval"
@@ -86,6 +93,20 @@ def evaluate_review_gate(session, workflow_id: str) -> ReviewGateDecision:
         # else in this codebase: treat as unknown, never as a rejection.
         logger.warning(f"[REVIEW-GATE] PR status unknown for {feature.pr_url} -- opening the gate")
         return ReviewGateDecision(True, _CLEAN_REASON)
+
+    if status.state == "MERGED":
+        # Observed live: a PR merged by a human while the tool was stopped.
+        # GitHub reports mergeStateStatus UNKNOWN for a merged PR, so
+        # ready_to_merge is False and needs_work is False -- which the
+        # arms below read as "stuck" and answered with "awaiting human
+        # review -- PR is not mergeable yet" about a PR already on main.
+        return ReviewGateDecision(True, "PR merged -- finishing the workflow", merged=True)
+
+    if status.state == "CLOSED":
+        # Closed without merging. No commit fixes that; a human decided.
+        return ReviewGateDecision(
+            True, "Awaiting human review -- the PR was closed without being merged", stuck=True
+        )
 
     if status.ready_to_merge:
         return ReviewGateDecision(True, _CLEAN_REASON)
@@ -263,4 +284,38 @@ def reopen_git_expert_for_pr_fix(session, workflow_id: str, blockers: str) -> bo
     logger.warning(
         f"[REVIEW-GATE] Reopened git_expert for {workflow_id[:8]} to fix its PR: {blockers}"
     )
+    return True
+
+
+def finish_merged_workflow(session, workflow_id: str) -> bool:
+    """Record a PR that is already merged as the workflow's finished state.
+
+    Writes exactly what review_feature's approve path writes after a
+    successful `gh pr merge` -- workflow and feature both "completed" -- and
+    only when derive_workflow_status agrees every phase is done, so this
+    cannot mark a half-finished workflow complete just because its PR is.
+
+    Returns True if it finished the workflow. False means some phase is
+    still open; the workflow is left active and the pipeline keeps going.
+    """
+    from src.core.database import Feature, Workflow
+    from src.core.status_derivation import derive_workflow_status
+
+    derived = derive_workflow_status(session, workflow_id, write_back=False)
+    if derived != "completed":
+        logger.info(
+            f"[REVIEW-GATE] PR for {workflow_id[:8]} is merged but the workflow derives "
+            f"'{derived}' -- leaving it active"
+        )
+        return False
+
+    wf = session.query(Workflow).filter_by(id=workflow_id).first()
+    feature = session.query(Feature).filter_by(workflow_id=workflow_id).first()
+    if wf:
+        wf.status = "completed"
+        wf.status_reason = None
+    if feature:
+        feature.status = "completed"
+    session.commit()
+    logger.info(f"[REVIEW-GATE] PR for {workflow_id[:8]} already merged -- workflow completed")
     return True

@@ -1655,6 +1655,14 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
                     from src.services.pr_readiness import evaluate_review_gate
 
                     gate = evaluate_review_gate(db, wf.id)
+                    if gate.merged:
+                        # Nothing to review: a human already merged it. Finish
+                        # instead of asking them to review a PR that is on main.
+                        from src.services.pr_readiness import finish_merged_workflow
+
+                        finish_merged_workflow(db, wf.id)
+                        return
+
                     if not gate.should_pause:
                         logger.info(
                             f"[REVIEW] Feature {feature_id}'s PR is not mergeable yet -- "

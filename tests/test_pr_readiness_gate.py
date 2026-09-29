@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.github_pr_status import PRStatus
-from src.services.pr_readiness import evaluate_review_gate
+from src.services.pr_readiness import finish_merged_workflow, evaluate_review_gate
 
 
 def _status(**kw):
@@ -40,7 +40,9 @@ def _session(pr_url="https://github.com/o/r/pull/1", retry_count=0):
         tasks.append(t)
     task = tasks[-1]
 
+    wf = MagicMock(); wf.status = "active"; wf.status_reason = "x"
     session = MagicMock()
+    session._feature, session._wf = feature, wf  # handles for assertions
 
     def _query(model):
         q = MagicMock()
@@ -49,6 +51,9 @@ def _session(pr_url="https://github.com/o/r/pull/1", retry_count=0):
             q.filter_by.return_value.filter.return_value.first.return_value = (
                 feature if pr_url else None
             )
+            q.filter_by.return_value.first.return_value = feature if pr_url else None
+        elif name == "Workflow":
+            q.filter_by.return_value.first.return_value = wf
         elif name == "Phase":
             q.filter_by.return_value.first.return_value = phase
         else:
@@ -245,3 +250,46 @@ class TestTheRetryBudgetCannotBeResetByANewTask:
              patch("src.autopilot.spec.get_max_task_retries", return_value=5):
             d = evaluate_review_gate(_session(retry_count=[1]), "wf-1")
         assert d.should_pause is False
+
+
+class TestGateFinishesAMergedPR:
+    """Observed live: a human merged the PR while the tool was stopped.
+    GitHub reports mergeStateStatus UNKNOWN for a merged PR, so
+    ready_to_merge and needs_work are both False -- which the stuck arm
+    read as 'awaiting human review -- PR is not mergeable yet' about a PR
+    already on main."""
+
+    def test_merged_pr_is_reported_merged_not_stuck(self):
+        st = _status(state="MERGED", merge_state="UNKNOWN")
+        with patch("src.services.github_pr_status.get_pr_status", return_value=st):
+            d = evaluate_review_gate(_session(), "wf-1")
+        assert d.merged is True
+        assert d.stuck is False
+        # Fail-closed default for a consumer that never learned about
+        # `merged`: pausing is wrong-but-harmless, the hold path is not.
+        assert d.should_pause is True
+
+    def test_closed_without_merge_is_stuck_not_merged(self):
+        st = _status(state="CLOSED", merge_state="UNKNOWN")
+        with patch("src.services.github_pr_status.get_pr_status", return_value=st):
+            d = evaluate_review_gate(_session(), "wf-1")
+        assert d.merged is False
+        assert d.stuck is True
+        assert "closed without being merged" in d.status_reason
+
+    def test_finish_completes_workflow_and_feature_when_every_phase_is_done(self):
+        s = _session()
+        with patch("src.core.status_derivation.derive_workflow_status", return_value="completed"):
+            assert finish_merged_workflow(s, "wf-1") is True
+        assert s._wf.status == "completed"
+        assert s._wf.status_reason is None
+        assert s._feature.status == "completed"
+        s.commit.assert_called_once()
+
+    def test_finish_leaves_workflow_alone_while_a_phase_is_still_open(self):
+        """A merged PR must not mark a half-finished workflow complete."""
+        s = _session()
+        with patch("src.core.status_derivation.derive_workflow_status", return_value="active"):
+            assert finish_merged_workflow(s, "wf-1") is False
+        assert s._wf.status == "active"
+        s.commit.assert_not_called()

@@ -452,3 +452,72 @@ class TestStartupRecoveryIsBackgrounded:
             await server_module._run_startup_recovery()
 
         mock_sweep.assert_called_once()
+
+
+class TestGitExpertAlreadyLandedViaMergedPR:
+    """Ancestry is not the only way work lands. A repo that squash-merges
+    puts a NEW commit on main, so `merge-base --is-ancestor` says False for
+    a PR that is genuinely merged. Observed live 2026-09-29: workflow
+    d978c8e7's PR #1171 was squash-merged by a human while the backend was
+    stopped; the landed-check said no, the orphaned git_expert was
+    relaunched into a worktree four commits stale, and its plain `git
+    push` re-created the branch GitHub had deleted on merge. The PR's own
+    state must be consulted first."""
+
+    def _session(self, phase_name="git_expert", pr_url="https://github.com/o/r/pull/1"):
+        from unittest.mock import MagicMock
+
+        phase = MagicMock(); phase.name = phase_name
+        feature = MagicMock(); feature.pr_url = pr_url
+        wf = MagicMock(); wf.working_directory = "/nonexistent/wt"  # ancestry path must bail
+        session = MagicMock()
+
+        def _query(model):
+            q = MagicMock()
+            name = getattr(model, "__name__", "")
+            q.filter_by.return_value.first.return_value = {
+                "Phase": phase, "Feature": feature, "Workflow": wf,
+            }.get(name)
+            return q
+
+        session.query.side_effect = _query
+        return session
+
+    def _task(self):
+        from unittest.mock import MagicMock
+
+        t = MagicMock(); t.phase_id = "p"; t.workflow_id = "wf"
+        return t
+
+    def _pr(self, state):
+        from src.services.github_pr_status import PRStatus
+
+        return PRStatus(url="https://github.com/o/r/pull/1", state=state, ci_conclusion="passing",
+                        review_decision=None, failing_checks=[], summary="", merge_state="UNKNOWN")
+
+    def test_merged_pr_counts_as_landed_even_when_ancestry_says_no(self):
+        from src.mcp.server._shared import _git_expert_already_landed
+
+        with patch("src.services.github_pr_status.get_pr_status", return_value=self._pr("MERGED")):
+            assert _git_expert_already_landed(self._session(), self._task(), MagicMock()) is True
+
+    def test_open_pr_falls_through_to_ancestry(self):
+        """The shortcut is for MERGED only; an open PR must not be called
+        landed. With no real worktree the ancestry path returns False."""
+        from src.mcp.server._shared import _git_expert_already_landed
+
+        with patch("src.services.github_pr_status.get_pr_status", return_value=self._pr("OPEN")):
+            assert _git_expert_already_landed(self._session(), self._task(), MagicMock()) is False
+
+    def test_pr_lookup_failure_is_not_treated_as_landed(self):
+        from src.mcp.server._shared import _git_expert_already_landed
+
+        with patch("src.services.github_pr_status.get_pr_status", side_effect=RuntimeError("gh down")):
+            assert _git_expert_already_landed(self._session(), self._task(), MagicMock()) is False
+
+    def test_no_pr_url_skips_the_lookup_entirely(self):
+        from src.mcp.server._shared import _git_expert_already_landed
+
+        with patch("src.services.github_pr_status.get_pr_status") as gps:
+            assert _git_expert_already_landed(self._session(pr_url=None), self._task(), MagicMock()) is False
+            gps.assert_not_called()

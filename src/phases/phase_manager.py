@@ -2164,6 +2164,14 @@ class PhaseManager:
                 from src.services.pr_readiness import evaluate_review_gate
 
                 gate = evaluate_review_gate(session, self.workflow_id)
+                if gate.merged:
+                    # Nothing to review: a human already merged it. Finish
+                    # instead of asking them to review a PR that is on main.
+                    from src.services.pr_readiness import finish_merged_workflow
+
+                    finish_merged_workflow(session, self.workflow_id)
+                    return
+
                 if not gate.should_pause:
                     logger.info(
                         f"[PHASE] Workflow {self.workflow_id} complete but its PR is not "
