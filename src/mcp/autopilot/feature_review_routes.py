@@ -75,6 +75,58 @@ async def set_speckit_auto_scan(project_id: str, req: SpeckitAutoScanUpdate):
     _invalidate("status")
     return {"speckit_auto_scan_enabled": req.speckit_auto_scan_enabled}
 
+
+def _merge_method_flag(pr_url: str) -> str:
+    """The merge-method flag this repository actually permits.
+
+    `--merge` was hardcoded. A repository that disallows merge commits --
+    squash-and-rebase-only is a common house rule -- rejects that outright:
+
+        GraphQL: Merge method merge commits are not allowed on this
+        repository (enablePullRequestAutoMerge)
+
+    which failed the approval's merge, and (before allow_local_merge_fallback
+    defaulted off) dropped it into a local `git merge` + push that bypasses
+    branch protection and every required check. A repo-config mismatch should
+    not be able to turn an approval into an unreviewed force-merge.
+
+    Prefers squash, then merge, then rebase -- squash first because it is the
+    one that keeps an agent's long intermediate commit series out of the base
+    branch's history. Defaults to --squash when the lookup fails: gh then
+    reports a clean refusal if it is not allowed, which is a better failure
+    than the hardcoded flag's silent fallthrough.
+    """
+    import json
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["gh", "repo", "view", "--json",
+             "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                f"[REVIEW] Could not read allowed merge methods ({(result.stderr or '').strip()[:120]}) "
+                "-- defaulting to --squash"
+            )
+            return "--squash"
+        allowed = json.loads(result.stdout or "{}")
+    except Exception as e:
+        logger.warning(f"[REVIEW] Merge-method lookup failed ({e}) -- defaulting to --squash")
+        return "--squash"
+
+    for key, flag in (
+        ("squashMergeAllowed", "--squash"),
+        ("mergeCommitAllowed", "--merge"),
+        ("rebaseMergeAllowed", "--rebase"),
+    ):
+        if allowed.get(key):
+            return flag
+    logger.warning("[REVIEW] Repository allows no merge method -- defaulting to --squash")
+    return "--squash"
+
+
 class VerifyTestsCommandUpdate(BaseModel):
     verify_tests_command: Optional[str] = None
 
@@ -368,6 +420,56 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             auto_merge_queued = False
             merge_note = None
             pr_url = feature.pr_url or _extract_pr_url(db, wf.id, {})
+
+            # Hard block: never merge a PR that is not actually mergeable.
+            #
+            # Nothing on this path used to ask. The approval went straight to
+            # `gh pr merge`, even though the completion floor had -- minutes
+            # earlier, via this same get_pr_status -- recorded the PR as
+            # failing four checks. The two halves never spoke, so approving
+            # marked the feature "completed" and attempted a merge of a red
+            # branch; only the repo forbidding merge commits stopped it.
+            #
+            # The human also cannot see what they are approving over: the
+            # gate said "awaiting human review and merge approval" with no
+            # mention of the failing checks. Refusing here, with the blockers
+            # named, is the only way the approval means what it appears to
+            # mean. There is deliberately no force flag -- an override the
+            # tool offers is an override someone eventually clicks past;
+            # merging a red PR should require GitHub's own UI, where the red
+            # state is unmissable.
+            if pr_url:
+                from src.services.github_pr_status import get_pr_status
+
+                # A None status (gh unavailable, unparseable response) does
+                # NOT block here, unlike the review gate, which pauses on
+                # unknown. The asymmetry is deliberate: `--auto` below means
+                # GitHub itself refuses to land the PR until its required
+                # checks pass, so an unknown status degrades to GitHub's own
+                # gate rather than to an unguarded merge. Blocking instead
+                # would make every gh hiccup an un-mergeable feature.
+                pre_merge = get_pr_status(pr_url)
+                if pre_merge is not None and not pre_merge.ready_to_merge:
+                    from src.services.pr_readiness import _describe_blockers
+
+                    blockers = _describe_blockers(pre_merge)
+                    logger.warning(
+                        f"[REVIEW] Refusing to merge {pr_url} -- not mergeable: {blockers}"
+                    )
+                    feature.status = "active"
+                    db.commit()
+                    _invalidate("status")
+                    return {
+                        "success": False,
+                        "merged": False,
+                        "auto_merge_queued": False,
+                        "message": (
+                            f"Not merged -- this PR is not mergeable: {blockers}. "
+                            "The review gate stays open; fix the PR (or merge it from "
+                            "GitHub directly if you intend to override) and approve again."
+                        ),
+                    }
+
             if pr_url:
                 import functools
                 import subprocess
@@ -389,7 +491,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                         None,
                         functools.partial(
                             subprocess.run,
-                            ["gh", "pr", "merge", pr_url, "--merge", "--auto"],
+                            ["gh", "pr", "merge", pr_url, _merge_method_flag(pr_url), "--auto"],
                             capture_output=True, text=True, timeout=30,
                         ),
                     )

@@ -284,3 +284,36 @@ class TestMergeStateIsNotTheMergeableField:
     def test_a_merged_pr_is_not_ready_to_merge(self):
         with patch("subprocess.run", return_value=_gh_result(stdout=self._json("CLEAN", state="MERGED"))):
             assert get_pr_status("b").ready_to_merge is False
+
+
+class TestMergeMethodComesFromTheRepository:
+    """`gh pr merge --merge` was hardcoded. A repo that disallows merge
+    commits rejects it outright -- "Merge method merge commits are not
+    allowed on this repository" -- which failed the approval's merge and
+    (before allow_local_merge_fallback defaulted off) dropped it into a
+    local git merge + push that bypasses branch protection. A repo-config
+    mismatch must not be able to turn an approval into a force-merge.
+    IDB-2482."""
+
+    @staticmethod
+    def _flag(stdout, returncode=0):
+        from src.mcp.autopilot.feature_review_routes import _merge_method_flag
+        with patch("subprocess.run", return_value=_gh_result(returncode=returncode, stdout=stdout)):
+            return _merge_method_flag("https://github.com/o/r/pull/1")
+
+    def test_squash_only_repo_gets_squash(self):
+        assert self._flag('{"mergeCommitAllowed":false,"squashMergeAllowed":true,"rebaseMergeAllowed":true}') == "--squash"
+
+    def test_merge_commit_repo_still_works(self):
+        assert self._flag('{"mergeCommitAllowed":true,"squashMergeAllowed":false,"rebaseMergeAllowed":false}') == "--merge"
+
+    def test_rebase_only_repo_gets_rebase(self):
+        assert self._flag('{"mergeCommitAllowed":false,"squashMergeAllowed":false,"rebaseMergeAllowed":true}') == "--rebase"
+
+    def test_lookup_failure_defaults_to_squash_not_merge(self):
+        """gh then reports a clean refusal if squash is disallowed -- a
+        better failure than the hardcoded flag's silent fallthrough."""
+        assert self._flag("", returncode=1) == "--squash"
+
+    def test_unparseable_response_defaults_to_squash(self):
+        assert self._flag("not json") == "--squash"

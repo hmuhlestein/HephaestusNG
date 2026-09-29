@@ -1645,11 +1645,39 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
                     # pause it -- trusting that value here would silently
                     # skip the review gate for a feature that was never
                     # actually reviewed.
+                    # Same PR-readiness gate _complete_workflow applies in
+                    # phase_manager.py. This is a SECOND, independent pause
+                    # site: patching only that one left this path opening the
+                    # gate on a PR with four failing checks -- with
+                    # status_reason empty -- seconds after the other site had
+                    # correctly decided to hold. Both entrances to the same
+                    # room need the same lock.
+                    from src.services.pr_readiness import evaluate_review_gate
+
+                    gate = evaluate_review_gate(db, wf.id)
+                    if not gate.should_pause:
+                        logger.info(
+                            f"[REVIEW] Feature {feature_id}'s PR is not mergeable yet -- "
+                            "leaving the workflow active so the PR-status sweep can fix "
+                            "it before asking for review"
+                        )
+                        # Holding is necessary but not sufficient: a COMPLETED
+                        # git_expert task matches neither repair path's query,
+                        # so the loop we are holding for cannot start on its
+                        # own. Hand it the verdict we just computed.
+                        from src.services.pr_readiness import reopen_git_expert_for_pr_fix
+
+                        reopen_git_expert_for_pr_fix(db, wf.id, gate.blockers)
+                        return
+
                     from src.autopilot.orchestrator.engine_client import pause_workflow
 
                     # cascade_to_feature=False: this function already owns
                     # the write for `feat` specifically, below.
-                    pause_workflow(wf.id, reason="review", cascade_to_feature=False, session=db)
+                    pause_workflow(
+                        wf.id, reason="review", cascade_to_feature=False, session=db,
+                        status_reason=gate.status_reason or None,
+                    )
                     feat.status = "paused"
                     db.commit()
                     logger.info(f"[REVIEW] Feature {feature_id} paused for review")
