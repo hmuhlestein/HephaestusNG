@@ -77,7 +77,7 @@ llm:
       reasoning_effort: high
 agents:
   default_cli_tool: claude
-  cli_model: auto
+  cli_model: sonnet
   # pi removed as the secondary/fallback CLI tool. Both keys read via
   # Config.get(...), which returns None for an absent/commented key --
   # every call site (launch_pipeline.py, mechanical_recovery.py,
