@@ -1008,7 +1008,17 @@ class LaunchPipeline:
         Returns (env_vars, model, cli_agent).
         """
         cli_agent = get_cli_agent(cli_type)
-        global_model = getattr(self.config.agents, "cli_model", None) if cli_type == self.config.agents.default_cli_tool else None
+        # Per TOOL, not one global string. The old form asked "is this the
+        # default tool?" and if so handed over the single configured model
+        # -- so a fallback launch under a different CLI got either nothing
+        # or, worse, whatever the default tool's model happened to be. A
+        # model name only means something to the CLI that understands it.
+        _agents = self.config.agents
+        global_model = (
+            _agents.model_for(cli_type)
+            if hasattr(_agents, "model_for")
+            else (getattr(_agents, "cli_model", None) if cli_type == _agents.default_cli_tool else None)
+        )
         if agent_cli_model is not None:
             # restart path: prefer agent's frozen model
             model = agent_cli_model or global_model or cli_agent.default_model

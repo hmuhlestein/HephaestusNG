@@ -7,7 +7,11 @@ description: >-
   Workflow rows get created, so it can't be phase order=0 within one of them.
 
 default_cli_tool: claude
-default_model: sonnet
+# Model per CLI tool. A tool with no entry falls back to its own
+# adapter default. Operators override with CLI_MODEL_<TOOL> (e.g.
+# CLI_MODEL_CLAUDE=opus) without editing this file.
+models:
+  claude: sonnet
 default_thinking_level: high
 # pi removed as the secondary/fallback CLI tool -- falls through to
 # hephaestus_config.yaml's agents.default_fallback_cli_tool, also unset.

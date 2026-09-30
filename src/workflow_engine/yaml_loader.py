@@ -129,7 +129,54 @@ def load_workflow_from_dir(workflow_dir: Path) -> dict:
     return cfg
 
 
-def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, default_fallback_tool: str = None, default_fallback_model: str = None, default_cli_tool: str = None) -> Phase:
+def resolve_model_for_tool(cli_tool, models=None, default_model=None, default_cli_tool=None):
+    """Which model a given CLI tool should run on, in precedence order.
+
+    A model name is only meaningful to the CLI that understands it:
+    "sonnet"/"opus" are Claude Code aliases, "auto" is kiro's "you pick",
+    pi wants a .gguf filename. Resolving per tool is what keeps one
+    tool's vocabulary off another's command line -- the failure that
+    produced `claude --model auto` and killed every agent at launch.
+
+    Order, highest first:
+
+      1. operator config -- agents.models.<tool> in hephaestus_config.yaml,
+         or CLI_MODEL_<TOOL> in the environment. Deliberately ABOVE the
+         workflow YAML: before this, the shipped YAML always won, so the
+         only way to change a model was to edit files in this repo and
+         CLI_MODEL was silently dead config.
+      2. the workflow's own models.<tool> map.
+      3. the workflow's legacy flat default_model -- but ONLY for the
+         workflow's default tool, since that is all it ever meant.
+      4. None, meaning "let this tool's adapter answer". Every
+         CLIAgentInterface declares a default_model correct for itself,
+         so None is a real answer rather than a gap.
+
+    A phase's own explicit cli_model sits above all of this and is applied
+    by the caller: that is a deliberate per-phase choice, not a default.
+    """
+    if not cli_tool:
+        return None
+
+    try:
+        from src.core.simple_config import Config
+
+        operator_model = Config().agents.model_for(cli_tool)
+        if operator_model:
+            return operator_model
+    except Exception:  # config unreadable -- fall through to the YAML
+        pass
+
+    if models and models.get(cli_tool):
+        return models[cli_tool]
+
+    if default_model and cli_tool == default_cli_tool:
+        return default_model
+
+    return None
+
+
+def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, default_fallback_tool: str = None, default_fallback_model: str = None, default_cli_tool: str = None, models: dict = None) -> Phase:
     """Build a Phase (sdk) from a phase config dict.
 
     Args:
@@ -139,6 +186,7 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, defa
         default_fallback_tool: Default fallback CLI tool from workflow.yaml.
         default_fallback_model: Default fallback CLI model from workflow.yaml.
         default_cli_tool: Default primary CLI tool from workflow.yaml.
+        models: Per-tool model map from workflow.yaml ({"claude": "sonnet"}).
 
     Returns:
         Phase dataclass instance.
@@ -157,6 +205,15 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, defa
     # Passed through as a plain dict, not a typed dataclass like ValidationCriteria.
     self_review = phase_cfg.get("self_review") if isinstance(phase_cfg.get("self_review"), dict) else None
 
+    # Resolve the tool FIRST -- the right model depends on which CLI is
+    # going to be handed it, so a phase that overrides cli_tool must get
+    # that tool's model, not the workflow default tool's.
+    resolved_cli_tool = phase_cfg.get("cli_tool") or default_cli_tool
+    explicit_model = phase_cfg.get("model") or phase_cfg.get("cli_model")
+    resolved_model = explicit_model or resolve_model_for_tool(
+        resolved_cli_tool, models, default_model, default_cli_tool
+    )
+
     return Phase(
         id=phase_cfg["id"],
         name=phase_cfg["name"],
@@ -164,13 +221,13 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, defa
         done_definitions=phase_cfg.get("done_definitions", []),
         additional_notes=_apply_completion_markers(phase_cfg.get("additional_notes", "")),
         thinking_level=phase_cfg.get("thinking_level", default_thinking),
-        cli_model=phase_cfg.get("model") or phase_cfg.get("cli_model") or default_model,
+        cli_model=resolved_model,
         working_directory=phase_cfg.get("working_directory", "."),
         outputs=phase_cfg.get("outputs", []),
         next_steps=phase_cfg.get("next_steps", []),
         validation=validation,
         self_review=self_review,
-        cli_tool=phase_cfg.get("cli_tool") or default_cli_tool,
+        cli_tool=resolved_cli_tool,
         glm_api_token_env=phase_cfg.get("glm_api_token_env"),
         fallback_cli_tool=phase_cfg.get("fallback_cli_tool") or default_fallback_tool,
         fallback_cli_model=phase_cfg.get("fallback_cli_model") or default_fallback_model,
@@ -189,11 +246,17 @@ def build_phase_list(cfg: dict) -> list:
     phases_by_id = {
         pc["id"]: build_phase(
             pc,
-            cfg.get("default_model", "xiaomi/mimo-v2.5"),
+            # No hard-coded fallback model here any more. It used to be
+            # "xiaomi/mimo-v2.5" -- a model nothing in this deployment can
+            # run, silently handed to any workflow that omitted
+            # default_model. None means "ask the tool's own adapter",
+            # which always has an answer that is right for itself.
+            cfg.get("default_model"),
             cfg.get("default_thinking_level", "low"),
             cfg.get("fallback_cli_tool"),
             cfg.get("fallback_cli_model"),
             cfg.get("default_cli_tool"),
+            cfg.get("models"),
         )
         for pc in cfg["phases"]
     }
