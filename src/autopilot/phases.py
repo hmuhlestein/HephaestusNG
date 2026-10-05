@@ -50,7 +50,12 @@ SESSION_ROLES = _cfg["session_roles"]
 
 
 def get_session_id(
-    project_id: str, design_slug: str, phase_name: str, model: str = "", workflow_id: str = ""
+    project_id: str,
+    design_slug: str,
+    phase_name: str,
+    model: str = "",
+    workflow_id: str = "",
+    redo_nonce: str = "",
 ) -> str:
     """Generate a deterministic session ID for a phase.
 
@@ -69,6 +74,27 @@ def get_session_id(
     calls) into what should have been a brand new agent (observed live:
     workflow e35be066's product_requirements session resurfaced under
     workflow e9019930 after e35be066 was deleted via delete_feature).
+
+    redo_nonce ROTATES the session deliberately, and is the one case where
+    resuming is wrong rather than merely stale. When a human rejects a
+    phase's output and sends it back with feedback, the existing session's
+    conversation tail already ends in that agent declaring the work done
+    and a gate validating it. Resuming into that, with the feedback merely
+    appended, asks an agent to contradict its own last turn -- and observed
+    live (workflow b84674fe, 2026-10-05) it simply does not: five agents
+    shared one feature_architect session, the fifth received the human's
+    2,930-character rejection inside a 22,957-character prompt, reported
+    "done" four seconds later without opening its task file (the tool's own
+    INSTRUCTIONS-CHECK warned about exactly that), and left features.json
+    byte-identical. The gate then scored the unchanged decomposition 0.75
+    "validated" and the rejection vanished without trace.
+
+    Passing anything that changes per rejection -- the feedback's own
+    updated_at is the natural choice, since it changes if and only if a
+    human submitted new feedback -- yields a different hash and therefore a
+    fresh session, so the redo agent starts from the task and the feedback
+    rather than from its own prior success. Empty (the default) preserves
+    the resume-with-memory behaviour every other path relies on.
 
     Pi handles storage internally — we just pass the ID via --session-id.
 
@@ -92,7 +118,7 @@ def get_session_id(
         return re.sub(r"[^a-z0-9\-_]", "", s.lower().replace(" ", "-"))[:30]
     # Stable hash suffix prevents collisions between similar names
     # e.g. 'my-proj-add-calc' vs 'my-proj-add-calculator'
-    raw = f"{project_id}:{design_slug}:{workflow_id}:{role}:{model}"
+    raw = f"{project_id}:{design_slug}:{workflow_id}:{role}:{model}:{redo_nonce}"
     h = hashlib.sha256(raw.encode()).hexdigest()[:8]
     return f"hephaestus-{safe(project_id)}-{safe(design_slug)}-{safe(role)}-{h}"
 
