@@ -1286,11 +1286,24 @@ class TestReviewFeatureApproveLocalMergeFallback:
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
         assert result["success"] is True
-        # gh pr merge, then the authoritative gh pr view state check -- no
-        # third call, since the local-merge fallback must not also run.
-        assert mock_run.call_count == 2
-        assert mock_run.call_args_list[0].args[0][:3] == ["gh", "pr", "merge"]
-        assert mock_run.call_args_list[1].args[0][:3] == ["gh", "pr", "view"]
+
+        # Asserted by SHAPE, not by call count. Approve now also asks
+        # whether the PR is mergeable before merging, and reads the
+        # repository's permitted merge method instead of hardcoding
+        # --merge, so a fixed count is a brittle proxy for the thing this
+        # test is actually about: that the local-merge fallback did not
+        # ALSO run. The new-file assertion below is the real check of
+        # that, and it is unchanged.
+        cmds = [c.args[0] for c in mock_run.call_args_list]
+        merges = [c for c in cmds if c[:3] == ["gh", "pr", "merge"]]
+        assert len(merges) == 1, f"expected exactly one gh pr merge, got {cmds}"
+        # The readiness check must come BEFORE the merge, not after it.
+        merge_at = cmds.index(merges[0])
+        assert any(
+            c[:3] == ["gh", "pr", "view"] and "--json" in c for c in cmds[:merge_at]
+        ), f"merge was attempted without first checking the PR: {cmds}"
+        # And the authoritative post-merge state check still happens.
+        assert any(c[:3] == ["gh", "pr", "view"] for c in cmds[merge_at + 1:])
 
         assert not (project_dir / "new_file.txt").exists(), (
             "no local merge should happen when a PR already exists to merge"

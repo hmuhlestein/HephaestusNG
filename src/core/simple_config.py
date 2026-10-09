@@ -14,7 +14,7 @@ slice they actually use instead of the whole object.
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -261,7 +261,34 @@ class AgentConfig(_ConfigSection):
     def __init__(self, config: Dict[str, Any]):
         agents = config.get("agents", {})
         self.default_cli_tool = agents.get("default_cli_tool", DEFAULT_CLI_TOOL)
-        self.cli_model = agents.get("cli_model", "sonnet")
+
+        # models: which model to run each CLI tool on, keyed BY TOOL.
+        #
+        #     models:
+        #       claude: sonnet
+        #       kiro: auto
+        #
+        # A model name only means something to the CLI that understands it:
+        # "sonnet"/"opus" are Claude Code's aliases, "auto" is kiro's
+        # "you pick", pi wants a .gguf filename. Keying by tool is what
+        # stops one tool's vocabulary reaching another's command line.
+        #
+        # This replaces a single global `cli_model` that was applied to
+        # whichever tool happened to be the default. That shape produced a
+        # real outage: 94f5e443 switched default_cli_tool claude->kiro AND
+        # cli_model sonnet->auto; dea1e374 switched the tool back and left
+        # the model, so every agent launched as `claude --model auto` and
+        # died at 0 tokens with "There's an issue with the selected model".
+        # Two independent keys that must agree, with nothing enforcing it.
+        self.models = dict(agents.get("models") or {})
+
+        # Legacy single-model key. Still honored so an existing config
+        # keeps working, read as "the model for whichever tool is default"
+        # -- which is what it always actually meant. An explicit models[]
+        # entry for that tool wins; this only fills a gap.
+        self.cli_model = agents.get("cli_model")
+        if self.cli_model and self.default_cli_tool not in self.models:
+            self.models[self.default_cli_tool] = self.cli_model
         # Global fallback used when a phase doesn't set its own
         # fallback_cli_tool/fallback_cli_model (Phase DB columns) -- same
         # role for the fallback as default_cli_tool/cli_model play for the
@@ -322,11 +349,82 @@ class AgentConfig(_ConfigSection):
         )
         self.agent_timeout_minutes = 30
 
+    def model_for(self, cli_tool: str) -> Optional[str]:
+        """The configured model for one CLI tool, or None to let that
+        tool's own adapter default apply.
+
+        None is a real answer, not a failure: every CLIAgentInterface
+        declares a default_model that is correct for itself (claude
+        "sonnet", kiro "auto", pi a .gguf). Returning None where nothing
+        is configured lets each tool answer for itself, which is exactly
+        the property a single global model string destroyed.
+        """
+        if not cli_tool:
+            return None
+        if self.models.get(cli_tool):
+            return self.models[cli_tool]
+        # Legacy cli_model, re-read at call time rather than only folded in
+        # at construction: callers (and tests) set config.agents.cli_model
+        # directly at runtime, and that has always meant "the model for the
+        # default tool". Honour it here so the old contract holds exactly,
+        # while still refusing to hand it to any OTHER tool.
+        if cli_tool == self.default_cli_tool and self.cli_model:
+            return self.cli_model
+        return None
+
+    def model_mismatch_warnings(self) -> List[str]:
+        """Configured models that look like they belong to a different CLI.
+
+        Each adapter declares its own default_model, so those strings are
+        a usable fingerprint of a tool's vocabulary: a model configured
+        for claude that is exactly kiro's default ("auto") is almost
+        certainly a leftover from a tool switch rather than a deliberate
+        choice. That is precisely how the 94f5e443/dea1e374 pair produced
+        `claude --model auto`, and nothing anywhere said a word about it.
+
+        Warnings, never errors -- a model this cannot recognise is not
+        proof of anything, and refusing to start over a heuristic would
+        be worse than the bug.
+        """
+        try:
+            from src.interfaces.cli_interface import CLI_AGENTS
+        except Exception:
+            return []
+
+        defaults = {}
+        for name, cls in CLI_AGENTS.items():
+            model = getattr(cls, "default_model", None)
+            if model:
+                defaults.setdefault(model, name)
+
+        warnings = []
+        for tool, model in self.models.items():
+            owner = defaults.get(model)
+            if owner and owner != tool:
+                warnings.append(
+                    f"agents.models.{tool} is set to '{model}', which is {owner}'s default "
+                    f"model, not {tool}'s -- likely left behind by a CLI-tool switch. "
+                    f"{tool} agents will launch with --model {model}."
+                )
+        return warnings
+
     def apply_env_overrides(self):
         if os.getenv("DEFAULT_CLI_TOOL"):
             self.default_cli_tool = os.getenv("DEFAULT_CLI_TOOL")
+        # CLI_MODEL_<TOOL> sets the model for one tool: CLI_MODEL_CLAUDE=opus,
+        # CLI_MODEL_KIRO=auto. This is the operator's knob -- it beats the
+        # model shipped in a workflow's YAML, so changing the model no
+        # longer means editing files in this repo.
+        for var, value in os.environ.items():
+            if var.startswith("CLI_MODEL_") and value:
+                tool = var[len("CLI_MODEL_"):].lower()
+                if tool:
+                    self.models[tool] = value
+        # Legacy global: applies to the default tool only, never to every
+        # tool at once -- that conflation is the bug this shape fixes.
         if os.getenv("CLI_MODEL"):
             self.cli_model = os.getenv("CLI_MODEL")
+            self.models[self.default_cli_tool] = os.getenv("CLI_MODEL")
         if os.getenv("CLI_THINKING_LEVEL"):
             self.cli_thinking_level = os.getenv("CLI_THINKING_LEVEL")
         if os.getenv("GLM_API_TOKEN_ENV"):

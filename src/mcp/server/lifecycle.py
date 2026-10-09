@@ -489,6 +489,19 @@ async def startup_event():
 
         await asyncio.get_event_loop().run_in_executor(None, _register_definitions_sync)
         logger.info(f"Workflow registration complete: {len(all_definitions)} definitions")
+
+        # Say it out loud at startup rather than letting every agent die at
+        # 0 tokens with "There's an issue with the selected model". A model
+        # configured for one CLI that is exactly another CLI's default is
+        # almost always a leftover from a tool switch -- the shape that
+        # produced `claude --model auto` and stalled a whole pipeline.
+        try:
+            from src.core.simple_config import Config
+
+            for warning in Config().agents.model_mismatch_warnings():
+                logger.warning(f"[CONFIG] {warning}")
+        except Exception as e:
+            logger.debug(f"[CONFIG] model check skipped: {e}")
     except Exception as e:
         logger.error(f"Failed to register workflows: {e}")
         import traceback

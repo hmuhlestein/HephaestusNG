@@ -2141,14 +2141,66 @@ class PhaseManager:
             if project_id and _should_pause_for_review(project_id) and not already_approved:
                 from src.autopilot.orchestrator.engine_client import pause_workflow
 
+                # "All phases complete" does not mean the PR is mergeable.
+                # git_expert opens the PR and reports done while CI is still
+                # queued, so opening the gate here presented a human with a
+                # PR carrying four failing checks and seven unread review
+                # comments, described to them only as "awaiting review".
+                #
+                # Worse, the repair path was already present and this pause
+                # is what killed it: _resolve_pending_pr_status polls the PR
+                # every sweep tick and fails the git_expert task with the
+                # failing checks named, which _retry_failed_tasks then
+                # re-dispatches git_expert to fix -- but only while the
+                # workflow is ACTIVE. Pausing ended the loop that would have
+                # made the PR mergeable.
+                #
+                # So ask first. While the PR is fixable and retries remain,
+                # stay active and let that loop work; open the gate once the
+                # PR is genuinely ready, or once the tool has run out of
+                # attempts -- and in that case say which checks are red
+                # instead of leaving someone waiting on a PR nobody
+                # mentioned was broken. See src/services/pr_readiness.py.
+                from src.services.pr_readiness import evaluate_review_gate
+
+                gate = evaluate_review_gate(session, self.workflow_id)
+                if gate.merged:
+                    # Nothing to review: a human already merged it. Finish
+                    # instead of asking them to review a PR that is on main.
+                    from src.services.pr_readiness import finish_merged_workflow
+
+                    finish_merged_workflow(session, self.workflow_id)
+                    return
+
+                if not gate.should_pause:
+                    logger.info(
+                        f"[PHASE] Workflow {self.workflow_id} complete but its PR is not "
+                        "mergeable yet -- staying active so the PR-status sweep can fix it "
+                        "before asking for review"
+                    )
+                    # Holding is necessary but not sufficient: a COMPLETED
+                    # git_expert task matches neither repair path's query, so
+                    # the loop we are holding for cannot start on its own.
+                    # Hand it the verdict we just computed.
+                    from src.services.pr_readiness import reopen_git_expert_for_pr_fix
+
+                    reopen_git_expert_for_pr_fix(session, self.workflow_id, gate.blockers)
+                    return
+
                 pause_workflow(
                     self.workflow_id,
                     reason="review",
-                    status_reason="All phases complete -- awaiting human review and merge approval",
+                    status_reason=gate.status_reason,
                     session=session,
                 )
                 session.commit()
-                logger.info(f"[PHASE] Workflow {self.workflow_id} complete but paused for final review (review_mode)")
+                if gate.stuck:
+                    logger.warning(
+                        f"[PHASE] Workflow {self.workflow_id} paused for review with a "
+                        f"NON-MERGEABLE PR: {gate.status_reason}"
+                    )
+                else:
+                    logger.info(f"[PHASE] Workflow {self.workflow_id} complete but paused for final review (review_mode)")
                 return
 
             derive_workflow_status(session, self.workflow_id, write_back=True)

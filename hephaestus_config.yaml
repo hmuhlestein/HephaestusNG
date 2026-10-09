@@ -77,7 +77,21 @@ llm:
       reasoning_effort: high
 agents:
   default_cli_tool: claude
-  cli_model: auto
+  # Which model each CLI tool runs on, keyed BY TOOL. A model name only
+  # means something to the CLI that understands it -- "sonnet"/"opus" are
+  # Claude Code aliases, "auto" is kiro's "you pick", pi wants a .gguf.
+  # Keying by tool is what stops one tool's vocabulary reaching another's
+  # command line (a flat cli_model once produced `claude --model auto`,
+  # which killed every agent at launch).
+  #
+  # Override per tool without editing this file:
+  #     CLI_MODEL_CLAUDE=opus
+  #     CLI_MODEL_KIRO=auto
+  # A tool with no entry uses its own adapter's default, which is always
+  # correct for itself. The flat `cli_model:` key still works and is read
+  # as "the model for default_cli_tool".
+  models:
+    claude: sonnet
   # pi removed as the secondary/fallback CLI tool. Both keys read via
   # Config.get(...), which returns None for an absent/commented key --
   # every call site (launch_pipeline.py, mechanical_recovery.py,

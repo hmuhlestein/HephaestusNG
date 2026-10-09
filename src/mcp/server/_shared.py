@@ -570,11 +570,31 @@ def _git_expert_already_landed(session, task, config) -> bool:
     """
     from pathlib import Path
 
-    from src.core.database import Workflow
+    from src.core.database import Feature, Workflow
 
     phase = session.query(Phase).filter_by(id=task.phase_id).first()
     if not phase or phase.name != "git_expert":
         return False
+
+    # A PR that GitHub reports MERGED is landed, whatever local ancestry
+    # says. Repos that squash-merge (or rebase-merge) put a NEW commit on
+    # main, so the merge-base check below returns False for work that is
+    # genuinely on main. Observed live 2026-09-29: workflow d978c8e7's PR
+    # #1171 was squash-merged by a human while the backend was stopped; on
+    # restart this returned False, the orphaned git_expert was re-launched
+    # into a worktree four commits stale, and its plain `git push`
+    # re-created the branch GitHub had deleted on merge 37 minutes earlier.
+    feature = session.query(Feature).filter_by(workflow_id=task.workflow_id).first()
+    pr_url = getattr(feature, "pr_url", None) if feature else None
+    if pr_url:
+        try:
+            from src.services.github_pr_status import get_pr_status
+
+            pr = get_pr_status(pr_url)
+            if pr is not None and pr.state == "MERGED":
+                return True
+        except Exception:
+            pass  # unknown is not "not landed": fall through to ancestry
 
     wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
     wd = wf.working_directory if wf else None

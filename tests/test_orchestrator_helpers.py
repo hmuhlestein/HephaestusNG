@@ -9999,3 +9999,97 @@ class TestRetryFailedTasksHoldsForACliBinarySwap:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.status == "in_progress"
             assert task.retry_count == 1
+
+
+class TestRetryCarriesTheFailureReasonToTheAgent:
+    """A retry must tell the agent WHY the last attempt was rejected.
+
+    Without it the retry is hollow: the task keeps its original generic
+    description, update_task_status(pending) clears failure_reason, and the
+    re-dispatched agent is told nothing. Observed live: a git_expert retry
+    for a PR with four failing CI checks was dispatched, found the branch
+    already pushed and the PR already open, and correctly reported done 26
+    seconds later -- having never been told the PR was red.
+
+    git_expert.yaml's prompt already documents the contract ("Your task
+    description may carry a RETRY banner reporting that an open PR's CI
+    failed or a reviewer requested changes"); this path never wrote one.
+    The only place _retry_failed_tasks passed feedback was the
+    open-bug-ticket branch. IDB-2482.
+    """
+
+    CI_REASON = (
+        "CI check(s) failed: Backend: Lint & Format, gherkin-audit: Reproducibility Gate "
+        "-- push additional commits to this SAME branch/PR to address it."
+    )
+
+    def _seed(self, db, reason):
+        from src.core.database import Task, Workflow
+
+        with db.session_scope() as session:
+            if not session.query(Workflow).filter_by(id="wf-1").first():
+                session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Task(
+                id="task-1", workflow_id="wf-1",
+                raw_description="Execute git_expert: Autonomous Git hand-off.",
+                enriched_description="Execute git_expert: Autonomous Git hand-off.",
+                done_definition="d", status="failed", failure_reason=reason, retry_count=0,
+            ))
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_the_agent_is_told_which_checks_failed(self, mock_create, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Agent
+
+        self._seed(orch_db_env, self.CI_REASON)
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="claude"))
+        mock_create.return_value = {"agent_id": "new-agent"}
+
+        _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        mock_create.assert_called_once()
+        override = mock_create.call_args.kwargs.get("enriched_data_override")
+        assert override is not None, "retry dispatched with no feedback at all"
+        desc = override["enriched_description"]
+        assert "RETRY BANNER" in desc
+        assert "Backend: Lint & Format" in desc
+        assert "gherkin-audit: Reproducibility Gate" in desc
+        # The original instructions must survive underneath the banner.
+        assert "Autonomous Git hand-off" in desc
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_the_banner_warns_against_assuming_the_work_is_done(self, mock_create, orch_db_env, tmp_path):
+        """The exact failure mode: the agent saw a pushed branch and an open
+        PR and concluded there was nothing to do."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Agent
+
+        self._seed(orch_db_env, self.CI_REASON)
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="claude"))
+        mock_create.return_value = {"agent_id": "new-agent"}
+
+        _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        desc = mock_create.call_args.kwargs["enriched_data_override"]["enriched_description"]
+        assert "Do NOT" in desc and "already complete" in desc
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_no_reason_means_no_override_and_no_behaviour_change(self, mock_create, orch_db_env, tmp_path):
+        """A task with no recorded reason keeps the previous behaviour
+        exactly -- this must add feedback, not change dispatch."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Agent
+
+        self._seed(orch_db_env, "")
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="claude"))
+        mock_create.return_value = {"agent_id": "new-agent"}
+
+        _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert mock_create.call_args.kwargs.get("enriched_data_override") is None

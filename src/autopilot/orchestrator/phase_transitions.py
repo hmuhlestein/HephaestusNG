@@ -694,8 +694,49 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                 raise RuntimeError(
                     f"Failed to reset task {task_id[:8]} to pending before retry"
                 )
-            # Create agent for it
-            agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
+            # Create agent for it -- carrying WHY it failed.
+            #
+            # Without this the retry is hollow. The task keeps its original
+            # generic description ("Execute git_expert: Autonomous Git
+            # hand-off..."), update_task_status(pending) above clears
+            # failure_reason, and the re-dispatched agent is told nothing
+            # about what went wrong. Observed live: a git_expert retry for a
+            # PR with four failing CI checks was dispatched, found the branch
+            # already pushed and the PR already open, and correctly reported
+            # done 26 seconds later -- having never been told the PR was red.
+            #
+            # git_expert.yaml's own prompt already documents the contract
+            # this fills ("Your task description may carry a RETRY banner
+            # reporting that an open PR's CI failed or a reviewer requested
+            # changes"), and _create_phase_task's goto path already passes
+            # feedback the same way. This path was the gap: the ONLY place
+            # it passed feedback was the open-bug-ticket branch above.
+            #
+            # enriched_data_override mirrors what create_agent_for_task_direct
+            # builds by default, with the banner prepended -- so nothing else
+            # about the prompt changes.
+            retry_enriched = None
+            if failure_reason:
+                with get_db() as _db_fb:
+                    _t_fb = _db_fb.query(Task).filter_by(id=task_id).first()
+                    base_desc = (_t_fb.enriched_description or _t_fb.raw_description or "") if _t_fb else ""
+                    criteria = getattr(_t_fb, "completion_criteria", None) if _t_fb else None
+                banner = (
+                    "RETRY BANNER -- this task is being re-run because the previous "
+                    "attempt was rejected:\n\n"
+                    f"    {failure_reason}\n\n"
+                    "Fix the problem described above before reporting done. Do NOT "
+                    "assume the work is already complete just because a branch is "
+                    "pushed or a PR exists -- that was true last time too, and it was "
+                    "still rejected.\n\n---\n\n"
+                )
+                retry_enriched = {"enriched_description": banner + base_desc}
+                if criteria:
+                    retry_enriched["completion_criteria"] = criteria
+
+            agent_data = create_agent_for_task_direct(
+                task_id, workflow_id, phase_id, enriched_data_override=retry_enriched
+            )
             if not agent_data:
                 # create_agent_for_task_direct returns None for two
                 # different reasons: a genuine creation failure, or its
