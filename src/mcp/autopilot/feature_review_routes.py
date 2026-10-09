@@ -450,9 +450,9 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 # would make every gh hiccup an un-mergeable feature.
                 pre_merge = get_pr_status(pr_url)
                 if pre_merge is not None and not pre_merge.ready_to_merge:
-                    from src.services.pr_readiness import _describe_blockers
+                    from src.services.pr_readiness import describe_blockers
 
-                    blockers = _describe_blockers(pre_merge)
+                    blockers = describe_blockers(pre_merge)
                     logger.warning(
                         f"[REVIEW] Refusing to merge {pr_url} -- not mergeable: {blockers}"
                     )

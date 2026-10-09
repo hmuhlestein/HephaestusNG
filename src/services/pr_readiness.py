@@ -112,7 +112,7 @@ def evaluate_review_gate(session, workflow_id: str) -> ReviewGateDecision:
         return ReviewGateDecision(True, _CLEAN_REASON)
 
     # Not mergeable. Is this something the tool can still act on itself?
-    blockers = _describe_blockers(status)
+    blockers = describe_blockers(status)
 
     if not status.needs_work:
         # Not ready, but not something another commit fixes either --
@@ -139,7 +139,7 @@ def evaluate_review_gate(session, workflow_id: str) -> ReviewGateDecision:
     )
 
 
-def _describe_blockers(status) -> str:
+def describe_blockers(status) -> str:
     """Human-readable summary of why a PR is not mergeable."""
     parts = []
     if status.failing_checks:
